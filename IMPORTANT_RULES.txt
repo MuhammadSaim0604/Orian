@@ -1,4 +1,4 @@
-GITHUB ORIGIN: git@github.com:MuhammadSaim0604/Orian.git
+GITHUB ORIGIN: https://github.com/MuhammadSaim0604/Orian.git
 
 Main development plan is at Development_plan/* folder.
 
