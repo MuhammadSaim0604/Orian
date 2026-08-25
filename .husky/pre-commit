@@ -1,0 +1,10 @@
+#!/usr/bin/env sh
+# Format and lint only what is staged, so commits stay fast.
+#
+# Git hooks run with a minimal PATH that may not include a global pnpm. pnpm is
+# pinned by the `packageManager` field, so Corepack can always provide it.
+if command -v pnpm >/dev/null 2>&1; then
+  pnpm lint-staged
+else
+  corepack pnpm lint-staged
+fi

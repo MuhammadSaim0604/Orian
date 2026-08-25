@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "types": ["react", "jest"],
+    "allowJs": true
+  },
+  "include": ["src/**/*", "index.js", "nativewind-env.d.ts"],
+  "exclude": ["node_modules", "coverage"]
+}

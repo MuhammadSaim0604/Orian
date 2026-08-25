@@ -13,21 +13,21 @@ An n8n-style **mobile automation platform** for Android. It reads the screen, pe
 
 ## Stack
 
-| Layer | Technology |
-|-------|-----------|
-| Product UI | React Native + TypeScript |
+| Layer                   | Technology                                                 |
+| ----------------------- | ---------------------------------------------------------- |
+| Product UI              | React Native + TypeScript                                  |
 | Android automation core | Kotlin (AccessibilityService, gestures, capture, overlays) |
-| Native bridge | Turbo Modules / JSI |
-| Canvas | Skia + Reanimated + Gesture Handler |
-| UI state | Zustand |
-| Styling | NativeWind + centralized design tokens |
-| Validation | Zod |
-| Local persistence | SQLite / Room |
-| AI provider | OpenAI-compatible Chat Completions |
-| Monorepo | pnpm + Turborepo (TS) and Gradle (Android) |
-| Testing | Vitest / Jest + JUnit + Android instrumentation |
-| Lint / format | ESLint + Prettier + ktlint |
-| CI/CD | GitHub Actions |
+| Native bridge           | Turbo Modules / JSI                                        |
+| Canvas                  | Skia + Reanimated + Gesture Handler                        |
+| UI state                | Zustand                                                    |
+| Styling                 | NativeWind + centralized design tokens                     |
+| Validation              | Zod                                                        |
+| Local persistence       | SQLite / Room                                              |
+| AI provider             | OpenAI-compatible Chat Completions                         |
+| Monorepo                | pnpm + Turborepo (TS) and Gradle (Android)                 |
+| Testing                 | Vitest / Jest + JUnit + Android instrumentation            |
+| Lint / format           | ESLint + Prettier + ktlint                                 |
+| CI/CD                   | GitHub Actions                                             |
 
 ## Repository layout
 

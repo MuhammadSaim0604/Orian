@@ -1,0 +1,23 @@
+# Build output
+dist/
+lib/
+coverage/
+node_modules/
+.turbo/
+
+# Generated / vendored
+pnpm-lock.yaml
+*.tsbuildinfo
+
+# Android
+android/
+*.gradle
+gradlew
+gradlew.bat
+
+# Plan docs keep their own formatting
+Development_Plan/
+plan_in_user_words/
+IMPORTANT_RULES.txt
+ORION.md
+LICENSE

@@ -1,0 +1,4 @@
+<resources>
+    <!-- Mirrors the `background` semantic token, dark scheme. -->
+    <color name="app_background">#020617</color>
+</resources>

@@ -1,0 +1,34 @@
+{
+  "name": "@mobile-automation/ui",
+  "version": "0.1.0",
+  "description": "Shared React Native components, design tokens, and theme management",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./theme": "./src/theme/index.ts",
+    "./tailwind-preset": "./tailwind.preset.cjs"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --emitDeclarationOnly",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rimraf dist .turbo"
+  },
+  "dependencies": {
+    "@mobile-automation/shared-types": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-native": ">=0.76.0"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.18",
+    "react": "18.3.1",
+    "react-native": "0.76.6"
+  }
+}

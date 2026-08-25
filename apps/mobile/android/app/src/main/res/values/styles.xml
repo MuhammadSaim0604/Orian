@@ -1,0 +1,12 @@
+<resources>
+    <!--
+      A no-title theme with a background that matches the light design token
+      (slate50), so the launch screen does not flash a different colour before
+      React Native mounts. The dark variant lives in values-night.
+    -->
+    <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:windowBackground">@color/app_background</item>
+        <item name="android:statusBarColor">@color/app_background</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

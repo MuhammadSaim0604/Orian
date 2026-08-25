@@ -1,0 +1,33 @@
+{
+  "name": "@mobile-automation/core-nodes",
+  "version": "0.1.0",
+  "description": "Device-agnostic workflow nodes: input, action, condition, loop, variable, transform, trigger",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rimraf dist .turbo"
+  },
+  "dependencies": {
+    "@mobile-automation/node-sdk": "workspace:*",
+    "@mobile-automation/shared-types": "workspace:*",
+    "zod": "3.24.1"
+  }
+}
