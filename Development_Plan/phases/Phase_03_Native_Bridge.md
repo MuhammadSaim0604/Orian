@@ -27,6 +27,8 @@ Expose the Kotlin Automation Runtime to TypeScript through React Native Turbo Mo
 - Types flow end-to-end; a wrong argument is a compile error.
 - Screenshot transfer does not block the JS thread.
 
-## Related skills
+## Skills to load
 
-- `../skills/kotlin-native-module/SKILL.md`
+These skills are already installed in your AI agent. Load them before starting this phase:
+
+- `kotlin-native-module`

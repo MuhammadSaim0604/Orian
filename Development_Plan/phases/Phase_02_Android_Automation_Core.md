@@ -41,7 +41,9 @@ Build the deep-automation Kotlin subsystems that everything else stands on: Acce
 
 - Accessibility + overlay + screen capture are high-trust. Gate each behind explicit opt-in with clear explanation. Never enable silently.
 
-## Related skills
+## Skills to load
 
-- `../skills/kotlin-native-module/SKILL.md`
-- `../skills/testing-quality/SKILL.md`
+These skills are already installed in your AI agent. Load them before starting this phase:
+
+- `kotlin-native-module`
+- `testing-quality`

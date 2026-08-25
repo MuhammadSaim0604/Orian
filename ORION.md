@@ -1,4 +1,4 @@
-# CLAUDE.md
+# ORION.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -17,7 +17,7 @@ Environment is Windows; the user works in PowerShell/cmd. Git remote: `https://g
 
 ## Current repository state
 
-The repo is **plan-only** — there is no source code yet. Root contains `.gitignore`, `IMPORTANT_RULES.txt`, `Development_Plan/`, `plan_in_user_words/`, `.orion/`. Phase 0 (decisions) is captured by the plan docs; **Phase 1 (monorepo scaffold, tooling, CI) has not been started**, so none of the commands below exist yet. Create them as part of Phase 1, then treat this section as stale and update it.
+The repo is **plan-only** — there is no source code yet. Root contains `.gitignore`, `IMPORTANT_RULES.txt`, `ORION.md`, `Development_Plan/`, `plan_in_user_words/`, `.orion/`. `Development_Plan/` holds the root docs, `architecture/`, and `phases/`. Phase 0 (decisions) is captured by the plan docs; **Phase 1 (monorepo scaffold, tooling, CI) has not been started**, so none of the commands below exist yet. Create them as part of Phase 1, then treat this section as stale and update it.
 
 ## Commands (target state, per Phase 1)
 
@@ -110,7 +110,7 @@ Cross-cutting from Phase 1 onward: testing, centralized theming, prompt engineer
 
 ## Skills
 
-Installed skills mirror `Development_Plan/skills/`. Load the matching one before starting that subsystem: `monorepo-master` (1, 4, 10), `theme-and-styling-nativewind` (1, 6, 8), `testing-quality` (all), `kotlin-native-module` (2, 3, 8), `node-sdk-author` (4, 5, 9), `rn-ui-builder-zustand` (6, 8), `ai-agent-builder` (7, 8, 9), `prompt-engine` (7, 8, 9), `mcp-server` (10).
+The subsystem playbooks are **already installed in your AI agent** — they are not files in this repository. Load the matching skill before starting that subsystem: `monorepo-master` (phases 1, 4, 10), `theme-and-styling-nativewind` (1, 6, 8), `testing-quality` (all), `kotlin-native-module` (2, 3, 8), `node-sdk-author` (4, 5, 9), `rn-ui-builder-zustand` (6, 8), `ai-agent-builder` (7, 8, 9), `prompt-engine` (7, 8, 9), `mcp-server` (10). Each phase file also lists its skills under "Skills to load".
 
 ## Sensitive surface
 

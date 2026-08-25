@@ -31,9 +31,11 @@ Implement the per-node floating toolset overlay. Bound to a specific node ID, it
 - The overlay never fully covers the screen; the eye toggle works.
 - The AI always receives the correct node context automatically.
 
-## Related skills
+## Skills to load
 
-- `../skills/ai-agent-builder/SKILL.md`
-- `../skills/prompt-engine/SKILL.md`
-- `../skills/rn-ui-builder-zustand/SKILL.md`
-- `../skills/kotlin-native-module/SKILL.md`
+These skills are already installed in your AI agent. Load them before starting this phase:
+
+- `ai-agent-builder`
+- `prompt-engine`
+- `rn-ui-builder-zustand`
+- `kotlin-native-module`

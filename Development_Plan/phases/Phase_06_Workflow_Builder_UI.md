@@ -12,7 +12,7 @@ Build the smooth, professional mobile canvas and node editor — the n8n-style v
 - **Node Editor**: add nodes from the registry, wire edges, edit config with schema-driven forms.
 - **Workflow Debugger** + **Execution Logs** consuming engine events.
 - **Screen Inspector** UI showing the live UI tree and screenshots from `screen-inspector`.
-- Zustand stores for canvas, selection, execution state (see `../skills/rn-ui-builder-zustand/SKILL.md`).
+- Zustand stores for canvas, selection, execution state (load the `rn-ui-builder-zustand` skill).
 - All screens themed via NativeWind + theme tokens.
 - Manual and "Create by AI" entry points (AI creation wired in Phase 7).
 
@@ -32,7 +32,9 @@ Build the smooth, professional mobile canvas and node editor — the n8n-style v
 - Canvas stays smooth with dozens of nodes.
 - Workflows persist and reload.
 
-## Related skills
+## Skills to load
 
-- `../skills/rn-ui-builder-zustand/SKILL.md`
-- `../skills/theme-and-styling-nativewind/SKILL.md`
+These skills are already installed in your AI agent. Load them before starting this phase:
+
+- `rn-ui-builder-zustand`
+- `theme-and-styling-nativewind`

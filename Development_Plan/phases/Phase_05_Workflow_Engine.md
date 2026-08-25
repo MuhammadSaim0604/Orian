@@ -28,7 +28,9 @@ Implement the RN-independent workflow engine that executes a workflow JSON by wa
 - Conditions branch correctly; loops iterate; variables carry across nodes.
 - Failures are reported with the failing node and reason.
 
-## Related skills
+## Skills to load
 
-- `../skills/node-sdk-author/SKILL.md`
-- `../skills/testing-quality/SKILL.md`
+These skills are already installed in your AI agent. Load them before starting this phase:
+
+- `node-sdk-author`
+- `testing-quality`

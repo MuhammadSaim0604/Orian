@@ -30,8 +30,10 @@ Define the generic, device-agnostic node system and the Zod-validated workflow s
 - Core and Android nodes are registered and individually executable in tests.
 - A mock third-party node package is discovered and registered.
 
-## Related skills
+## Skills to load
 
-- `../skills/node-sdk-author/SKILL.md`
-- `../skills/monorepo-master/SKILL.md`
-- `../skills/testing-quality/SKILL.md`
+These skills are already installed in your AI agent. Load them before starting this phase:
+
+- `node-sdk-author`
+- `monorepo-master`
+- `testing-quality`

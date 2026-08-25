@@ -34,8 +34,10 @@ Expose the Android tool set over MCP so external agents can drive the phone, fin
 
 - MCP exposes full device control — require authentication, default to localhost, and make any network exposure an explicit, warned user action. Never ship it open by default.
 
-## Related skills
+## Skills to load
 
-- `../skills/mcp-server/SKILL.md`
-- `../skills/monorepo-master/SKILL.md`
-- `../skills/node-sdk-author/SKILL.md`
+These skills are already installed in your AI agent. Load them before starting this phase:
+
+- `mcp-server`
+- `monorepo-master`
+- `node-sdk-author`

@@ -41,7 +41,7 @@ P2/P7 → P10
 
 ## Cross-cutting workstreams (run continuously)
 
-- **Testing** — unit + instrumentation from Phase 1 onward (see `skills/testing-quality.md`).
-- **Theming** — centralized theme + NativeWind established in Phase 1, applied everywhere (see `skills/theme-and-styling-nativewind.md`).
-- **Prompt engineering** — the prompt engine is used by Phases 7, 8, 9 (see `skills/prompt-engine.md`).
+- **Testing** — unit + instrumentation from Phase 1 onward (load the `testing-quality` skill).
+- **Theming** — centralized theme + NativeWind established in Phase 1, applied everywhere (load the `theme-and-styling-nativewind` skill).
+- **Prompt engineering** — the prompt engine is used by Phases 7, 8, 9 (load the `prompt-engine` skill).
 - **Security & permissions** — Accessibility, overlay, and foreground-service permissions are sensitive; document and gate them per phase.

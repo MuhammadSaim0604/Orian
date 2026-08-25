@@ -29,8 +29,10 @@ Make execution recording a first-class subsystem: while the AI executes a goal, 
 - Replaying the generated workflow reproduces the action using selectors (not raw coordinates) where possible.
 - The user can review and edit the generated workflow before saving.
 
-## Related skills
+## Skills to load
 
-- `../skills/ai-agent-builder/SKILL.md`
-- `../skills/node-sdk-author/SKILL.md`
-- `../skills/testing-quality/SKILL.md`
+These skills are already installed in your AI agent. Load them before starting this phase:
+
+- `ai-agent-builder`
+- `node-sdk-author`
+- `testing-quality`

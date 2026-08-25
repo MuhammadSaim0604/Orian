@@ -31,8 +31,10 @@ Build the autonomous AI Agent that takes a natural-language goal and drives the 
 - Malformed model output never crashes the loop — it is validated and repaired or retried.
 - Provider is swappable via config; only Chat Completions is required.
 
-## Related skills
+## Skills to load
 
-- `../skills/ai-agent-builder/SKILL.md`
-- `../skills/prompt-engine/SKILL.md`
-- `../skills/testing-quality/SKILL.md`
+These skills are already installed in your AI agent. Load them before starting this phase:
+
+- `ai-agent-builder`
+- `prompt-engine`
+- `testing-quality`

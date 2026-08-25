@@ -52,17 +52,6 @@ Development_Plan/
 │   ├── Phase_08_Configure_With_AI_Overlay.md
 │   ├── Phase_09_Execution_Recorder_And_Generation.md
 │   └── Phase_10_MCP_And_Polish.md
-└── skills/
-    ├── README.md
-    ├── kotlin-native-module/SKILL.md
-    ├── rn-ui-builder-zustand/SKILL.md
-    ├── theme-and-styling-nativewind/SKILL.md
-    ├── monorepo-master/SKILL.md
-    ├── ai-agent-builder/SKILL.md
-    ├── node-sdk-author/SKILL.md
-    ├── prompt-engine/SKILL.md
-    ├── mcp-server/SKILL.md
-    └── testing-quality/SKILL.md
 ```
 
 ## How to use this plan
@@ -70,4 +59,20 @@ Development_Plan/
 1. Read `00_Overview.md` for scope and vocabulary.
 2. Read the `architecture/` docs to understand how the pieces fit.
 3. Execute phases in `phases/` in order — each has goals, deliverables, and a definition of done.
-4. When building a specific subsystem, load the matching file in `skills/` — these are reusable, self-contained playbooks.
+4. Each phase lists the **skills to load**. Those skills are already installed in your AI agent — load the named skill before starting that subsystem.
+
+## Skills
+
+The subsystem playbooks are installed directly in the AI agent, not stored in this folder. Available skills:
+
+| Skill | Use when | Phases |
+|-------|----------|--------|
+| `monorepo-master` | Structuring/maintaining the pnpm + Turborepo + Gradle monorepo | 1, 4, 10 |
+| `theme-and-styling-nativewind` | NativeWind, global styles, design tokens, theme management | 1, 6, 8 |
+| `testing-quality` | Tests and linting across TypeScript and Kotlin | all |
+| `kotlin-native-module` | Kotlin Android capabilities + Turbo Module bridge | 2, 3, 8 |
+| `node-sdk-author` | Node SDK, Zod schemas, node packages, trace→workflow generator | 4, 5, 9 |
+| `rn-ui-builder-zustand` | React Native UI, canvas, node editor, Zustand state | 6, 8 |
+| `ai-agent-builder` | Agent loop, tools, memory, replanning, structured output | 7, 8, 9 |
+| `prompt-engine` | Prompt templates, context assembly, output parsing | 7, 8, 9 |
+| `mcp-server` | Exposing device tools over MCP to external agents | 10 |

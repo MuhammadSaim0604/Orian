@@ -13,8 +13,8 @@ Stand up the pnpm + Turborepo monorepo, the Android Gradle project, shared tooli
 - `apps/mobile` React Native app that builds and launches.
 - `android/` Gradle modules stubbed: `accessibility`, `automation`, `gestures`, `screen`, `overlays`, `tools`.
 - ESLint + Prettier (TS) and ktlint (Kotlin) configured and passing.
-- Base testing harness: Vitest/Jest for TS, JUnit for Kotlin (see `../skills/testing-quality/SKILL.md`).
-- NativeWind + centralized theme scaffolded in `packages/ui` (see `../skills/theme-and-styling-nativewind/SKILL.md`).
+- Base testing harness: Vitest/Jest for TS, JUnit for Kotlin (load the `testing-quality` skill).
+- NativeWind + centralized theme scaffolded in `packages/ui` (load the `theme-and-styling-nativewind` skill).
 - GitHub Actions CI: install → typecheck → lint → test → build for both TS and Android.
 
 ## Tasks
@@ -34,8 +34,10 @@ Stand up the pnpm + Turborepo monorepo, the Android Gradle project, shared tooli
 - The RN app launches showing a themed placeholder screen.
 - ktlint and Gradle build pass for the stub Android modules.
 
-## Related skills
+## Skills to load
 
-- `../skills/monorepo-master/SKILL.md`
-- `../skills/theme-and-styling-nativewind/SKILL.md`
-- `../skills/testing-quality/SKILL.md`
+These skills are already installed in your AI agent. Load them before starting this phase:
+
+- `monorepo-master`
+- `theme-and-styling-nativewind`
+- `testing-quality`
