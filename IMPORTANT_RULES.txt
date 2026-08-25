@@ -6,6 +6,8 @@ You should always follow these Rules:
 
 
 1. plan_in_user_words/* this contains the plan by the user and you can read it for better understanding but this is not development plan this is just a prompt for create a detailed development plan that is in the Development_Plan folder.
-2. Make sure to properly write github actions workflows for testing and building the final debug and realease apks.
-3. Never Build the apk locally in this computer.
-4. Always commit and push to github and monitor the github actions logs for build errors or success by using github "gh" pkg which is already present and configured and logged in.
+2. Never touch .orion/* folder this is not related to our work never go in it.
+3. Make sure to properly write github actions workflows for testing and building the final debug and realease apks.
+4. Never Build the apk locally in this computer.
+5. Always commit and push to github and monitor the github actions logs for build errors or success by using github "gh" pkg which is already present and configured and logged in.
+6. Always write tracking.md file where save you tracking info like if you completed phase1 then you will write what you implemented, which files and which phase is completed and at last which phases remaining.
