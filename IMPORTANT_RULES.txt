@@ -1,0 +1,11 @@
+GITHUB ORIGIN: git@github.com:MuhammadSaim0604/Orian.git
+
+Main development plan is at Development_plan/* folder.
+
+You should always follow these Rules:
+
+
+1. plan_in_user_words/* this contains the plan by the user and you can read it for better understanding but this is not development plan this is just a prompt for create a detailed development plan that is in the Development_Plan folder.
+2. Make sure to properly write github actions workflows for testing and building the final debug and realease apks.
+3. Never Build the apk locally in this computer.
+4. Always commit and push to github and monitor the github actions logs for build errors or success by using github "gh" pkg which is already present and configured and logged in.

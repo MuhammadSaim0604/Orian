@@ -1,0 +1,162 @@
+# ==========================================================================
+# Orion / tooling
+# ==========================================================================
+.orion/
+
+# ==========================================================================
+# OS files
+# ==========================================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ==========================================================================
+# Editors / IDEs
+# ==========================================================================
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+.project
+.classpath
+.settings/
+
+# ==========================================================================
+# Logs & debug output
+# ==========================================================================
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# ==========================================================================
+# Node / JavaScript / TypeScript
+# ==========================================================================
+node_modules/
+.pnp
+.pnp.js
+.pnpm-store/
+jspm_packages/
+web_modules/
+
+# Build output
+dist/
+build/
+out/
+lib/
+coverage/
+*.tsbuildinfo
+.tsbuildinfo
+
+# Caches
+.cache/
+.npm/
+.eslintcache
+.stylelintcache
+.parcel-cache/
+.rpt2_cache/
+.rts2_cache_cjs/
+.rts2_cache_es/
+.rts2_cache_umd/
+
+# Monorepo tooling (Turborepo)
+.turbo/
+
+# ==========================================================================
+# Environment & secrets
+# ==========================================================================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.keystore
+*.jks
+secrets.json
+google-services.json
+GoogleService-Info.plist
+
+# ==========================================================================
+# Testing
+# ==========================================================================
+coverage/
+.nyc_output/
+junit.xml
+test-results/
+playwright-report/
+.vitest/
+
+# ==========================================================================
+# React Native / Metro / Expo
+# ==========================================================================
+.expo/
+.expo-shared/
+.metro-health-check*
+.haste_cache/
+metro.config.js.bak
+*.jsbundle
+
+# ==========================================================================
+# Android / Gradle / Kotlin
+# ==========================================================================
+.gradle/
+android/.gradle/
+android/build/
+android/app/build/
+android/captures/
+android/.cxx/
+android/local.properties
+**/build/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+captures/
+.kotlin/
+local.properties
+
+# ==========================================================================
+# iOS (in case RN adds it later)
+# ==========================================================================
+ios/Pods/
+ios/build/
+ios/.xcode.env.local
+*.xcworkspace/xcuserdata/
+DerivedData/
+*.hmap
+*.ipa
+
+# ==========================================================================
+# Native / misc build artifacts
+# ==========================================================================
+*.o
+*.a
+*.so
+*.dylib
+*.node
+
+# ==========================================================================
+# Temp / scratch
+# ==========================================================================
+tmp/
+temp/
+*.tmp
+*.bak
+*.orig

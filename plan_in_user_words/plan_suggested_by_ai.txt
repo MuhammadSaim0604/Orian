@@ -1,0 +1,569 @@
+For the app you described, I would choose native Kotlin for the Android automation engine + React Native for the UI, rather than building the whole thing purely in React Native or Flutter.
+
+The key reason is that your hardest part isn't the canvas—it is deep Android automation: AccessibilityService, UI tree inspection, gestures, screenshots, foreground services, notifications, intents, device APIs, assistant integration, overlay/floating UI, permissions, background execution, and reliable automation. Kotlin gives you first-class access to all of that.
+
+My recommendation
+
+Part	Technology
+
+Android app/UI	React Native + TypeScript
+Android automation core	Kotlin
+Native bridge	React Native Turbo Modules / JSI where useful
+Workflow engine	Kotlin
+AI Agent runtime	TypeScript or Kotlin
+Workflow canvas	React Native + Skia/Gesture Handler/Reanimated
+State	Zustand
+Local DB	SQLite / Room
+Node SDK	TypeScript
+Node packages	npm
+MCP server	TypeScript
+API	OpenAI-compatible Chat Completions
+Monorepo	pnpm + Turborepo
+Testing	Vitest/Jest + Kotlin JUnit + Android instrumentation
+Build	Gradle + Turbo + GitHub Actions
+Validation	Zod
+Formatting/lint	ESLint + Prettier + ktlint
+Package publishing	npm
+Android native	Kotlin
+
+
+Why not Flutter?
+
+Flutter is excellent for the visual workflow builder, and its canvas/UI capabilities are strong. But your application is essentially an Android automation platform with a visual builder attached to it.
+
+You will constantly need things such as:
+
+AccessibilityService
+
+AccessibilityNodeInfo
+
+dispatchGesture()
+
+screenshots
+
+UI hierarchy
+
+foreground services
+
+notification APIs
+
+overlay windows
+
+intents
+
+package/app launching
+
+Android permissions
+
+device information
+
+contacts
+
+alarms
+
+clipboard
+
+media
+
+assistant APIs
+
+system settings
+
+background execution
+
+Android-specific lifecycle handling
+
+
+Flutter can access these through platform channels, but eventually you'll have a large native Kotlin subsystem anyway.
+
+React Native has the same fundamental issue, but because your ecosystem/node SDK is naturally TypeScript/JavaScript and your builder will be highly dynamic, I think RN + Kotlin is the better overall architecture.
+
+The architecture I'd use
+
+Think of your application as two engines sharing the same Android capability layer:
+
+Mobile Automation Platform
+                             │
+             ┌───────────────┴───────────────┐
+             │                               │
+       AI Agent Engine                 Workflow Engine
+             │                               │
+      Agent Loop / Planner             Workflow DAG
+      Tool Selection                   Node Execution
+      Memory                           Conditions
+      Screen Reasoning                 Loops
+      Replanning                       Variables
+             │                               │
+             └───────────────┬───────────────┘
+                             │
+                    Automation Runtime
+                             │
+                 ┌───────────┴───────────┐
+                 │                       │
+          Android Tool Layer       Accessibility
+                 │                       │
+          Contacts / Apps              UI Tree
+          Screenshots                  Gestures
+          Clipboard                    Click
+          Intents                      Swipe
+          Notifications                Long Press
+          Alarms                       Text Input
+          etc.                         etc.
+                 │
+                 └───────────┬───────────┘
+                             │
+                           Kotlin
+
+And then React Native sits above this:
+
+React Native
+│
+├── Workflow Canvas
+├── Node Editor
+├── AI Floating Toolset
+├── Screen Inspector
+├── Workflow Debugger
+├── Execution Logs
+├── Agent UI
+├── Settings
+└── Device Automation UI
+        │
+        │ RN Native Modules
+        ▼
+      Kotlin
+        │
+        ├── AccessibilityService
+        ├── Gesture Engine
+        ├── Screen Capture
+        ├── UI Tree Parser
+        ├── Android APIs
+        ├── App Manager
+        ├── Overlay Manager
+        ├── Foreground Service
+        └── Automation Runtime
+
+The most important architectural decision
+
+Don't make the workflow nodes themselves Android-specific.
+
+Create a generic node system.
+
+For example:
+
+@your-sdk/core
+
+Node
+ ├── InputNode
+ ├── ActionNode
+ ├── ConditionNode
+ ├── LoopNode
+ ├── VariableNode
+ ├── TransformNode
+ └── TriggerNode
+
+Then your Android package provides:
+
+@your-sdk/android-nodes
+
+OpenApp
+Click
+LongPress
+Swipe
+TypeText
+ReadScreen
+FindElement
+WaitForElement
+GetUiTree
+TakeScreenshot
+PressBack
+PressHome
+Notification
+Contact
+Clipboard
+...
+
+Then developers could do:
+
+npm install @your-sdk/android-nodes
+npm install @developer/custom-nodes
+
+And your application discovers/registers those nodes.
+
+That gives you the same conceptual separation as n8n:
+
+Core Engine
+     │
+     ├── Core Nodes
+     │
+     ├── Android Nodes
+     │
+     ├── AI Nodes
+     │
+     └── Third-party Nodes
+
+Your AI-generated workflow idea is particularly good
+
+I would make execution recording a first-class subsystem, rather than simply letting the AI execute actions and then hoping it can reconstruct the workflow.
+
+For example:
+
+User:
+"Send Robert a WhatsApp message saying I'll be late tomorrow."
+
+                    ↓
+
+                 AI Agent
+
+                    ↓
+
+              Tool Execution
+
+                    ↓
+
+        ┌─────────────────────────┐
+        │ Execution Recorder      │
+        ├─────────────────────────┤
+        │ Screenshot              │
+        │ UI hierarchy            │
+        │ Current package         │
+        │ Current activity        │
+        │ Action                  │
+        │ Coordinates             │
+        │ Node ID                 │
+        │ Selected element        │
+        │ Selector                │
+        │ Timestamp               │
+        │ Result                  │
+        └─────────────────────────┘
+
+                    ↓
+
+             Execution Trace
+
+                    ↓
+
+          Workflow Generation
+
+                    ↓
+
+       Reusable Automation Workflow
+
+So instead of remembering only:
+
+{
+  "action": "click",
+  "x": 421,
+  "y": 832
+}
+
+you store something much richer:
+
+{
+  "action": "click",
+  "target": {
+    "text": "Robert",
+    "resourceId": "...",
+    "className": "...",
+    "contentDescription": "...",
+    "bounds": {
+      "left": 100,
+      "top": 700,
+      "right": 900,
+      "bottom": 850
+    }
+  },
+  "fallback": {
+    "coordinates": {
+      "x": 421,
+      "y": 832
+    }
+  },
+  "screen": {
+    "package": "...",
+    "activity": "..."
+  }
+}
+
+This is much more robust than coordinate-based automation.
+
+Your runtime can then use a priority strategy:
+
+1. resourceId
+2. accessibility semantics
+3. text/contentDescription
+4. structural UI selector
+5. relative position
+6. coordinates
+7. screenshot/vision fallback
+
+That is the kind of architecture I'd aim for.
+
+Your "Configure with AI" feature
+
+I would make the floating toolset its own subsystem:
+
+Node Editor
+     │
+     │ Configure with AI
+     ▼
+AI Configuration Overlay
+     │
+     ├── Current Node
+     ├── Screen
+     ├── UI Tree
+     ├── Screenshot
+     ├── Element Inspector
+     ├── Coordinate Inspector
+     ├── Test Action
+     ├── Ask AI
+     └── More Tools
+
+The important thing is that the AI receives node context automatically.
+
+For example:
+
+{
+  "node": {
+    "id": "if_23",
+    "type": "condition",
+    "configuration": {}
+  },
+  "screen": {
+    "package": "com.whatsapp",
+    "activity": "..."
+  },
+  "uiTree": "...",
+  "screenshot": "...",
+  "availableTools": [...]
+}
+
+Then the user can simply say:
+
+> "Return true if the Send button is visible."
+
+
+
+The AI shouldn't merely return text. It should produce a structured node configuration.
+
+{
+  "condition": {
+    "type": "element_exists",
+    "selector": {
+      "text": "Send"
+    }
+  }
+}
+
+Your node editor then updates itself.
+
+
+---
+
+Monorepo
+
+I'd structure the repository roughly like this:
+
+mobile-automation/
+│
+├── apps/
+│   └── mobile/
+│
+├── packages/
+│   ├── node-sdk/
+│   ├── core-nodes/
+│   ├── android-nodes/
+│   ├── workflow-engine/
+│   ├── workflow-schema/
+│   ├── ai-agent/
+│   ├── prompt-engine/
+│   ├── tool-sdk/
+│   ├── mcp-server/
+│   ├── execution-recorder/
+│   ├── screen-inspector/
+│   ├── shared-types/
+│   └── ui/
+│
+├── android/
+│   ├── accessibility/
+│   ├── automation/
+│   ├── gestures/
+│   ├── screen/
+│   ├── overlays/
+│   └── tools/
+│
+├── tests/
+│
+├── turbo.json
+├── pnpm-workspace.yaml
+├── eslint.config.js
+├── prettier.config.js
+└── package.json
+
+One important distinction: don't force everything into TypeScript.
+
+Your npm ecosystem should be TypeScript, but the Android runtime should be Kotlin.
+
+
+---
+
+Workflow engine
+
+I would also keep the workflow definition independent of React Native.
+
+Something like:
+
+Workflow
+ ├── metadata
+ ├── variables
+ ├── nodes[]
+ └── edges[]
+
+Each node:
+
+Node
+ ├── id
+ ├── type
+ ├── inputs
+ ├── outputs
+ ├── config
+ ├── metadata
+ └── executionPolicy
+
+Then:
+
+React Native
+      ↓
+Workflow JSON
+      ↓
+Workflow Engine
+      ↓
+Node Registry
+      ↓
+Node Executor
+      ↓
+Android Tool Runtime
+
+This means you could eventually execute the same workflow from another environment.
+
+
+---
+
+AI Agent vs Workflow
+
+I would not merge these two engines.
+
+Keep them separate:
+
+Agent
+
+Goal
+ ↓
+Plan
+ ↓
+Observe
+ ↓
+Choose Tool
+ ↓
+Execute
+ ↓
+Observe
+ ↓
+Replan
+ ↓
+Done
+
+Workflow
+
+Trigger
+ ↓
+Node
+ ↓
+Condition
+ ├── true → Node
+ └── false → Node
+ ↓
+Loop
+ ↓
+Node
+ ↓
+Done
+
+But both use the same:
+
+Android Tool Runtime
+
+That's the key.
+
+So your AI agent can call:
+
+click()
+swipe()
+findElement()
+getUiTree()
+screenshot()
+typeText()
+openApp()
+pressBack()
+getContacts()
+createAlarm()
+...
+
+And workflow nodes can call the exact same functions.
+
+
+---
+
+MCP
+
+Your idea of exposing the Android capabilities through MCP is also a good architectural boundary.
+
+For example:
+
+External AI
+     ↓
+MCP
+     ↓
+Your Agent Tool Gateway
+     ↓
+Android Tool Runtime
+     ↓
+Device
+
+Then another AI system could potentially use your phone automation capabilities without knowing anything about your internal workflow engine.
+
+
+---
+
+Final recommendation
+
+If you're serious about making this a professional Android automation platform, my choice would be:
+
+React Native + TypeScript + Kotlin
+
+with:
+
+React Native → entire product UI, workflow canvas, node editor, AI interface
+
+Kotlin → Android automation/runtime layer
+
+TypeScript → node SDK, workflow schema, AI agent, prompt engine, MCP, shared logic
+
+pnpm + Turborepo → monorepo
+
+Zustand → UI state
+
+SQLite/Room → local persistence
+
+Reanimated + Gesture Handler + Skia → professional interactive canvas
+
+Zod → workflow/node/tool schemas
+
+Vitest/Jest + JUnit + Android instrumentation → testing
+
+ESLint + Prettier + ktlint → code quality
+
+GitHub Actions → CI/CD
+
+The most important principle is: React Native should be your product layer; Kotlin should be your Android operating-system integration layer. Don't try to make React Native itself responsible for the deep automation.
+
+For this particular product, I would choose this over Flutter-only or Kotlin-only because you get native Android control and a much more convenient TypeScript/npm ecosystem for your node SDK, AI infrastructure, and extensible workflow platform.
