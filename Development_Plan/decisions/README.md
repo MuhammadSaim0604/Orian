@@ -1,0 +1,16 @@
+# Architecture Decision Records
+
+Short, dated records of the decisions that shape this project. Each ADR states the context, the decision, and the consequences. Once accepted, an ADR is not edited - it is superseded by a new one.
+
+| ADR | Decision | Status |
+|-----|----------|--------|
+| [0001](0001-react-native-plus-kotlin.md) | React Native + Kotlin, not Flutter or RN-only | Accepted |
+| [0002](0002-pnpm-turborepo-monorepo.md) | pnpm workspaces + Turborepo for the TS side | Accepted |
+| [0003](0003-zustand-for-ui-state.md) | Zustand for UI state | Accepted |
+| [0004](0004-nativewind-for-styling.md) | NativeWind + centralized design tokens | Accepted |
+| [0005](0005-sqlite-room-persistence.md) | SQLite/Room for local persistence | Accepted |
+| [0006](0006-zod-for-schemas.md) | Zod for workflow, node, and tool schemas | Accepted |
+| [0007](0007-chat-completions-only.md) | OpenAI-compatible Chat Completions only (v1) | Accepted |
+| [0008](0008-two-engines-one-runtime.md) | Two engines, one shared Android Tool Runtime | Accepted |
+| [0009](0009-selectors-over-coordinates.md) | Robust selectors over raw coordinates | Accepted |
+| [0010](0010-ci-only-apk-builds.md) | APKs are built only in CI, never locally | Accepted |

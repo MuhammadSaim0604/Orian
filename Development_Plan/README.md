@@ -40,6 +40,13 @@ Development_Plan/
 │   ├── System_Architecture.md
 │   ├── Monorepo_Structure.md
 │   └── Data_Models.md
+├── decisions/                ← architecture decision records (0001-0010)
+│   ├── README.md
+│   └── 0001-…-0010-….md
+├── conventions/
+│   ├── Coding_Conventions.md
+│   ├── Permission_Model.md
+│   └── Versions_And_Targets.md
 ├── phases/
 │   ├── Phase_00_Foundation.md
 │   ├── Phase_01_Monorepo_Tooling.md
@@ -58,8 +65,9 @@ Development_Plan/
 
 1. Read `00_Overview.md` for scope and vocabulary.
 2. Read the `architecture/` docs to understand how the pieces fit.
-3. Execute phases in `phases/` in order — each has goals, deliverables, and a definition of done.
-4. Each phase lists the **skills to load**. Those skills are already installed in your AI agent — load the named skill before starting that subsystem.
+3. Read `decisions/` for why the stack is what it is, and `conventions/` for how to write code, handle permissions, and which versions to target.
+4. Execute phases in `phases/` in order — each has goals, deliverables, and a definition of done.
+5. Each phase lists the **skills to load**. Those skills are already installed in your AI agent — load the named skill before starting that subsystem.
 
 ## Skills
 
