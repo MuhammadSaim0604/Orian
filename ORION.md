@@ -10,8 +10,9 @@ From `IMPORTANT_RULES.txt` — these override convenience in every case:
 2. **Never build the APK locally on this machine.** No `gradlew assemble*`, no `react-native run-android`, no local emulator builds.
 3. **All builds and tests run through GitHub Actions.** CI must build and test both the debug and release APKs.
 4. **After every meaningful chunk of work: commit, push, then verify CI with `gh`.** Watch the run, read failing logs, fix before moving on.
-5. **Maintain `tracking.md` at the repo root.** After each phase record what was implemented, which files changed, which phase is done, and which phases remain.
+5. **Maintain `tracking.md` at the repo root.** After each phase record what was implemented, which files changed, which phase is done, and which phases remain. Also you can read if for what previous ai agent completed.
 6. `plan_in_user_words/` is background context only — the original idea in the user's words. The authoritative plan is `Development_Plan/`.
+7. For Specific work load specific skill that needed.
 
 Environment is Windows; the user works in PowerShell/cmd. Git remote: `https://github.com/MuhammadSaim0604/Orian.git`.
 
