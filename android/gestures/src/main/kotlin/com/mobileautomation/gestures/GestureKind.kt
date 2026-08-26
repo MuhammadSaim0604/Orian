@@ -30,7 +30,10 @@ enum class GestureKind(val defaultDurationMs: Long) {
  * is rejected, and a long press shorter than the system threshold would be
  * delivered as a tap, which is a silent correctness bug worth catching early.
  */
-fun isValidDuration(kind: GestureKind, durationMs: Long): Boolean =
+fun isValidDuration(
+    kind: GestureKind,
+    durationMs: Long,
+): Boolean =
     when {
         durationMs <= 0L -> false
         kind == GestureKind.LONG_PRESS -> durationMs >= GestureKind.LONG_PRESS_THRESHOLD_MS

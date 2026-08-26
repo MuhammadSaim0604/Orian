@@ -38,8 +38,7 @@ enum class SensitiveCapability(
          * Capabilities the user must grant from system settings rather than a
          * runtime dialog. These need an in-app rationale screen first.
          */
-        fun requiringSettingsRedirect(): List<SensitiveCapability> =
-            entries.filter { it.requiresSystemSettingsScreen }
+        fun requiringSettingsRedirect(): List<SensitiveCapability> = entries.filter { it.requiresSystemSettingsScreen }
     }
 }
 

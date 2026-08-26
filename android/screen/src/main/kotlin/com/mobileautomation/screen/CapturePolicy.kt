@@ -28,7 +28,10 @@ object CapturePolicy {
     const val MAX_MODEL_IMAGE_EDGE_PX: Int = 1280
 
     /** Downscale factor to fit [MAX_MODEL_IMAGE_EDGE_PX], or 1.0 when it already fits. */
-    fun scaleFactorFor(widthPx: Int, heightPx: Int): Double {
+    fun scaleFactorFor(
+        widthPx: Int,
+        heightPx: Int,
+    ): Double {
         val longestEdge = maxOf(widthPx, heightPx)
         if (longestEdge <= MAX_MODEL_IMAGE_EDGE_PX) return 1.0
         return MAX_MODEL_IMAGE_EDGE_PX.toDouble() / longestEdge.toDouble()
