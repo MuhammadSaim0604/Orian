@@ -4,6 +4,8 @@ Living record of what has been implemented, which phase is complete, and what re
 
 Authoritative plan: `Development_Plan/`. Phases execute strictly in order.
 
+Last updated: after Phase 1, with both CI workflows green on `main` (Android CI run `32942495576`, TypeScript CI run `32942495470`).
+
 ---
 
 ## Status
@@ -86,9 +88,9 @@ _Thirteen TypeScript packages_, each with `package.json`, `tsconfig.json`, a bar
 | `screen-inspector`   | UI node attributes, centre/tappability helpers         |
 | `ui`                 | Design tokens, semantic colours, `ThemeProvider`       |
 
-_Theme system_ (`packages/ui`) — raw tokens → semantic tokens per scheme → assembled theme → `ThemeProvider`/`useTheme`, plus a Tailwind preset (`tailwind.preset.cjs`) so semantic classes exist. Nine tests cover scheme parity and resolution.
+_Theme system_ (`packages/ui`) — raw tokens → semantic tokens per scheme → assembled theme → `ThemeProvider`/`useTheme`, plus a Tailwind preset (`tailwind.preset.cjs`) that emits CSS-variable colours so semantic classes such as `bg-surface` exist and follow the active scheme. Nine tests cover scheme parity and resolution.
 
-_RN app_ (`apps/mobile`) — RN 0.76.6, NativeWind 4, Zustand available, Metro configured for the pnpm monorepo (symlinks, workspace watch folders), Babel with NativeWind + Reanimated, Jest with `@testing-library/react-native`, and a themed placeholder screen showing phase status using only semantic classes.
+_RN app_ (`apps/mobile`) — RN 0.76.6, NativeWind 4 (with its own preset plus the shared token preset, and `src/global.css` declaring the theme CSS variables), Zustand available, Metro configured for the pnpm monorepo (symlinks, workspace watch folders), Babel with NativeWind + Reanimated, Jest with `@testing-library/react-native`, and a themed placeholder screen showing phase status using only semantic classes.
 
 _Android Kotlin_ (`android/`) — six Gradle library modules (`accessibility`, `automation`, `gestures`, `screen`, `overlays`, `tools`) with a version catalog, ktlint applied to all subprojects, and JUnit tests per module encoding contracts: UI-tree attribute keys, the 20 device tools matching `tool-sdk`, gesture duration validation, capture policy, overlay layout limits, sensitive-capability permission mapping.
 
@@ -107,9 +109,38 @@ _CI_ — two workflows:
 pnpm install                                  ok (950 packages)
 pnpm format:check                             ok
 pnpm turbo run typecheck lint test build      56/56 tasks successful
+cd android && gradle ktlintCheck testDebugUnitTest    ok (27 Kotlin tests, 0 failures)
+cd apps/mobile/android && gradle help                 ok (plugin/classpath resolution)
+cd apps/mobile/android && gradle :app:generateAutolinkingPackageList   ok
+cd apps/mobile && react-native bundle --platform android --dev false   ok (1.42 MB)
 ```
 
-61 TypeScript/RN tests pass (60 Vitest across 13 packages + 3 Jest in the app). **No APK was built locally** — that is CI-only per ADR 0010, so the Gradle builds and the 22 Kotlin JUnit tests are verified by GitHub Actions, not from here.
+71 TypeScript/RN tests pass (68 Vitest across the 13 packages + 3 Jest in the app), plus 27 Kotlin JUnit tests across the six native modules. **No APK was built locally** — that is CI-only per ADR 0010. The Gradle tasks run above are non-assemble tasks used to verify configuration and the JS bundle; the APKs themselves are built only by GitHub Actions.
+
+**CI verification**
+
+Both workflows are green on `main`:
+
+| Run           | Workflow      | Result                                                          |
+| ------------- | ------------- | --------------------------------------------------------------- |
+| `32942495470` | TypeScript CI | success (46s)                                                   |
+| `32942495576` | Android CI    | success (8m24s) — ktlint + Kotlin tests, debug APK, release APK |
+
+Artifacts produced: `app-debug`, `app-release`, `kotlin-test-reports`.
+
+### Getting CI green — five follow-up fixes
+
+The first Android run failed. Each fix is recorded because most were caused by pnpm's strict, non-hoisting `node_modules` surfacing undeclared transitive dependencies that npm/yarn hoisting would have masked — a class of problem that will recur whenever a React Native tool is added.
+
+| Commit    | Failure                                                                         | Cause and fix                                                                                                                                                                                                                                                                                                                          |
+| --------- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `7ae69c3` | ktlint failed                                                                   | Multi-parameter Kotlin signatures must wrap one parameter per line, and a fitting single-expression body must stay on the signature line. Fixed three files, verified with `ktlintFormat`. Also moved the workflow actions off deprecated Node 20 versions.                                                                            |
+| `0220e71` | `Included build '.../@react-native/gradle-plugin' does not exist`               | `settings.gradle.kts` includes that plugin and the app points `codegenDir` at `@react-native/codegen`, but neither was a declared dependency, so pnpm never linked them where Gradle looks. Declared both.                                                                                                                             |
+| `059f31f` | `Could not find com.facebook.react:react-native-gradle-plugin:` (empty version) | RN ships the plugin as source, not a published artifact. It resolves only when `settings.gradle.kts` includes it a **second** time outside `pluginManagement`, so Gradle substitutes the versionless coordinate. Added that, plus the `com.facebook.react.rootproject` plugin.                                                         |
+| `f7e073a` | `RNGP - Autolinking: Could not find project.android.packageName`                | The Gradle plugin shells out to the RN CLI for autolinking config; the CLI's Android platform resolver was not linked into the app, so `react-native config` emitted no `project.android`. Declared `@react-native-community/cli` and `cli-platform-android`.                                                                          |
+| `139df84` | `Tailwind CSS has not been configured with the NativeWind preset`               | Four issues: `tailwind.config.js` never listed `require('nativewind/preset')`; the token preset emitted hardcoded hex plus custom `dark-*` classes instead of NativeWind v4 CSS variables; `@babel/plugin-transform-react-jsx` was unresolvable from the app; and `packages/ui` used ESM `.js` import specifiers Metro cannot resolve. |
+
+The NativeWind fix changed the theming approach and is worth knowing about: the Tailwind preset now emits `rgb(var(--color-<role>) / <alpha-value>)`, and the concrete values live in `apps/mobile/src/global.css` as CSS variables with a `prefers-color-scheme` override. So `bg-surface` follows the active scheme with no component change. `packages/ui/src/theme/semantic.ts` remains the source of truth for the TypeScript side (`useTheme`, and later Skia); `global.css` is the source of truth for className styling. **The two must be kept in sync.**
 
 **Files**
 
@@ -126,6 +157,8 @@ android/**                (6 Kotlin modules + version catalog + ktlint config)
 .github/workflows/ci-android.yml
 ```
 
+**Commits:** `11303c1` (scaffold), `7ae69c3`, `0220e71`, `059f31f`, `f7e073a`, `139df84` (CI fixes)
+
 ---
 
 ## Remaining
@@ -134,6 +167,9 @@ Phases 2–10, in order. Next up is **Phase 2 — Android automation core**: the
 
 Carry-forward notes:
 
-- The Gradle wrapper JAR is deliberately not committed; CI provisions Gradle 8.11.1 via `gradle/actions/setup-gradle`. A wrapper JAR can be added later if local Gradle invocation is ever wanted for non-assemble tasks.
-- Release signing expects `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` repository secrets. Without them the release APK is debug-signed and not distributable.
+- **pnpm strictness.** Three of the five CI failures were undeclared transitive dependencies. When adding any React Native tool that Gradle or Metro invokes, declare it explicitly in `apps/mobile/package.json` rather than relying on it being a transitive dep of `react-native`.
+- **Theme values are duplicated by necessity.** `packages/ui/src/theme/semantic.ts` (TypeScript/Skia) and `apps/mobile/src/global.css` (CSS variables for classNames) must be changed together. A test asserting parity would be worth adding in Phase 6.
+- The Gradle wrapper JAR is deliberately not committed; CI provisions Gradle 8.11.1 via `gradle/actions/setup-gradle`. Local Gradle 8.14.3 was used for the non-assemble verification tasks above.
+- Release signing expects `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` repository secrets. **They are not currently set**, so CI warns and the release APK is debug-signed — it verifies but is not distributable.
 - The Kotlin modules under `android/` are a standalone Gradle build in Phase 1. They are wired into the app when the Turbo Module bridge is built in Phase 3.
+- Local Gradle runs need `ANDROID_HOME` set (`%LOCALAPPDATA%\Android\Sdk` on this machine); there is no committed `local.properties`.
