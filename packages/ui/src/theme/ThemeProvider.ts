@@ -10,8 +10,8 @@
 import { createContext, createElement, useContext, useMemo, type ReactNode } from 'react';
 import { useColorScheme } from 'react-native';
 
-import { type ColorSchemeName } from './semantic.js';
-import { type Theme, type ThemePreference, resolveTheme } from './theme.js';
+import { type ColorSchemeName } from './semantic';
+import { type Theme, type ThemePreference, resolveTheme } from './theme';
 
 export interface ThemeContextValue {
   readonly theme: Theme;

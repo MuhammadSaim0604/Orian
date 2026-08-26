@@ -7,9 +7,9 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { semanticColors } from './semantic.js';
-import { darkTheme, lightTheme, resolveTheme } from './theme.js';
-import { palette, spacing } from './tokens.js';
+import { semanticColors } from './semantic';
+import { darkTheme, lightTheme, resolveTheme } from './theme';
+import { palette, spacing } from './tokens';
 
 describe('theme tokens', () => {
   it('defines light and dark schemes', () => {

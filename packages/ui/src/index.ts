@@ -10,4 +10,4 @@
 
 export const PACKAGE_NAME = '@mobile-automation/ui' as const;
 
-export * from './theme/index.js';
+export * from './theme';

@@ -6,7 +6,7 @@
  * possible without editing components (ADR 0004).
  */
 
-import { palette } from './tokens.js';
+import { palette } from './tokens';
 
 /** Every semantic colour role the product uses. */
 export interface SemanticColors {

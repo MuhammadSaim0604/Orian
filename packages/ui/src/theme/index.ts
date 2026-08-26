@@ -7,14 +7,14 @@ export {
   palette,
   radii,
   spacing,
-} from './tokens.js';
-export type { FontSizes, Palette, Radii, Spacing } from './tokens.js';
+} from './tokens';
+export type { FontSizes, Palette, Radii, Spacing } from './tokens';
 
-export { darkColors, lightColors, semanticColors } from './semantic.js';
-export type { ColorSchemeName, SemanticColors } from './semantic.js';
+export { darkColors, lightColors, semanticColors } from './semantic';
+export type { ColorSchemeName, SemanticColors } from './semantic';
 
-export { darkTheme, lightTheme, resolveTheme, themes } from './theme.js';
-export type { Theme, ThemePreference } from './theme.js';
+export { darkTheme, lightTheme, resolveTheme, themes } from './theme';
+export type { Theme, ThemePreference } from './theme';
 
-export { ThemeProvider, useTheme, useThemeColors } from './ThemeProvider.js';
-export type { ThemeContextValue, ThemeProviderProps } from './ThemeProvider.js';
+export { ThemeProvider, useTheme, useThemeColors } from './ThemeProvider';
+export type { ThemeContextValue, ThemeProviderProps } from './ThemeProvider';

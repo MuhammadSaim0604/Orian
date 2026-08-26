@@ -4,7 +4,7 @@
  * imperative APIs (which cannot use classNames) stay on-theme.
  */
 
-import { type ColorSchemeName, type SemanticColors, semanticColors } from './semantic.js';
+import { type ColorSchemeName, type SemanticColors, semanticColors } from './semantic';
 import {
   durations,
   elevation,
@@ -13,7 +13,7 @@ import {
   lineHeights,
   radii,
   spacing,
-} from './tokens.js';
+} from './tokens';
 
 export interface Theme {
   readonly name: ColorSchemeName;

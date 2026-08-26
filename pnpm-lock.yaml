@@ -83,6 +83,9 @@ importers:
       react-native:
         specifier: 0.76.6
         version: 0.76.6(@babel/core@7.26.0)(@babel/preset-env@7.26.0(@babel/core@7.26.0))(@react-native-community/cli-server-api@15.0.1)(@types/react@18.3.18)(react@18.3.1)
+      react-native-css-interop:
+        specifier: 0.1.22
+        version: 0.1.22(react-native-reanimated@3.16.7(@babel/core@7.26.0)(react-native@0.76.6(@babel/core@7.26.0)(@babel/preset-env@7.26.0(@babel/core@7.26.0))(@react-native-community/cli-server-api@15.0.1)(@types/react@18.3.18)(react@18.3.1))(react@18.3.1))(react-native-safe-area-context@5.1.0(react-native@0.76.6(@babel/core@7.26.0)(@babel/preset-env@7.26.0(@babel/core@7.26.0))(@react-native-community/cli-server-api@15.0.1)(@types/react@18.3.18)(react@18.3.1))(react@18.3.1))(react-native@0.76.6(@babel/core@7.26.0)(@babel/preset-env@7.26.0(@babel/core@7.26.0))(@react-native-community/cli-server-api@15.0.1)(@types/react@18.3.18)(react@18.3.1))(react@18.3.1)(tailwindcss@3.4.17)
       react-native-reanimated:
         specifier: 3.16.7
         version: 3.16.7(@babel/core@7.26.0)(react-native@0.76.6(@babel/core@7.26.0)(@babel/preset-env@7.26.0(@babel/core@7.26.0))(@react-native-community/cli-server-api@15.0.1)(@types/react@18.3.18)(react@18.3.1))(react@18.3.1)
@@ -96,6 +99,9 @@ importers:
       '@babel/core':
         specifier: 7.26.0
         version: 7.26.0
+      '@babel/plugin-transform-react-jsx':
+        specifier: 7.25.9
+        version: 7.25.9(@babel/core@7.26.0)
       '@babel/preset-env':
         specifier: 7.26.0
         version: 7.26.0(@babel/core@7.26.0)
@@ -833,8 +839,8 @@ packages:
     peerDependencies:
       '@babel/core': ^7.0.0-0
 
-  '@babel/plugin-transform-react-jsx@7.29.7':
-    resolution: {integrity: sha512-WsZulLVBUHXVj2cUcPVx6UE21TpalB6bHbSFErKT0Ib++ax24jjXe73FqlWvdylFOjiuPHYi6VCcgRad1ItN+A==}
+  '@babel/plugin-transform-react-jsx@7.25.9':
+    resolution: {integrity: sha512-s5XwpQYCqGerXl+Pu6VDL3x0j2d82eiV77UJ8a2mDHAW7j9SWRqQ2y1fNo1Z74CdcYipl5Z41zvjj4Nfzq36rw==}
     engines: {node: '>=6.9.0'}
     peerDependencies:
       '@babel/core': ^7.0.0-0
@@ -5438,7 +5444,7 @@ snapshots:
       '@babel/core': 7.26.0
       '@babel/helper-plugin-utils': 7.29.7
 
-  '@babel/plugin-transform-react-jsx@7.29.7(@babel/core@7.26.0)':
+  '@babel/plugin-transform-react-jsx@7.25.9(@babel/core@7.26.0)':
     dependencies:
       '@babel/core': 7.26.0
       '@babel/helper-annotate-as-pure': 7.29.7
@@ -6210,7 +6216,7 @@ snapshots:
       '@babel/plugin-transform-private-methods': 7.29.7(@babel/core@7.26.0)
       '@babel/plugin-transform-private-property-in-object': 7.29.7(@babel/core@7.26.0)
       '@babel/plugin-transform-react-display-name': 7.29.7(@babel/core@7.26.0)
-      '@babel/plugin-transform-react-jsx': 7.29.7(@babel/core@7.26.0)
+      '@babel/plugin-transform-react-jsx': 7.25.9(@babel/core@7.26.0)
       '@babel/plugin-transform-react-jsx-self': 7.29.7(@babel/core@7.26.0)
       '@babel/plugin-transform-react-jsx-source': 7.29.7(@babel/core@7.26.0)
       '@babel/plugin-transform-regenerator': 7.29.8(@babel/core@7.26.0)

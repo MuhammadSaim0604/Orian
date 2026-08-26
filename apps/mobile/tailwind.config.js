@@ -1,13 +1,14 @@
 const uiPreset = require('@mobile-automation/ui/tailwind-preset');
 
 /**
- * The app extends the shared preset generated from the design tokens, so every
- * semantic class (`bg-surface`, `text-primary`) resolves identically here and
- * in any shared component (ADR 0004).
+ * NativeWind's own preset must be present, so it is listed alongside the shared
+ * design-token preset. Semantic classes such as `bg-surface` come from the UI
+ * package; the CSS variables they reference are declared in src/global.css
+ * (ADR 0004).
  *
  * @type {import('tailwindcss').Config}
  */
 module.exports = {
-  presets: [uiPreset],
+  presets: [require('nativewind/preset'), uiPreset],
   content: ['./src/**/*.{js,jsx,ts,tsx}', '../../packages/ui/src/**/*.{js,jsx,ts,tsx}'],
 };

@@ -1,3 +1,80 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/*
+ * Semantic design tokens as CSS variables, mirroring
+ * packages/ui/src/theme/semantic.ts. Values are space-separated RGB channels so
+ * Tailwind's `<alpha-value>` works (e.g. `bg-surface/50`).
+ *
+ * Keep this in sync with semantic.ts - that file is the source of truth for the
+ * TypeScript side (useTheme, Skia); this file is the source of truth for
+ * className styling.
+ */
+@layer base {
+  :root {
+    --color-background: 248 250 252; /* slate50 */
+    --color-surface: 255 255 255; /* white */
+    --color-surface-raised: 255 255 255; /* white */
+    --color-surface-muted: 241 245 249; /* slate100 */
+
+    --color-border: 226 232 240; /* slate200 */
+    --color-border-strong: 203 213 225; /* slate300 */
+
+    --color-text-primary: 15 23 42; /* slate900 */
+    --color-text-secondary: 71 85 105; /* slate600 */
+    --color-text-muted: 148 163 184; /* slate400 */
+    --color-text-on-primary: 255 255 255; /* white */
+
+    --color-primary: 79 70 229; /* indigo600 */
+    --color-primary-hover: 67 56 202; /* indigo700 */
+    --color-primary-muted: 165 180 252; /* indigo300 */
+
+    --color-success: 5 150 105; /* emerald600 */
+    --color-warning: 245 158 11; /* amber500 */
+    --color-danger: 220 38 38; /* red600 */
+    --color-info: 34 211 238; /* cyan400 */
+
+    --color-canvas-background: 241 245 249; /* slate100 */
+    --color-canvas-grid: 226 232 240; /* slate200 */
+    --color-node-surface: 255 255 255; /* white */
+    --color-node-border: 203 213 225; /* slate300 */
+    --color-node-selected: 99 102 241; /* indigo500 */
+    --color-edge: 148 163 184; /* slate400 */
+    --color-edge-active: 99 102 241; /* indigo500 */
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --color-background: 2 6 23; /* slate950 */
+      --color-surface: 15 23 42; /* slate900 */
+      --color-surface-raised: 30 41 59; /* slate800 */
+      --color-surface-muted: 30 41 59; /* slate800 */
+
+      --color-border: 51 65 85; /* slate700 */
+      --color-border-strong: 71 85 105; /* slate600 */
+
+      --color-text-primary: 248 250 252; /* slate50 */
+      --color-text-secondary: 203 213 225; /* slate300 */
+      --color-text-muted: 100 116 139; /* slate500 */
+      --color-text-on-primary: 255 255 255; /* white */
+
+      --color-primary: 129 140 248; /* indigo400 */
+      --color-primary-hover: 165 180 252; /* indigo300 */
+      --color-primary-muted: 67 56 202; /* indigo700 */
+
+      --color-success: 52 211 153; /* emerald400 */
+      --color-warning: 251 191 36; /* amber400 */
+      --color-danger: 248 113 113; /* red400 */
+      --color-info: 34 211 238; /* cyan400 */
+
+      --color-canvas-background: 2 6 23; /* slate950 */
+      --color-canvas-grid: 30 41 59; /* slate800 */
+      --color-node-surface: 30 41 59; /* slate800 */
+      --color-node-border: 71 85 105; /* slate600 */
+      --color-node-selected: 129 140 248; /* indigo400 */
+      --color-edge: 71 85 105; /* slate600 */
+      --color-edge-active: 129 140 248; /* indigo400 */
+    }
+  }
+}
