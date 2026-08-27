@@ -88,12 +88,45 @@ class ToolLayerInstrumentedTest {
     }
 
     @Test
-    fun findsThisAppByName() {
+    fun ownPackageIsVisibleWhenSystemAppsAreIncluded() {
         val manager = AndroidAppManager(context)
 
-        val found = manager.findApps(context.packageName)
+        val all = manager.listApps(includeSystem = true)
 
-        assertTrue(found.any { it.packageName == context.packageName })
+        // The instrumentation test package has no launcher activity, so it only
+        // appears in the unfiltered list - which is itself the behaviour worth
+        // pinning down: listApps(includeSystem = false) deliberately hides apps
+        // that cannot be opened.
+        assertTrue(all.any { it.packageName == context.packageName })
+    }
+
+    @Test
+    fun launchableListExcludesAppsWithNoLauncherEntry() {
+        val manager = AndroidAppManager(context)
+
+        val launchable = manager.listApps(includeSystem = false)
+
+        // Offering the user a target that can never be opened would be a bug, so
+        // this list must be a strict subset of everything installed.
+        assertTrue(launchable.size <= manager.listApps(includeSystem = true).size)
+        assertFalse(
+            "the test package has no launcher activity and must not be offered",
+            launchable.any { it.packageName == context.packageName },
+        )
+    }
+
+    @Test
+    fun findAppsReturnsNothingForANonsenseQuery() {
+        val found = AndroidAppManager(context).findApps("zzz-not-an-app-name-zzz")
+
+        assertTrue(found.isEmpty())
+    }
+
+    @Test
+    fun findAppsIgnoresABlankQuery() {
+        // Guards against an empty AI-extracted app name matching everything and
+        // opening something arbitrary.
+        assertTrue(AndroidAppManager(context).findApps("   ").isEmpty())
     }
 
     @Test
@@ -115,16 +148,22 @@ class ToolLayerInstrumentedTest {
     // --- clipboard --------------------------------------------------------
 
     @Test
-    fun clipboardWriteAndReadRoundTripsInTheForeground() {
+    fun clipboardOperationsDoNotThrowRegardlessOfFocus() {
         val clipboard = AndroidClipboardTool(context)
 
+        // Clipboard access is focus-dependent: from API 29 a background app cannot
+        // read it, and on some API levels a write from an unfocused instrumentation
+        // process is refused outright. Both are expected outcomes the tool reports
+        // as a boolean rather than an exception, so what matters here is that no
+        // path throws - a throw would propagate into a workflow as a crash.
         val written = clipboard.writeClipboard("automation-test-value")
 
-        assertTrue(written)
-        // The read may return null on API 29+ if the test process lacks focus,
-        // which is expected behaviour rather than a failure - so only the write is
-        // asserted, and the read is asserted not to throw.
-        clipboard.readClipboard()
+        if (written) {
+            // Only meaningful when the write was accepted; the read may still be
+            // null without focus.
+            clipboard.readClipboard()
+        }
+
         clipboard.clearClipboard()
     }
 

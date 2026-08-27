@@ -69,15 +69,21 @@ class ScreenshotStoreInstrumentedTest {
     }
 
     @Test
-    fun capturesAreNotWorldReadable() {
+    fun capturesLiveInsideThePackagePrivateDirectory() {
         val store = store()
         try {
             val file = store.allocate()
             file.writeBytes(ByteArray(8))
 
-            // App-private files must not be readable by other processes.
-            assertFalse("a screenshot must not be world-readable", file.canRead().not())
+            // filesDir is private to this package: other apps cannot reach it, which
+            // is the guarantee that matters for screenshots of banking or messaging
+            // screens.
+            assertTrue(file.absolutePath.startsWith(context.filesDir.absolutePath))
             assertTrue(file.absolutePath.contains(context.packageName))
+            assertFalse(
+                "captures must not be written to shared external storage",
+                file.absolutePath.contains("/sdcard/"),
+            )
         } finally {
             store.clear()
         }
