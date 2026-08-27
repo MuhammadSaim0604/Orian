@@ -4,7 +4,9 @@
     "outDir": "dist",
     "rootDir": "src",
     "jsx": "react-jsx",
-    "types": ["node"]
+    "lib": ["ES2022", "DOM"],
+    "moduleResolution": "bundler",
+    "types": ["react"]
   },
   "include": ["src/**/*"],
   "exclude": ["src/**/*.test.ts", "dist", "node_modules"]

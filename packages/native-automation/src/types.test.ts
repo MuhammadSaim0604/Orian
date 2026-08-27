@@ -7,7 +7,7 @@ import {
   type ResolvedElement,
   isAmbiguousMatch,
   isFragileMatch,
-} from './types.js';
+} from './types';
 
 const element = (overrides: Partial<ResolvedElement> = {}): ResolvedElement => ({
   text: 'Send',

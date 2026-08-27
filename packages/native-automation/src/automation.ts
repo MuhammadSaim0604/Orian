@@ -1,8 +1,8 @@
 import { NativeEventEmitter, type EmitterSubscription, type NativeModule } from 'react-native';
 
-import { AutomationError, bridgeUnavailableError, toAutomationError } from './errors.js';
-import { type AutomationEventMap, type AutomationEventName } from './events.js';
-import NativeAutomation, { type Spec } from './spec/NativeAutomation.js';
+import { AutomationError, bridgeUnavailableError, toAutomationError } from './errors';
+import { type AutomationEventMap, type AutomationEventName } from './events';
+import NativeAutomation, { type Spec } from './spec/NativeAutomation';
 import {
   type AlarmRequest,
   type AutomationStatus,
@@ -17,7 +17,7 @@ import {
   type SwipeDirection,
   type UiTree,
   type VolumeDirection,
-} from './types.js';
+} from './types';
 
 /**
  * The typed automation API.

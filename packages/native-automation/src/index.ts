@@ -51,7 +51,7 @@ export {
   typeText,
   waitForElement,
   writeClipboard,
-} from './automation.js';
+} from './automation';
 
 export {
   AUTOMATION_ERROR_CODES,
@@ -61,7 +61,7 @@ export {
   isAutomationError,
   isAutomationErrorCode,
   toAutomationError,
-} from './errors.js';
+} from './errors';
 
 export {
   AUTOMATION_EVENTS,
@@ -73,7 +73,7 @@ export {
   type ExecutionProgressEvent,
   type UiTreeChangedEvent,
   isAutomationEventName,
-} from './events.js';
+} from './events';
 
 export {
   MEDIA_COMMANDS,
@@ -97,4 +97,4 @@ export {
   type VolumeDirection,
   isAmbiguousMatch,
   isFragileMatch,
-} from './types.js';
+} from './types';

@@ -1,4 +1,4 @@
-import { type Screenshot, type UiTree } from './types.js';
+import { type Screenshot, type UiTree } from './types';
 
 /**
  * Events the native layer streams to JS.

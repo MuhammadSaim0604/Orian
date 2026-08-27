@@ -5,7 +5,7 @@ import {
   EXECUTION_PHASES,
   type ExecutionProgressEvent,
   isAutomationEventName,
-} from './events.js';
+} from './events';
 
 describe('automation events', () => {
   it('declares the three streamed events', () => {

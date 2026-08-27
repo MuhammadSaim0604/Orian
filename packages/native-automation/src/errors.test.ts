@@ -7,7 +7,7 @@ import {
   isAutomationError,
   isAutomationErrorCode,
   toAutomationError,
-} from './errors.js';
+} from './errors';
 
 describe('AutomationError', () => {
   it('carries the code and message', () => {
