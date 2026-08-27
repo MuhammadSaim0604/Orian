@@ -62,6 +62,9 @@ importers:
       '@mobile-automation/execution-recorder':
         specifier: workspace:*
         version: link:../../packages/execution-recorder
+      '@mobile-automation/native-automation':
+        specifier: workspace:*
+        version: link:../../packages/native-automation
       '@mobile-automation/screen-inspector':
         specifier: workspace:*
         version: link:../../packages/screen-inspector
@@ -213,6 +216,31 @@ importers:
       zod:
         specifier: 3.24.1
         version: 3.24.1
+
+  packages/native-automation:
+    dependencies:
+      '@mobile-automation/shared-types':
+        specifier: workspace:*
+        version: link:../shared-types
+      '@mobile-automation/tool-sdk':
+        specifier: workspace:*
+        version: link:../tool-sdk
+      '@mobile-automation/workflow-schema':
+        specifier: workspace:*
+        version: link:../workflow-schema
+      zod:
+        specifier: 3.24.1
+        version: 3.24.1
+    devDependencies:
+      '@types/react':
+        specifier: 18.3.18
+        version: 18.3.18
+      react:
+        specifier: 18.3.1
+        version: 18.3.1
+      react-native:
+        specifier: 0.76.6
+        version: 0.76.6(@babel/core@7.26.0)(@babel/preset-env@7.26.0(@babel/core@7.26.0))(@react-native-community/cli-server-api@15.0.1)(@types/react@18.3.18)(react@18.3.1)
 
   packages/node-sdk:
     dependencies:
@@ -6315,9 +6343,7 @@ snapshots:
     transitivePeerDependencies:
       - '@babel/core'
       - '@babel/preset-env'
-      - bufferutil
       - supports-color
-      - utf-8-validate
 
   '@react-native/normalize-colors@0.76.6': {}
 

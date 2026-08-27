@@ -22,3 +22,8 @@ include(":gestures")
 include(":screen")
 include(":overlays")
 include(":tools")
+
+// Phase 3: JSON conversion between the runtime's Kotlin types and the RN bridge.
+// Kept separate from :automation so the runtime stays free of wire-format concerns
+// and the conversion layer can be unit-tested on its own.
+include(":bridge")

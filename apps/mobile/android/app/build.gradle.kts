@@ -93,5 +93,10 @@ dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
 
+    // Phase 3: the Kotlin automation layer. `:bridge` exposes `:automation`
+    // transitively via `api`, which in turn exposes the five capability modules,
+    // so this single line brings in the whole native runtime.
+    implementation(project(":bridge"))
+
     testImplementation("junit:junit:4.13.2")
 }

@@ -22,6 +22,15 @@ object AccessibilityConnection {
 
     private val listeners = mutableListOf<(Boolean) -> Unit>()
 
+    /**
+     * Observers of screen changes.
+     *
+     * The bridge subscribes here rather than the service calling into it, because
+     * the accessibility module must not depend on the app layer. Kept separate from
+     * [listeners] because these fire far more often and for a different reason.
+     */
+    private val screenChangeListeners = mutableListOf<(String) -> Unit>()
+
     /** True when the user has enabled the service and it is connected. */
     val isConnected: Boolean
         get() = reader?.isAvailable == true
@@ -69,6 +78,28 @@ object AccessibilityConnection {
         reader = null
         actionPerformer = null
         synchronized(listeners) { listeners.clear() }
+        synchronized(screenChangeListeners) { screenChangeListeners.clear() }
+    }
+
+    /**
+     * Subscribes to screen changes.
+     *
+     * @param listener receives `window_changed` or `content_changed`. Called on the
+     *   service's event thread, so it must not block.
+     */
+    fun addScreenChangeListener(listener: (String) -> Unit) {
+        synchronized(screenChangeListeners) { screenChangeListeners.add(listener) }
+    }
+
+    fun removeScreenChangeListener(listener: (String) -> Unit) {
+        synchronized(screenChangeListeners) { screenChangeListeners.remove(listener) }
+    }
+
+    /** Called by the service on every relevant accessibility event. */
+    fun notifyScreenChanged(reason: String) {
+        val snapshot = synchronized(screenChangeListeners) { screenChangeListeners.toList() }
+        // A throwing listener must not break the service's event callback.
+        snapshot.forEach { listener -> runCatching { listener(reason) } }
     }
 
     private fun notifyListeners(connected: Boolean) {

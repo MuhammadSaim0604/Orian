@@ -136,5 +136,15 @@ export default tseslint.config(
     },
   },
 
+  // React Native Turbo Module codegen specs must default-export the module and
+  // are read by RN's codegen, not by our own imports, so the package rules on
+  // exports do not apply.
+  {
+    files: ['packages/native-automation/src/spec/*.ts'],
+    rules: {
+      'no-restricted-exports': 'off',
+    },
+  },
+
   prettier,
 );

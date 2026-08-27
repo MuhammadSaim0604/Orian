@@ -75,6 +75,15 @@ class UiAutomationAccessibilityService :
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             lastPackageName = event.packageName?.toString()
             lastActivityName = event.className?.toString()
+            AccessibilityConnection.notifyScreenChanged(REASON_WINDOW_CHANGED)
+            return
+        }
+
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+            // Notification only - no tree is read here. Subscribers decide whether
+            // they care, and the event bridge throttles; reading the hierarchy on
+            // every content change would be ruinous on an animated screen.
+            AccessibilityConnection.notifyScreenChanged(REASON_CONTENT_CHANGED)
         }
     }
 
@@ -229,6 +238,9 @@ class UiAutomationAccessibilityService :
 
     private companion object {
         const val TAG = "UiAutomationA11y"
+
+        const val REASON_WINDOW_CHANGED = "window_changed"
+        const val REASON_CONTENT_CHANGED = "content_changed"
 
         /**
          * Content-change events fire continuously on animated screens. Throttling

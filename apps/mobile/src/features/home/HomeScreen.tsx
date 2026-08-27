@@ -2,12 +2,13 @@ import { useTheme } from '@mobile-automation/ui';
 import { ScrollView, StatusBar, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { AutomationStatusPanel } from '../automation/AutomationStatusPanel';
+
 import { PhaseStatusCard } from './PhaseStatusCard';
 
 /**
- * Phase 1 placeholder screen. It exists to prove the scaffold works: shared
- * theme, NativeWind semantic classes, workspace package imports, and light/dark
- * support. It is replaced by the real workflow list in Phase 6.
+ * Phase 1 placeholder screen, extended in Phase 3 with a live view of the native
+ * bridge. It is replaced by the real workflow list in Phase 6.
  */
 export const HomeScreen = () => {
   const { theme, scheme } = useTheme();
@@ -42,14 +43,21 @@ export const HomeScreen = () => {
         />
         <PhaseStatusCard
           title="Phase 1 — Monorepo & tooling"
-          status="in-progress"
-          detail="pnpm workspace, Turborepo pipelines, 13 packages, this themed app shell, Android module stubs, and CI."
+          status="done"
+          detail="pnpm workspace, Turborepo pipelines, 14 packages, this themed app shell, and CI."
         />
         <PhaseStatusCard
           title="Phase 2 — Android automation core"
-          status="pending"
-          detail="Kotlin accessibility service, gesture engine, screen capture, overlays, and the device tool layer."
+          status="done"
+          detail="Kotlin accessibility service, selector resolver, gesture engine, screen capture, overlays, and the device tool layer."
         />
+        <PhaseStatusCard
+          title="Phase 3 — Native bridge"
+          status="in-progress"
+          detail="Turbo Module exposing the automation runtime to TypeScript, with typed errors and an event channel."
+        />
+
+        <AutomationStatusPanel />
 
         <View className="mt-2 rounded-lg border border-border bg-surface-muted p-4">
           <Text className="text-sm font-semibold text-text-primary">Active theme</Text>

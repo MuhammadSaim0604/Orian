@@ -15,6 +15,7 @@
   "dependencies": {
     "@mobile-automation/ai-agent": "workspace:*",
     "@mobile-automation/execution-recorder": "workspace:*",
+    "@mobile-automation/native-automation": "workspace:*",
     "@mobile-automation/screen-inspector": "workspace:*",
     "@mobile-automation/shared-types": "workspace:*",
     "@mobile-automation/ui": "workspace:*",

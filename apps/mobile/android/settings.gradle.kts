@@ -31,6 +31,26 @@ include(":app")
 // "Could not find com.facebook.react:react-native-gradle-plugin:".
 includeBuild("../node_modules/@react-native/gradle-plugin")
 
-// The Kotlin automation modules under /android are a separate Gradle build in
-// Phase 1 (they are linted and unit-tested on their own). They are wired into
-// this app when the Turbo Module bridge is built in Phase 3.
+// Phase 3: the Kotlin automation modules under /android become part of the app
+// build so the bridge can depend on them.
+//
+// Included by path rather than as a composite build (`includeBuild`), because a
+// composite build would need dependency substitution for every module and would
+// stop `gradle :accessibility:test` working from the /android directory. They
+// remain a standalone build there for lint and unit tests; this build simply
+// mounts the same directories.
+dependencyResolutionManagement {
+    versionCatalogs {
+        create("libs") {
+            from(files("../../../android/gradle/libs.versions.toml"))
+        }
+    }
+}
+
+val nativeModules =
+    listOf("accessibility", "gestures", "screen", "overlays", "tools", "automation", "bridge")
+
+for (module in nativeModules) {
+    include(":$module")
+    project(":$module").projectDir = file("../../../android/$module")
+}
