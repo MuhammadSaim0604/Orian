@@ -2,9 +2,9 @@
 
 Living record of what has been implemented, which phase is complete, and what remains. Updated after every phase (per `IMPORTANT_RULES.txt` rule 6).
 
-Authoritative plan: `Development_Plan/`. Phases execute strictly in order.
+Authoritative plan: `Development_Plan/`. Phase order was agreed with the user and **deviates from the plan's strict numeric sequence** for the remaining work - see `ORION.md`. The roadmap's own dependency graph permits it.
 
-Last updated: after Phase 3, with both CI workflows green on `main` (Android CI run `33067139054`, TypeScript CI run `33067139071`).
+Last updated: after Phases 4+5, with both CI workflows green on `main` (Android CI run `33095669422`, TypeScript CI run `33095669365`).
 
 ---
 
@@ -16,13 +16,15 @@ Last updated: after Phase 3, with both CI workflows green on `main` (Android CI 
 | 1     | Monorepo & tooling (pnpm/Turborepo, lint, tests, CI) | M1 Skeleton       | **Complete** |
 | 2     | Android automation core in Kotlin                    | M2 Device control | **Complete** |
 | 3     | Native bridge (Turbo Modules / JSI)                  | M2 Device control | **Complete** |
-| 4     | Node SDK & Zod workflow schema                       | M3 Workflows      | Not started  |
-| 5     | Workflow engine (DAG, registry, executor)            | M3 Workflows      | Not started  |
+| 4     | Node SDK & Zod workflow schema                       | M3 Workflows      | **Complete** |
+| 5     | Workflow engine (DAG, registry, executor)            | M3 Workflows      | **Complete** |
+| 7     | AI agent engine (loop, planner, memory)              | M4 Intelligence   | Next         |
 | 6     | Workflow builder UI (Skia canvas, Zustand)           | M3 Workflows      | Not started  |
-| 7     | AI agent engine (loop, planner, memory)              | M4 Intelligence   | Not started  |
-| 8     | Configure-with-AI floating overlay                   | M4 Intelligence   | Not started  |
 | 9     | Execution recorder & workflow generation             | M4 Intelligence   | Not started  |
+| 8     | Configure-with-AI floating overlay                   | M4 Intelligence   | Not started  |
 | 10    | MCP server, node distribution, polish                | M5 Platform       | Not started  |
+
+Rows below Phase 5 are listed in **execution order**, not numeric order.
 
 ---
 
@@ -391,17 +393,148 @@ Phase 3's definition of done also needs a physical device — calling `automatio
 
 ---
 
+## Phases 4 + 5 — Node SDK, Schema, Node Packages & Workflow Engine (complete)
+
+Built together deliberately. The executor contract and the node config schemas have no consumer until an engine exists, so building them apart would have meant guessing the shape and reworking it once the engine arrived.
+
+### `workflow-schema` — the workflow document
+
+Zod schemas for `Selector`, `Bounds`, `Variable`, `Node`, `Edge`, `Workflow`, and per-kind node config, with types derived by `z.infer` so each shape has exactly one definition. A workflow may have been hand-edited, model-generated, or written by an older version of the app, so nothing is trusted.
+
+Four decisions that constrain everything above:
+
+- **A selector with nothing to locate by is rejected.** `{ className: 'Button' }` narrows a search but cannot find anything. Left unvalidated it reports "element not found" at run time, which sends the user to inspect their screen rather than their workflow.
+- **`while` loops must declare `maxIterations`** — unbounded is not offered at all. A workflow drives someone's phone; a condition that never becomes false would keep tapping. The same reasoning caps every loop at 1000 and retries at 10.
+- **`onError: 'retry'` with `retry: 0` is refused.** It reads as "retry" and behaves as "stop" — the kind of silent contradiction that costs an afternoon of debugging.
+- **`ValueSource` is a discriminated union** (`literal` / `variable` / `nodeOutput`) rather than string interpolation everywhere. Interpolation is right for a message body, where surrounding words are literal; for a whole value, `{{ count }}` would arrive as the string `"12"` and break a numeric comparison.
+
+`WorkflowNode.config` is deliberately typed `unknown` here. Its real shape depends on `type`, and only the registry knows which schema applies — so the engine validates it against the resolved definition at load time.
+
+### `shared-types` and `node-sdk` — the node contract
+
+The plain cross-package types (`JsonValue`, `ExecutionPolicy`, `NodeKind`, `NodeState`) moved down into `shared-types`, which holds **no Zod**. That is what lets `node-sdk` sit at the bottom of the dependency graph: a third-party node package needs the shape of a variable value without being forced to depend on the schema package. A type-level parity test in `workflow-schema` fails to compile if the two ever diverge.
+
+| File            | Holds                                                          |
+| --------------- | -------------------------------------------------------------- |
+| `definition.ts` | `NodeDefinition`, `ExecutionContext`, `NodeResult`, `PortSpec` |
+| `registry.ts`   | registration, resolution, palette grouping                     |
+| `manifest.ts`   | the manifest schema, SDK version gate, reconciliation          |
+| `errors.ts`     | `NodeExecutionError`, `ExecutionCancelledError`                |
+| `authoring.ts`  | `defineNode`, `executeNode`, and the test helpers              |
+
+**A node cannot see the graph.** It receives its validated config, its inputs, the variable store, and an abstract `ToolInvoker` — nothing else. It returns which output handle to follow and whether to be re-entered, but the engine decides what actually runs. A loop repeats by returning `repeat: true` rather than holding a private counter, which would be wrong the moment an outer loop re-entered it or the workflow was paused and resumed.
+
+`ToolInvoker` being an interface rather than an import of the bridge is what keeps `android-nodes` pure TypeScript and testable off-device — and it is the single seam Phase 9's recorder will observe, since every device action passes through it.
+
+`NodeExecutionError` carries `retryable` and `needsUserAction` **separately**. A missing permission will never resolve itself no matter how many retries, but the user can grant it, so the UI should prompt rather than merely report failure.
+
+The registry **refuses a duplicate type** instead of overwriting it. Silent replacement would make a workflow's behaviour depend on package load order — a bug that only appears on someone else's device. `registerAll` is all-or-nothing for the same reason: a half-loaded package leaves some workflows working and others mysteriously broken.
+
+One typing note worth recording: `AnyNodeDefinition` is spelled structurally rather than as `NodeDefinition<never>`. `z.ZodType<never>` accepts nothing, so no real definition satisfies it and the registry would have needed a cast; describing the erased shape directly means every `NodeDefinition<T>` is assignable with none.
+
+### `core-nodes` — the seven generic nodes
+
+`trigger`, `input`, `condition`, `loop`, `setVariable`, `transform`, `action`. Nothing here knows about Android; `condition` and `action` can reach tools, but only by name through the SDK's invoker, so the package still builds and tests with no bridge present.
+
+- **`condition` returns a named branch handle**, not a boolean, so the engine follows the `true`/`false` edge without interpreting a result value — and the log shows the decision rather than requiring it to be inferred.
+- **`loop` is stateless.** Its counter lives in the variable store as `__loop_<nodeId>_index`, namespaced so nested loops cannot collide, and it is cleared on completion so re-entry from an outer loop starts fresh.
+- **`isTruthy` treats `[]` and `{}` as falsy**, unlike JavaScript. `[]` being truthy surprises everyone, and a "while items remain" loop written against a list would never terminate. Workflow authors are not necessarily JavaScript programmers.
+- **`input` validates rather than prompts.** The engine collects answers before the run and seeds the store, because a workflow that stalled mid-run with a dialog while sitting behind another app would be unusable.
+
+### `android-nodes` — twenty-one device nodes
+
+One thin wrapper per tool. Their config schemas live here rather than in `workflow-schema`, which stays device-agnostic (ADR 0008).
+
+`shared.ts` holds the plumbing they all need: refusing to run with no device, and translating a bridge rejection into a `NodeExecutionError` that **preserves the bridge's own** `retryable` and `needsUserAction` classification. The bridge already knows `element_not_found` usually means a loading screen; re-deriving that from message text would be guesswork.
+
+`openApp` declares `defaultExecutionPolicy: { retry: 2, onError: 'retry' }` — a cold start can lose the launch intent, and expecting every user to discover that and configure it by hand would make the product feel unreliable.
+
+This phase also added `openAppByName` and `findContacts` to the tool vocabulary: `DeviceTool`, `TOOL_NAMES`, and both parity tests, in one commit as the contract requires.
+
+### `workflow-engine`
+
+**Everything checkable is checked before the device is touched:** the JSON shape, that every node type is registered, that each config satisfies its own schema, that every edge names a handle that exists, that there is exactly one entry point, and that there is no cycle. Discovering on step nine that step ten refers to an unregistered node type leaves the user's phone half-way through a task, in a state nobody designed.
+
+Two design points worth carrying forward:
+
+- **Loop bodies flow forward to a dead end**, and the engine returns to the innermost loop via a return stack. The obvious alternative — an edge from the last body node back to the loop — makes the graph genuinely cyclic, and cycle detection could then no longer distinguish an intended loop from a workflow that will run forever. It also removes an edge the user would have to remember to draw, and nesting falls out of the stack for free.
+- **Execution is sequential.** Two nodes fanning out from one handle would both drive the same physical screen, and there is only one screen, so the second would act on whatever the first left behind. The loader permits the shape; the executor follows the first edge.
+
+Cycle detection uses an iterative DFS with an explicit stack — a generated workflow can be long, and blowing the JS stack while _validating_ would present as a crash rather than a validation error. It names the loop (`b -> c -> b`), which is the difference between a fixable report and a puzzle.
+
+`RunVariableStore` type-checks writes against declared types, turning "the workflow did something strange twenty steps later" into a report naming the node that wrote the wrong thing. Loop counters are hidden from the reported snapshot since they are bookkeeping, not user data.
+
+Ten structured event types on an `ExecutionEventBus` that survives a throwing listener — a UI bug in the log view must not abandon a half-finished workflow on someone's phone.
+
+### Third-party node discovery
+
+The n8n community-node model. **The manifest is read and validated before any of the package's code is loaded**, because a node package can tap on someone's banking app: one that lies about what it provides, targets an incompatible SDK, or is simply broken is rejected without ever executing.
+
+- Reconciliation runs **both ways**. A node declared but not exported is a broken package. A node exported but not declared is worse — it would execute without appearing in the manifest the user was shown.
+- Third-party types are namespaced `@scope/package:type`, so a community package cannot shadow the built-in `click` that workflows and the AI refer to by bare name.
+- One broken package does not stop the others; a user with five installed should not lose all of them because one is bad.
+
+`packages/node-sdk/AUTHORING.md` documents the whole contract for package authors, including why the manifest is checked first and why the SDK must be a peer dependency.
+
+**Verification**
+
+```
+pnpm turbo run typecheck lint test build     60/60 tasks across 15 packages
+                                             511 TypeScript tests
+pnpm format:check                            clean
+pnpm install --frozen-lockfile               clean
+cd android && gradle :automation:ktlintCheck testDebugUnitTest   green
+```
+
+The integration test runs the **real** node packages, registry, and engine against a fake device: a nine-step WhatsApp workflow (`openApp → findElement → click → typeText → waitForElement → click → typeText → click`) and a second workflow exercising a condition inside a loop. It is the test that would catch a node wired to a tool the runtime does not expose.
+
+CI run `33095669422` (Android) and `33095669365` (TypeScript) are green, including both APKs and instrumentation on API 26 and 34.
+
+**Files**
+
+```
+packages/workflow-schema/src/{selector,variable,node-config,workflow,validation}.ts  + parity test
+packages/shared-types/src/index.ts                    plain cross-package types
+packages/node-sdk/src/{definition,registry,manifest,errors,authoring,contracts}.ts
+packages/node-sdk/AUTHORING.md                        third-party author guide
+packages/core-nodes/src/{values,trigger,input,condition,loop,variable,transform,action}-node.ts
+packages/android-nodes/src/{config,shared,nodes}.ts   21 device nodes
+packages/workflow-engine/src/{loader,executor,events,variables,discovery}.ts
+android/automation/.../DeviceTool.kt                  + openAppByName, findContacts
+packages/tool-sdk/src/index.ts                        matching tool names
+```
+
+**Commit:** `dd25227`
+
+### Not yet verified on a real device
+
+Phase 5's definition of done requires `RN → Workflow JSON → Engine → Registry → Executor → Android Tool Runtime` executing end-to-end on hardware. Everything up to the tool call is proven against a fake; the last hop needs a phone, and it also depends on the outstanding Phase 2 and 3 device checks. See **Outstanding device verification** below.
+
+### Deliberately deferred
+
+- **No RN wiring yet.** The engine is headless by design; the app has no screen that runs a workflow until Phase 6's canvas. `runWorkflow` is the entry point it will call.
+- **`skipped` node events are defined but unused.** The type exists for Phase 6's debugger, which will want to grey out untaken branches; the executor currently just does not visit them.
+- **No workflow persistence.** SQLite storage belongs with Phase 6, where there is a UI to save from.
+
+---
+
 ## Remaining
 
-Phases 4–10, in order. Next is **Phase 4 — Node SDK & Zod workflow schema**: the base node classes, registry and executor contracts, and the Zod schemas for the workflow/node/edge JSON. It is pure TypeScript with no device dependency, so it can be built and tested without a phone.
+Order agreed with the user, deviating from the plan's numeric sequence (`ORION.md` records the rationale per phase). Next is **Phase 7 — AI agent engine**: the goal → plan → observe → choose tool → execute → replan loop, a Chat Completions client, memory, and structured tool-call output. It depends only on Phases 3 and 4, is pure TypeScript, and is testable offline with a mocked provider.
+
+**Build the recorder seam into Phase 7 as it is written** — emit an event per tool execution — so Phase 9 does not have to reopen the agent loop.
+
+Then: 6 (canvas), 9 (recorder + generator + review), 8 (overlay), 10 (MCP + publishing).
 
 Carry-forward notes:
 
-- **`AutomationRuntime` is the contract to preserve.** Method names match `DeviceTool.toolName`, `@mobile-automation/tool-sdk`, and now the TS wrapper, with parity tests on both sides. `android-nodes` should call the wrapper rather than inventing its own surface, or the AI will be able to name tools it cannot call.
+- **`AutomationRuntime` is the contract to preserve.** Method names match `DeviceTool.toolName`, `@mobile-automation/tool-sdk`, and the TS wrapper, with parity tests on both sides. The agent must name tools from `TOOL_NAMES`, or it will be able to name a tool it cannot call.
 - **The bridge is the only crossing.** `packages/native-automation` is where TypeScript meets Kotlin. Nothing else should import `NativeModules`, and nothing in `packages/` may import from `apps/mobile` (enforced by ESLint).
+- **`ToolInvoker` is the shared seam.** Both engines reach the device through the SDK's abstract invoker, which is what lets the workflow engine be tested against a fake — and it is where the Phase 9 recorder hooks in, since every device action passes through it.
+- **Node config schemas are the AI's output contract.** Phase 8's overlay must return config validated against the node's own `configSchema`, never prose. The schemas exist and are strict; use them rather than re-describing shapes in a prompt.
 - **The UI-tree JSON is versioned for a reason.** `UI_TREE_SCHEMA_VERSION` is at **2**; bump it whenever a key changes and update `UiNodeAttribute`, `UI_NODE_ATTRIBUTES`, and the `UiTree` type in `native-automation` together. `UiNodeAttributeParityTest` catches the Kotlin half; nothing yet catches a stale TS list, so keep them in the same commit.
-- **Vision needs a provider before it does anything.** `SelectorResolver` defaults to `UnavailableVisionMatcher`, so today the chain reports "vision was not attempted" and stops at coordinates. A real `VisionMatcher` needs a screenshot plus a model call, making it Phase 7 work; wiring one in is the only remaining step to complete the chain at runtime.
-- **Big payloads cross by reference.** Screenshots are file paths and the UI tree has a compact mode. Neither should become inline base64.
+- **Vision needs a provider before it does anything.** `SelectorResolver` defaults to `UnavailableVisionMatcher`, so today the chain reports "vision was not attempted" and stops at coordinates. A real `VisionMatcher` needs a screenshot plus a model call — that is Phase 7 work, and wiring one in is the only remaining step to complete the selector chain at runtime.
+- **Big payloads cross by reference.** Screenshots are file paths and the UI tree has a compact mode. Neither should become inline base64, and the compact tree is what belongs in a model context.
 - **Workspace packages the RN app imports must be source-entry.** Metro does not run Turborepo's build first, so a package pointing at `dist/` breaks the release bundle while the debug APK may still pass — a misleading signal that cost a CI round trip in Phase 3. Follow `packages/ui` and `packages/native-automation`: `private: true`, `main` at `./src/index.ts`, `build` emitting declarations only, and no `.js` extensions on relative imports.
 - **pnpm strictness.** When adding any React Native tool that Gradle or Metro invokes, declare it explicitly in `apps/mobile/package.json`; three Phase 1 CI failures were undeclared transitive dependencies.
 - **Theme values are duplicated by necessity.** `packages/ui/src/theme/semantic.ts` and `apps/mobile/src/global.css` must change together; a parity test is worth adding in Phase 6.
@@ -412,14 +545,15 @@ Carry-forward notes:
 
 ### Outstanding device verification
 
-Both M2 phases have a definition of done that needs physical hardware, and neither can be automated here — each requires a user to enable the accessibility service and grant screen capture, and no APK is built locally per ADR 0010.
+Three phases now have a definition of done that needs physical hardware, and none can be automated here — each requires a user to enable the accessibility service and grant screen capture, and no APK is built locally per ADR 0010.
 
 | Phase | What needs checking on a device                                                                       |
 | ----- | ----------------------------------------------------------------------------------------------------- |
 | 2     | the service reads a third-party app's tree; tap a resolved element, swipe, type, capture a screenshot |
 | 3     | `automation.getUiTree()` and `automation.click(selector)` from JS drive that same device              |
+| 5     | a workflow runs end to end: `RN → JSON → engine → registry → executor → tool runtime → device`        |
 
-**The `app-debug` artifact from run `33067139054` is the build to sideload for both.** Until then, device-dependent paths are covered only by emulator instrumentation and by unit tests of the logic around them.
+**The `app-debug` artifact from run `33095669422` is the build to sideload.** Phase 5's check additionally needs an RN entry point that runs a workflow, which arrives with Phase 6 — but phases 2 and 3 can be cleared now, and clearing them first is what stops a later failure being ambiguous between three unverified layers.
 
 ### Deliberately out of scope
 
@@ -434,4 +568,10 @@ _Phase 3:_
 
 - **Generated codegen bindings** — the interop layer already serves the module to `TurboModuleRegistry.get`, and TypeScript is fully typed by the spec.
 - **JSI hot paths** — no measured bottleneck yet, since large payloads already cross by reference.
-- **An emitter for `ExecutionProgressEvent`** — the channel exists; nothing produces progress until there is an engine to report from.
+- **An emitter for `ExecutionProgressEvent`** — the native channel exists; the workflow engine now emits its own events, and bridging the two is Phase 6 work.
+
+_Phases 4+5:_
+
+- **RN wiring** — the engine is headless by design; the app gains a screen that runs a workflow in Phase 6.
+- **Workflow persistence** — SQLite storage belongs with Phase 6, where there is a UI to save from.
+- **Parallel branches** — execution is sequential because there is only one screen to drive. The loader permits a fan-out shape; the executor follows the first edge.
