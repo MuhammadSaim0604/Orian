@@ -4,7 +4,7 @@ Living record of what has been implemented, which phase is complete, and what re
 
 Authoritative plan: `Development_Plan/`. Phases execute strictly in order.
 
-Last updated: after the Phase 2 plan-conformance audit, with both CI workflows green on `main` (Android CI run `33057095459`, TypeScript CI run `33057095353`).
+Last updated: after Phase 3, with both CI workflows green on `main` (Android CI run `33067139054`, TypeScript CI run `33067139071`).
 
 ---
 
@@ -15,7 +15,7 @@ Last updated: after the Phase 2 plan-conformance audit, with both CI workflows g
 | 0     | Foundation & decisions                               | M1 Skeleton       | **Complete** |
 | 1     | Monorepo & tooling (pnpm/Turborepo, lint, tests, CI) | M1 Skeleton       | **Complete** |
 | 2     | Android automation core in Kotlin                    | M2 Device control | **Complete** |
-| 3     | Native bridge (Turbo Modules / JSI)                  | M2 Device control | Not started  |
+| 3     | Native bridge (Turbo Modules / JSI)                  | M2 Device control | **Complete** |
 | 4     | Node SDK & Zod workflow schema                       | M3 Workflows      | Not started  |
 | 5     | Workflow engine (DAG, registry, executor)            | M3 Workflows      | Not started  |
 | 6     | Workflow builder UI (Skia canvas, Zustand)           | M3 Workflows      | Not started  |
@@ -297,32 +297,141 @@ CI run `33057095459` (Android) and `33057095353` (TypeScript) green: ktlint, Kot
 
 ---
 
+## Phase 3 — Native Bridge (complete)
+
+The language boundary from ADR 0001 becomes real: one typed, promise-based crossing between the React Native product layer and the Kotlin OS layer. Nothing above this reaches for `NativeModules` directly.
+
+### Two layers, deliberately
+
+React Native's codegen understands a narrow type vocabulary — primitives, arrays of primitives, and flat objects. No unions, no discriminated results. Writing the whole API at that level would push those constraints onto every caller.
+
+So the spec stays plain (structured arguments cross as JSON strings) and a wrapper provides the API the product actually uses: real types, `Promise<T>`, and no JSON handling anywhere else. The spec file reads primitively on purpose; it is a wire format, not the API.
+
+### `packages/native-automation`
+
+| File                       | Holds                                                                      |
+| -------------------------- | -------------------------------------------------------------------------- |
+| `spec/NativeAutomation.ts` | the codegen spec: 22 tools, capture consent, foreground service, streaming |
+| `types.ts`                 | `Selector`, `ResolvedElement`, `UiTree`, `Screenshot`, mirroring Kotlin    |
+| `errors.ts`                | `AutomationError` plus the mapping from Kotlin error codes                 |
+| `events.ts`                | the three streamed events and a typed event map                            |
+| `automation.ts`            | the wrapper callers use; every method rejects with a typed error           |
+
+`ResolvedElement` carries `strategy` as part of the contract rather than as debug output: the recorder uses it to judge how durable a generated step is, and `isFragileMatch` lets the UI warn when automation has degraded to coordinates or vision.
+
+### Errors survive the crossing
+
+Kotlin returns failures as data; a JS promise can only reject with an error. The mapping preserves the two flags callers branch on, so **TypeScript makes the same retry decision Kotlin does** — `element_not_found` is retryable because the screen is usually still loading, while `secure_screen` is neither retryable nor fixable by prompting.
+
+React Native flattens a rejection into an `Error` whose `code` holds the native code, so `toAutomationError` recovers it from the _shape_ rather than the type, and anything unrecognised becomes `unexpected`. A caller never faces an untyped failure. Two codes are the bridge's own: `bridge_unavailable` when the module is missing from the build, and `bridge_protocol` when the native side returns unreadable JSON.
+
+`AutomationError` restores its prototype chain in the constructor — subclassing a built-in loses it under transpilation, and without that fix `catch` blocks silently miss.
+
+### `android/bridge` (new Gradle module)
+
+Kept separate from `:automation` so the runtime stays free of wire-format concerns.
+
+- `AutomationBridge` takes **only** an `AutomationRuntime` — no `ReactApplicationContext`, no `Promise`. That is what makes argument parsing, result serialization, and error mapping testable off-device; the RN module is then a thin adapter that calls the bridge and settles a promise.
+- `JsonReader` is hand-rolled because `org.json` returns default values under Android JVM unit tests, so using it would leave the conversion layer unverifiable locally. Adding kotlinx-serialization for one wire format would be disproportionate.
+- `BridgeResults` delegates the UI tree to the existing versioned serializer rather than inventing a second format that could drift from the TypeScript contract.
+- `BridgeArguments` validates at the boundary: an empty selector is rejected **by name here** rather than surfacing as `element_not_found` several layers down.
+
+### `apps/mobile`
+
+The `android/` modules are now mounted into the app build by `projectDir` rather than as a composite build — substitution for seven modules would be noise, and `gradle :accessibility:test` keeps working standalone from `android/`. The app depends only on `:bridge`, which re-exposes the rest via `api`.
+
+`AutomationRuntimeProvider` is the composition root. It builds the runtime **per call** rather than caching it, because the accessibility service is created and destroyed by the system whenever the user toggles it; a cached reference would fail in a way that looks like a device fault rather than a revoked permission. It also holds the MediaProjection session, which must survive a JS reload.
+
+`AutomationEventBridge` streams UI-tree changes and status changes. Streaming is **off by default**: content-change events fire continuously on animated screens, and emitting a full tree each time would flood the bridge for no benefit.
+
+### Closes the Phase 2 gap: MediaProjection had no caller
+
+The capture pipeline existed but nothing could grant it a session, because launching the consent dialog needs an Activity. `useScreenCaptureConsent` now drives it end to end, and **declining resolves as `declined` rather than an error** — it is a legitimate choice, so the UI explains the consequence instead of nagging. `AutomationStatusPanel` shows all three capabilities with a per-capability hint, because a user who does not know the accessibility service is off cannot turn it on.
+
+### A CI failure worth recording
+
+The first push (`07a74c4`) failed the **release** APK only: Metro resolved `@mobile-automation/native-automation` but could not find its `main`, because the package pointed at `dist/index.js` and the RN bundle step does not run Turborepo's build first. The debug APK passed because it happened to be built before the bundle step needed it — a genuinely misleading signal.
+
+Fixed in `20795d4` the way `packages/ui` already handles it: a private, source-entry package consumed directly by Metro, which transpiles the TypeScript itself. `main` is `./src/index.ts`, `build` emits declarations only, and the relative imports drop their `.js` extensions since Metro's resolver does not expect them.
+
+**Verification**
+
+```
+cd android && gradle ktlintCheck                     clean, 7 modules
+cd android && gradle testDebugUnitTest               459 tests, 0 failures
+cd android && gradle assembleDebugAndroidTest        compiles
+cd apps/mobile/android && gradle projects            all 7 native modules listed
+react-native bundle --dev false                      succeeds (the step CI failed on)
+pnpm format:check                                    clean
+pnpm turbo run typecheck lint test build             60/60 tasks
+pnpm install --frozen-lockfile                       clean
+```
+
+CI run `33067139054` (Android) and `33067139071` (TypeScript) are green: ktlint, 459 Kotlin unit tests, instrumentation on API 26 and 34, and both APKs.
+
+**Files**
+
+```
+packages/native-automation/**                          spec, types, errors, events, wrapper, 39 tests
+android/bridge/**                                      JsonReader, BridgeArguments/Results/Errors, AutomationBridge, 78 tests
+android/settings.gradle.kts                            :bridge added
+android/accessibility/.../AccessibilityConnection.kt    screen-change listeners
+android/accessibility/.../UiAutomationAccessibilityService.kt  emits change notifications
+apps/mobile/android/settings.gradle.kts                mounts the 7 native modules
+apps/mobile/android/app/build.gradle.kts               depends on :bridge
+apps/mobile/android/app/src/main/kotlin/.../bridge/**  AutomationModule, Package, RuntimeProvider, EventBridge
+apps/mobile/android/app/src/main/kotlin/.../MainApplication.kt  registers AutomationPackage
+apps/mobile/src/features/automation/**                 status hook, consent hook, status panel
+eslint.config.mjs                                      codegen spec may default-export
+```
+
+**Commits:** `07a74c4` (bridge), `20795d4` (Metro resolution fix)
+
+Phase 3's definition of done also needs a physical device — calling `automation.getUiTree()` and `automation.click(selector)` from JS and watching a real phone respond. That and the outstanding Phase 2 checks are listed together under **Outstanding device verification** below, along with what Phase 3 deliberately defers.
+
+---
+
 ## Remaining
 
-Phases 3–10, in order. Next is **Phase 3 — the native bridge**: a Turbo Module exposing `AutomationRuntime` to TypeScript with a codegen spec, an event emitter for streamed UI-tree and progress data, and Kotlin errors mapped onto the typed TS error union. The `android/` modules become a dependency of the app's Gradle build at that point, which is also when the accessibility service and foreground service declarations reach the app manifest by merge.
+Phases 4–10, in order. Next is **Phase 4 — Node SDK & Zod workflow schema**: the base node classes, registry and executor contracts, and the Zod schemas for the workflow/node/edge JSON. It is pure TypeScript with no device dependency, so it can be built and tested without a phone.
 
 Carry-forward notes:
 
-- **`AutomationRuntime` is the contract to preserve.** Method names match `DeviceTool.toolName` and `@mobile-automation/tool-sdk`, and parity tests on both sides now enforce that. The bridge should expose the runtime as-is rather than inventing a parallel surface, or the AI will be able to name tools it cannot call.
-- **The UI-tree JSON is versioned for a reason.** `UI_TREE_SCHEMA_VERSION` is at **2**; bump it whenever a key changes, update `UiNodeAttribute` and `UI_NODE_ATTRIBUTES` together, and let the TypeScript side reject a version it does not understand rather than silently misreading a payload. `UiNodeAttributeParityTest` catches the Kotlin half; nothing yet catches a stale TS list, so keep them in the same commit.
-- **Vision needs a provider before it does anything.** `SelectorResolver` defaults to `UnavailableVisionMatcher`, so today the chain reports "vision was not attempted" and stops at coordinates. A real `VisionMatcher` needs a screenshot plus a model call, which makes it Phase 7 work; wiring one in is the only step needed to complete the chain at runtime.
-- **Big payloads cross by reference.** Screenshots are passed as file paths and the UI tree has a compact serialization mode. Neither should become inline base64 on the bridge.
-- **`MediaProjectionScreenCapture.attachProjection` still needs a caller.** The consent flow — launching the system dialog and handing the resulting token over — is UI work and belongs with the RN layer in Phase 3.
+- **`AutomationRuntime` is the contract to preserve.** Method names match `DeviceTool.toolName`, `@mobile-automation/tool-sdk`, and now the TS wrapper, with parity tests on both sides. `android-nodes` should call the wrapper rather than inventing its own surface, or the AI will be able to name tools it cannot call.
+- **The bridge is the only crossing.** `packages/native-automation` is where TypeScript meets Kotlin. Nothing else should import `NativeModules`, and nothing in `packages/` may import from `apps/mobile` (enforced by ESLint).
+- **The UI-tree JSON is versioned for a reason.** `UI_TREE_SCHEMA_VERSION` is at **2**; bump it whenever a key changes and update `UiNodeAttribute`, `UI_NODE_ATTRIBUTES`, and the `UiTree` type in `native-automation` together. `UiNodeAttributeParityTest` catches the Kotlin half; nothing yet catches a stale TS list, so keep them in the same commit.
+- **Vision needs a provider before it does anything.** `SelectorResolver` defaults to `UnavailableVisionMatcher`, so today the chain reports "vision was not attempted" and stops at coordinates. A real `VisionMatcher` needs a screenshot plus a model call, making it Phase 7 work; wiring one in is the only remaining step to complete the chain at runtime.
+- **Big payloads cross by reference.** Screenshots are file paths and the UI tree has a compact mode. Neither should become inline base64.
+- **Workspace packages the RN app imports must be source-entry.** Metro does not run Turborepo's build first, so a package pointing at `dist/` breaks the release bundle while the debug APK may still pass — a misleading signal that cost a CI round trip in Phase 3. Follow `packages/ui` and `packages/native-automation`: `private: true`, `main` at `./src/index.ts`, `build` emitting declarations only, and no `.js` extensions on relative imports.
+- **pnpm strictness.** When adding any React Native tool that Gradle or Metro invokes, declare it explicitly in `apps/mobile/package.json`; three Phase 1 CI failures were undeclared transitive dependencies.
+- **Theme values are duplicated by necessity.** `packages/ui/src/theme/semantic.ts` and `apps/mobile/src/global.css` must change together; a parity test is worth adding in Phase 6.
 - **`isEntirelyBlack` samples a 16×16 grid.** If a real app is ever misreported as secure, that is the tuning knob.
 - Local Gradle runs need `ANDROID_HOME` set (`%LOCALAPPDATA%\Android\Sdk` on this machine).
-- Release signing secrets are still unset, so the release APK remains debug-signed: it verifies but is not distributable.
-- **pnpm strictness.** When adding any React Native tool that Gradle or Metro invokes, declare it explicitly in `apps/mobile/package.json`; three Phase 1 CI failures were undeclared transitive dependencies.
-- **Theme values are duplicated by necessity.** `packages/ui/src/theme/semantic.ts` and `apps/mobile/src/global.css` must be changed together; a parity test is worth adding in Phase 6.
 - The Gradle wrapper JAR is deliberately not committed; CI provisions Gradle 8.11.1 via `gradle/actions/setup-gradle`.
+- Release signing secrets are still unset, so the release APK remains debug-signed: it verifies but is not distributable.
 
-### Not yet verified on a real device
+### Outstanding device verification
 
-Phase 2's definition of done requires a physical run: the service reading a third-party app's tree, tapping a resolved element, swiping, typing, and capturing a screenshot. That cannot be automated here — it needs a user to enable the accessibility service and grant screen capture — and no APK is built locally per ADR 0010. **The CI artifacts from run `33057095459` are the build to sideload for that check.** Until it is done, the device-dependent paths are verified only by instrumentation on emulators.
+Both M2 phases have a definition of done that needs physical hardware, and neither can be automated here — each requires a user to enable the accessibility service and grant screen capture, and no APK is built locally per ADR 0010.
 
-### Deliberately out of scope in Phase 2
+| Phase | What needs checking on a device                                                                       |
+| ----- | ----------------------------------------------------------------------------------------------------- |
+| 2     | the service reads a third-party app's tree; tap a resolved element, swipe, type, capture a screenshot |
+| 3     | `automation.getUiTree()` and `automation.click(selector)` from JS drive that same device              |
 
-Recorded so these read as decisions rather than oversights:
+**The `app-debug` artifact from run `33067139054` is the build to sideload for both.** Until then, device-dependent paths are covered only by emulator instrumentation and by unit tests of the logic around them.
+
+### Deliberately out of scope
+
+Recorded so these read as decisions rather than oversights.
+
+_Phase 2:_
 
 - **Reading current media state** ("what is playing") and **media file access** — both need permissions the Phase 2 table does not authorise. The `media` tool is playback control only.
-- **A working vision matcher** — the seam exists and the chain is complete by construction, but no provider is wired in until there is a model client.
 - **Absolute volume** — `adjustVolume` nudges by one step, since setting a level outright needs `MODIFY_AUDIO_SETTINGS` and overrides the user's choice.
+
+_Phase 3:_
+
+- **Generated codegen bindings** — the interop layer already serves the module to `TurboModuleRegistry.get`, and TypeScript is fully typed by the spec.
+- **JSI hot paths** — no measured bottleneck yet, since large payloads already cross by reference.
+- **An emitter for `ExecutionProgressEvent`** — the channel exists; nothing produces progress until there is an engine to report from.
