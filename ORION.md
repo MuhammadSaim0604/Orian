@@ -19,19 +19,24 @@ Environment is Windows; the user works in PowerShell/cmd. Git remote: `https://g
 
 ## Current repository state
 
-The repo is **plan-only** — there is no source code yet. Root contains `.gitignore`, `IMPORTANT_RULES.txt`, `ORION.md`, `Development_Plan/`, `plan_in_user_words/`, `.orion/`. `Development_Plan/` holds the root docs, `architecture/`, and `phases/`. Phase 0 (decisions) is captured by the plan docs; **Phase 1 (monorepo scaffold, tooling, CI) has not been started**, so none of the commands below exist yet. Create them as part of Phase 1, then treat this section as stale and update it.
+Phases 0-3 are **complete** and CI is green on `main`. The repo holds a working pnpm + Turborepo monorepo (14 packages), the RN app shell, seven Kotlin Gradle modules under `android/`, and a typed native bridge joining them. `tracking.md` is the living record - read it first to see exactly what exists and what was deliberately deferred.
 
-## Commands (target state, per Phase 1)
+The commands below are real and current.
 
-TypeScript side is pnpm + Turborepo from the repo root:
+## Commands
+
+TypeScript side is pnpm + Turborepo from the repo root. **`pnpm` is not on this machine's PATH** - prepend the shim directory first, or use `corepack pnpm`:
 
 ```powershell
+set "PATH=%USERPROFILE%\.local\bin;%PATH%"    # cmd; Turborepo needs a real pnpm binary on PATH
+
 pnpm install
 pnpm turbo run build          # respects ^build dependency ordering
 pnpm turbo run lint
 pnpm turbo run test
 pnpm turbo run typecheck
 pnpm turbo run test --filter=@mobile-automation/workflow-engine   # single package
+pnpm format:check
 ```
 
 Single test file / single test (Vitest for libraries, Jest for the RN app):
@@ -42,12 +47,16 @@ pnpm --filter <package> vitest run -t "resolves selector by resourceId"
 pnpm --filter mobile jest path/to/File.test.tsx -t "renders"
 ```
 
-Kotlin side is Gradle, **CI only** — never run the assemble tasks locally:
+Kotlin side is Gradle. Unit tests and lint run locally; **assemble tasks never do** (ADR 0010). Local runs need `ANDROID_HOME`, and there is no committed wrapper JAR, so use the `gradle` on PATH:
 
 ```powershell
-./gradlew ktlintCheck
-./gradlew :android:accessibility:testDebugUnitTest    # JUnit, one module
-./gradlew connectedDebugAndroidTest                   # instrumentation, CI/device
+cd android
+set "ANDROID_HOME=%LOCALAPPDATA%\Android\Sdk"
+gradle ktlintCheck
+gradle ktlintFormat                        # auto-fix layout rather than editing by hand
+gradle testDebugUnitTest                   # all modules
+gradle :accessibility:testDebugUnitTest    # one module
+gradle assembleDebugAndroidTest            # compiles instrumentation tests without running them
 ```
 
 CI verification loop after pushing:
@@ -83,37 +92,58 @@ Full detail lives in `Development_Plan/architecture/`. The essentials that span 
 `shared-types` and `node-sdk` sit at the bottom; nothing may depend upward toward `apps/mobile`.
 
 ```
-apps/mobile → ui, workflow-engine, ai-agent, execution-recorder, screen-inspector → android/* (native)
+apps/mobile → ui, workflow-engine, ai-agent, execution-recorder, screen-inspector, native-automation
+native-automation → android/bridge → android/automation → the five capability modules
 workflow-engine → node-sdk, workflow-schema, shared-types
 core-nodes / android-nodes → node-sdk, tool-sdk, shared-types
+android-nodes (runtime) → native-automation
 ai-agent → prompt-engine, tool-sdk, shared-types
 mcp-server → tool-sdk, shared-types
 ```
 
+`packages/native-automation` is the **only** place TypeScript touches the native layer. Nothing else may import `NativeModules`; ESLint enforces the no-upward-import rule.
+
+### Two contracts that are duplicated on purpose
+
+Both are cross-language, so a parity test on each side restates the other's list. Changing one side alone fails the build — that is the point.
+
+- **Tool names.** `DeviceTool` (`android/automation`) and `TOOL_NAMES` (`packages/tool-sdk`). If they drift, the AI can name a tool it cannot call.
+- **UI-tree keys.** `UiNodeAttribute`/`UiTreeAttribute` (`android/accessibility`) and `UI_NODE_ATTRIBUTES`/`UI_TREE_ATTRIBUTES` (`packages/screen-inspector`). Bump `UI_TREE_SCHEMA_VERSION` (currently 2) on any key change. A Kotlin test catches the Kotlin half; nothing catches a stale TS list, so edit both in one commit.
+
+### Traps that have already cost time
+
+- **pnpm's strict layout breaks RN tooling.** Anything Gradle or Metro invokes must be declared explicitly in `apps/mobile/package.json` — the RN gradle-plugin, codegen, community CLI, and the babel JSX transform all had to be added after CI failures.
+- **Workspace packages the app imports must be source-entry.** Metro does not run Turborepo's build first, so a package pointing at `dist/` breaks the release bundle **while the debug APK still passes** — a misleading green. Follow `packages/ui` and `packages/native-automation`: `private: true`, `main` at `./src/index.ts`, `build` emitting declarations only, and no `.js` extensions on relative imports.
+- **`org.json` is stubbed in Android JVM unit tests**, returning default values. Kotlin code that must be unit-testable off-device cannot use it; `android/bridge` and the UI-tree serializer hand-roll their JSON for this reason.
+
 ## Phase execution
 
-Execute `Development_Plan/phases/` strictly in order; each file has goals, deliverables, and a definition of done. Do not skip ahead.
+Each file in `Development_Plan/phases/` has goals, deliverables, and a definition of done. Read the phase file before starting it, and honour its definition of done rather than declaring the phase finished when the code compiles.
 
-| Phase | Scope | Milestone |
-|-------|-------|-----------|
-| 0 | Foundation & decisions | M1 Skeleton |
-| 1 | Monorepo & tooling (pnpm/Turborepo, lint, tests, CI) | M1 |
-| 2 | Android automation core in Kotlin — hardest layer | M2 Device control |
-| 3 | Native bridge (Turbo Modules / JSI) | M2 |
-| 4 | Node SDK & Zod workflow schema | M3 Workflows |
-| 5 | Workflow engine (DAG, registry, executor) | M3 |
-| 6 | Workflow builder UI (Skia canvas, Zustand) | M3 |
-| 7 | AI agent engine (loop, planner, memory) | M4 Intelligence |
-| 8 | Configure-with-AI floating overlay | M4 |
-| 9 | Execution recorder & workflow generation | M4 |
-| 10 | MCP server, node distribution, polish | M5 Platform |
+**Phases 0-3 are complete.** The remaining order below was agreed with the user and **deviates from the plan's strict numeric sequence**; the dependency graph in `01_Roadmap.md` permits it, since Phase 7 needs only 3 and 4, not 5 or 6.
 
-Cross-cutting from Phase 1 onward: testing, centralized theming, prompt engineering (7–9), and permission gating.
+| Order | Phase | Scope | Why here |
+| --- | --- | --- | --- |
+| 1 | **4 + 5 together** | Node SDK & Zod schema, then the workflow engine | The executor contract and node config schemas have no consumer until the engine exists; building them apart means guessing the shape and reworking it |
+| 2 | **7** | AI agent engine | Needs only 3 and 4. Pure TS, testable offline with a mocked provider. **Build the recorder seam in now** - emit an event per tool execution - so Phase 9 does not have to reopen the loop |
+| 3 | **6** | Workflow builder UI (Skia canvas, Zustand) | The largest, most iterative phase; kept alone. With 7 already done it can wire the real "Create by AI" entry point instead of a stub |
+| 4 | **9** | Execution recorder, generator, review UI | The review screen realistically needs 6's canvas, so this follows it |
+| 5 | **8** | Configure-with-AI overlay | The hardest integration: needs 2's overlay, 6's node editor, and 7's agent all working |
+| 6 | **10** | MCP server, npm publishing | MCP is a small self-contained TS unit |
+
+**Hardening is continuous, not a phase.** Permission UX, error recovery, foreground-service reliability, and performance belong to whichever phase introduces the surface. Phase 10 keeps only MCP and distribution.
+
+Milestones for reference: M1 = phases 0-1, M2 = 2-3, M3 = 4-6, M4 = 7-9, M5 = 10.
+
+Cross-cutting from Phase 1 onward: testing, centralized theming, prompt engineering (7-9), and permission gating.
+
+### Outstanding device verification
+
+Phases 2 and 3 both have definition-of-done items that need physical hardware and are **not yet done** - they are covered only by emulator instrumentation. Phase 5's definition of done also requires on-device execution. Do not let three unverified layers stack up: see the table in `tracking.md` and sideload the latest `app-debug` CI artifact to clear phases 2 and 3.
 
 ## Skills
 
 The subsystem playbooks are **already installed in your AI agent** — they are not files in this repository. Load the matching skill before starting that subsystem: `monorepo-master` (phases 1, 4, 10), `theme-and-styling-nativewind` (1, 6, 8), `testing-quality` (all), `kotlin-native-module` (2, 3, 8), `node-sdk-author` (4, 5, 9), `rn-ui-builder-zustand` (6, 8), `ai-agent-builder` (7, 8, 9), `prompt-engine` (7, 8, 9), `mcp-server` (10). Each phase file also lists its skills under "Skills to load".
-
 ## Sensitive surface
 
 `AccessibilityService`, `SYSTEM_ALERT_WINDOW`, foreground service, MediaProjection screen capture, and contacts are high-trust permissions — request each with explicit rationale and user opt-in, and gate per phase. AI provider keys go in Android secure storage, never plain SQLite, never logged. Accessibility-driven automation has Play Store policy implications; sideload-vs-Play distribution is an open question flagged in Phase 0.
