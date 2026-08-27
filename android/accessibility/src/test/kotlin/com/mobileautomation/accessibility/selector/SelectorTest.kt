@@ -122,4 +122,19 @@ class SelectorTest {
         assertEquals("Attach", Selector.byContentDescription("Attach").contentDescription)
         assertEquals(Point(5, 6), Selector.byCoordinates(5, 6).coordinates)
     }
+
+    @Test
+    fun `onScreen captures the package and activity a selector belongs to`() {
+        val selector = Selector.onScreen("com.whatsapp", "com.whatsapp.Conversation")
+
+        assertEquals("com.whatsapp", selector.packageName)
+        assertEquals("com.whatsapp.Conversation", selector.activityName)
+    }
+
+    @Test
+    fun `a screen scope alone does not locate anything`() {
+        // Package and activity narrow a search; they cannot identify an element,
+        // so a selector carrying only them is still empty.
+        assertTrue(Selector.onScreen("com.whatsapp", "com.whatsapp.Conversation").isEmpty)
+    }
 }

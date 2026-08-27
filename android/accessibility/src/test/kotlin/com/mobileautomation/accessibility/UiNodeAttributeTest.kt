@@ -24,6 +24,8 @@ class UiNodeAttributeTest {
 
     @Test
     fun `declares a schema version so the bridge can reject stale payloads`() {
-        assertEquals(1, UI_TREE_SCHEMA_VERSION)
+        // Version 2 widened the documented attribute set to every key the
+        // serializer actually emits; version 1 declared only eight of them.
+        assertEquals(2, UI_TREE_SCHEMA_VERSION)
     }
 }

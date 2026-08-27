@@ -15,7 +15,9 @@ import com.mobileautomation.gestures.SwipeDirection
 import com.mobileautomation.screen.CaptureResult
 import com.mobileautomation.screen.Screenshot
 import com.mobileautomation.tools.IntentRequest
+import com.mobileautomation.tools.MediaCommand
 import com.mobileautomation.tools.SensitiveCapability
+import com.mobileautomation.tools.VolumeDirection
 import com.mobileautomation.tools.model.AlarmRequest
 import com.mobileautomation.tools.model.Contact
 import com.mobileautomation.tools.model.InstalledApp
@@ -110,6 +112,7 @@ class DefaultAutomationRuntimeTest {
         val notifications: FakeNotificationTool,
         val intents: FakeIntentTool,
         val settings: FakeSystemSettingsReader,
+        val media: FakeMediaTool,
         val globalActions: RecordingGlobalActionPerformer,
         val runtime: DefaultAutomationRuntime,
     )
@@ -135,6 +138,7 @@ class DefaultAutomationRuntimeTest {
         val notifications = FakeNotificationTool()
         val intents = FakeIntentTool()
         val settingsReader = FakeSystemSettingsReader(settings)
+        val media = FakeMediaTool()
         val globalActions = RecordingGlobalActionPerformer(globalActionsSucceed)
 
         val runtime =
@@ -155,12 +159,13 @@ class DefaultAutomationRuntimeTest {
                 notificationTool = notifications,
                 intentTool = intents,
                 systemSettingsReader = settingsReader,
+                mediaTool = media,
                 globalActionPerformer = globalActions,
             )
 
         return Harness(
             reader, performer, dispatcher, capture, appManager, contactsReader, clipboard,
-            alarms, notifications, intents, settingsReader, globalActions, runtime,
+            alarms, notifications, intents, settingsReader, media, globalActions, runtime,
         )
     }
 
@@ -754,8 +759,54 @@ class DefaultAutomationRuntimeTest {
             assertNull(result.valueOrNull)
         }
 
-    // --- the full driving scenario ----------------------------------------
+    // --- media ------------------------------------------------------------
 
+    @Test
+    fun `controlMedia sends the command to whatever holds the session`() =
+        runTest {
+            val harness = harness()
+
+            val result = harness.runtime.controlMedia(MediaCommand.PLAY_PAUSE)
+
+            assertTrue(result.isSuccess)
+            assertEquals(listOf(MediaCommand.PLAY_PAUSE), harness.media.commands)
+        }
+
+    @Test
+    fun `controlMedia reports when nothing is playing`() =
+        runTest {
+            // A play/pause with no media session silently does nothing, so reporting
+            // success would tell a workflow it had paused music it never touched.
+            val harness = harness()
+            harness.media.controlSucceeds = false
+
+            val result = harness.runtime.controlMedia(MediaCommand.PAUSE)
+
+            assertEquals("tool_failed", result.errorOrNull?.code)
+        }
+
+    @Test
+    fun `adjustVolume nudges in the requested direction`() =
+        runTest {
+            val harness = harness()
+
+            assertTrue(harness.runtime.adjustVolume(VolumeDirection.DOWN).isSuccess)
+            assertEquals(listOf(VolumeDirection.DOWN), harness.media.volumeChanges)
+        }
+
+    @Test
+    fun `adjustVolume reports a rejected change`() =
+        runTest {
+            val harness = harness()
+            harness.media.volumeSucceeds = false
+
+            assertEquals(
+                "tool_failed",
+                harness.runtime.adjustVolume(VolumeDirection.UP).errorOrNull?.code,
+            )
+        }
+
+    // --- the full driving scenario ----------------------------------------
     @Test
     fun `sends a message end to end - open app, type, tap send`() =
         runTest {

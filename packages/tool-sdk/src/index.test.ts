@@ -18,6 +18,43 @@ describe('tool-sdk', () => {
     expect(TOOL_NAMES).toContain('createAlarm');
   });
 
+  it('declares the media playback tools', () => {
+    // Control only: reading what is playing needs notification-listener access,
+    // which the permission model does not authorise.
+    expect(TOOL_NAMES).toContain('controlMedia');
+    expect(TOOL_NAMES).toContain('adjustVolume');
+  });
+
+  it('matches the Kotlin DeviceTool vocabulary', () => {
+    // Mirrors DeviceTool in android/automation, where a parity test restates this
+    // list. Both sides must change together or the AI can name a tool it cannot
+    // call (ADR 0008).
+    expect(TOOL_NAMES).toEqual([
+      'click',
+      'longPress',
+      'swipe',
+      'typeText',
+      'findElement',
+      'waitForElement',
+      'getUiTree',
+      'takeScreenshot',
+      'pressBack',
+      'pressHome',
+      'openApp',
+      'listApps',
+      'getCurrentScreen',
+      'getContacts',
+      'createAlarm',
+      'readClipboard',
+      'writeClipboard',
+      'sendNotification',
+      'launchIntent',
+      'getSystemSetting',
+      'controlMedia',
+      'adjustVolume',
+    ]);
+  });
+
   it('has no duplicate tool names', () => {
     expect(new Set(TOOL_NAMES).size).toBe(TOOL_NAMES.length);
   });

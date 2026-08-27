@@ -30,16 +30,23 @@ class SelectorResolver(
      * neighbouring row, loose enough to survive small layout shifts.
      */
     private val positionTolerancePx: Int = DEFAULT_POSITION_TOLERANCE_PX,
+    /**
+     * The seventh and final strategy. Defaults to unavailable, so a caller that
+     * has not configured vision gets the structural chain and an honest report
+     * that vision was not attempted.
+     */
+    private val visionMatcher: VisionMatcher = UnavailableVisionMatcher,
 ) {
     fun resolve(
         tree: UiTree,
         selector: Selector,
-    ): ResolutionResult = resolve(tree.root, selector, tree.packageName)
+    ): ResolutionResult = resolve(tree.root, selector, tree.packageName, tree.activityName)
 
     fun resolve(
         root: UiNode,
         selector: Selector,
         treePackageName: String? = null,
+        treeActivityName: String? = null,
     ): ResolutionResult {
         if (selector.isEmpty) {
             return ResolutionResult.NotFound(
@@ -48,12 +55,8 @@ class SelectorResolver(
             )
         }
 
-        if (!packageMatches(selector, treePackageName)) {
-            return ResolutionResult.NotFound(
-                attempted = emptyList(),
-                reason =
-                    "Selector targets package ${selector.packageName} but the screen is $treePackageName",
-            )
+        screenMismatchReason(selector, treePackageName, treeActivityName)?.let { reason ->
+            return ResolutionResult.NotFound(attempted = emptyList(), reason = reason)
         }
 
         val indexed = indexTree(root)
@@ -70,6 +73,8 @@ class SelectorResolver(
                     SelectorStrategy.STRUCTURAL -> matchByStructuralPath(candidates, selector)
                     SelectorStrategy.RELATIVE_POSITION -> matchByRelativePosition(candidates, selector)
                     SelectorStrategy.COORDINATES -> matchByCoordinates(candidates, selector)
+                    // Needs a screenshot and a model, so it cannot run inside a
+                    // synchronous resolve; see resolveWithVision.
                     SelectorStrategy.VISION -> emptyList()
                 }
 
@@ -92,6 +97,61 @@ class SelectorResolver(
                 } else {
                     "No node matched after trying ${attempted.joinToString(", ") { it.wireName }}"
                 },
+        )
+    }
+
+    /**
+     * Resolves [selector], falling through to vision when the structural chain
+     * finds nothing.
+     *
+     * The complete seven-step chain, and the entry point the agent and workflow
+     * engine should use. Kept separate from [resolve] because vision is
+     * suspending and costs a model call, so callers that only want the cheap
+     * structural strategies are not forced to pay for it.
+     */
+    suspend fun resolveWithVision(
+        tree: UiTree,
+        selector: Selector,
+    ): ResolutionResult {
+        val structural = resolve(tree, selector)
+        if (structural.isMatch) return structural
+
+        val notFound = structural as ResolutionResult.NotFound
+
+        // An empty selector or the wrong screen are not vision's problem: there is
+        // nothing to look for, or we should not be looking here at all.
+        if (notFound.attempted.isEmpty()) return notFound
+
+        if (!visionMatcher.isAvailable) {
+            return notFound.copy(
+                reason =
+                    "${notFound.reason}; vision was not attempted because no screenshot " +
+                        "or model is available",
+            )
+        }
+
+        val attempted = notFound.attempted + SelectorStrategy.VISION
+
+        val match =
+            visionMatcher.locate(selector)
+                ?: return notFound.copy(
+                    attempted = attempted,
+                    reason = "${notFound.reason}, and vision found nothing on screen",
+                )
+
+        // A vision match may correspond to no accessibility node at all - the usual
+        // reason vision was needed - so a synthetic node carries the bounds the
+        // gesture layer needs.
+        return ResolutionResult.Match(
+            node =
+                UiNode(
+                    text = match.description,
+                    bounds = match.bounds,
+                    packageName = tree.packageName,
+                ),
+            strategy = SelectorStrategy.VISION,
+            structuralPath = VISION_PATH,
+            visionMatch = match,
         )
     }
 
@@ -211,13 +271,31 @@ class SelectorResolver(
         return if (selector.requireActionable) null else matches.first()
     }
 
-    private fun packageMatches(
+    /**
+     * Why [selector] must not be resolved against this screen, or null when it may.
+     *
+     * A selector recorded on one screen resolving against another is the failure
+     * mode this guards: it can find a plausible element and act on the wrong
+     * thing, which is worse than not resolving. Both checks skip when the tree
+     * does not report its identity, since refusing on missing information would
+     * make the resolver unusable against a hand-built tree.
+     */
+    private fun screenMismatchReason(
         selector: Selector,
         treePackageName: String?,
-    ): Boolean {
-        val wanted = selector.packageName ?: return true
-        if (treePackageName == null) return true
-        return wanted == treePackageName
+        treeActivityName: String?,
+    ): String? {
+        val wantedPackage = selector.packageName
+        if (wantedPackage != null && treePackageName != null && wantedPackage != treePackageName) {
+            return "Selector targets package $wantedPackage but the screen is $treePackageName"
+        }
+
+        val wantedActivity = selector.activityName
+        if (wantedActivity != null && treeActivityName != null && wantedActivity != treeActivityName) {
+            return "Selector targets activity $wantedActivity but the screen is $treeActivityName"
+        }
+
+        return null
     }
 
     private fun Selector.accepts(node: UiNode): Boolean {
@@ -259,6 +337,12 @@ class SelectorResolver(
 
         /** Path assigned to the tree root; children extend it as `0.1.2`. */
         const val ROOT_PATH: String = "0"
+
+        /**
+         * Structural path reported for a vision match. Not a real path: a vision
+         * match often has no node in the tree, so there is none to report.
+         */
+        const val VISION_PATH: String = "vision"
 
         private fun String?.equalsIgnoreCase(other: String): Boolean =
             this != null && this.equals(other, ignoreCase = true)

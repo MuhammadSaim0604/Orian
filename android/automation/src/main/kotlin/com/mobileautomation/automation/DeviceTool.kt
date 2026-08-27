@@ -31,6 +31,8 @@ enum class DeviceTool(val toolName: String) {
     SEND_NOTIFICATION("sendNotification"),
     LAUNCH_INTENT("launchIntent"),
     GET_SYSTEM_SETTING("getSystemSetting"),
+    CONTROL_MEDIA("controlMedia"),
+    ADJUST_VOLUME("adjustVolume"),
     ;
 
     companion object {

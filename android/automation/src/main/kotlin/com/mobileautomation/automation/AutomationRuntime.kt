@@ -6,6 +6,8 @@ import com.mobileautomation.accessibility.selector.SelectorStrategy
 import com.mobileautomation.gestures.SwipeDirection
 import com.mobileautomation.screen.Screenshot
 import com.mobileautomation.tools.IntentRequest
+import com.mobileautomation.tools.MediaCommand
+import com.mobileautomation.tools.VolumeDirection
 import com.mobileautomation.tools.model.AlarmRequest
 import com.mobileautomation.tools.model.Contact
 import com.mobileautomation.tools.model.CurrentScreen
@@ -135,6 +137,19 @@ interface AutomationRuntime {
     suspend fun launchIntent(request: IntentRequest): ToolResult<Unit>
 
     suspend fun getSystemSetting(key: String): ToolResult<String?>
+
+    // --- media ------------------------------------------------------------
+
+    /**
+     * Controls whatever currently holds the media session.
+     *
+     * Playback control only: reading what is playing needs notification-listener
+     * access, which the Phase 2 permission model does not authorise.
+     */
+    suspend fun controlMedia(command: MediaCommand): ToolResult<Unit>
+
+    /** Nudges the music volume one step. */
+    suspend fun adjustVolume(direction: VolumeDirection): ToolResult<Unit>
 
     companion object {
         /**

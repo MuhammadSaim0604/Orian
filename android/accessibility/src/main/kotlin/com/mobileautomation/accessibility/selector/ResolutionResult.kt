@@ -17,6 +17,11 @@ sealed interface ResolutionResult {
         val structuralPath: String,
         /** Other nodes that also matched, when the selector was ambiguous. */
         val alternativeCount: Int = 0,
+        /**
+         * Present only for a vision match, which has bounds but may have no
+         * accessibility node behind it - the reason vision was needed at all.
+         */
+        val visionMatch: VisionMatch? = null,
     ) : ResolutionResult {
         val isAmbiguous: Boolean get() = alternativeCount > 0
 

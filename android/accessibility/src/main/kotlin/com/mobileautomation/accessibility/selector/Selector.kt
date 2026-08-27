@@ -27,6 +27,17 @@ data class Selector(
     val coordinates: Point? = null,
     /** Restricts matching to this package, so a selector cannot fire on the wrong app. */
     val packageName: String? = null,
+    /**
+     * Restricts matching to this activity.
+     *
+     * `Data_Models.md` scopes a selector to `{ package, activity }` together,
+     * because the same package renders many screens: a chat list and a
+     * conversation share `com.whatsapp` but a "Send" selector is only meaningful
+     * on one of them. Without the activity guard a stale selector can resolve to
+     * a plausible-looking wrong element on the wrong screen, which is worse than
+     * failing to resolve at all.
+     */
+    val activityName: String? = null,
     /** Require the match to be actionable (clickable/editable, enabled, non-empty). */
     val requireActionable: Boolean = false,
     /** Match text exactly rather than case-insensitively and trimmed. */
@@ -73,8 +84,25 @@ data class Selector(
             x: Int,
             y: Int,
         ): Selector = Selector(coordinates = Point(x, y))
+
+        /**
+         * Scopes a selector to the screen it was recorded on.
+         *
+         * What the recorder captures for every step, so replay refuses to act if
+         * the app has navigated somewhere else.
+         */
+        fun onScreen(
+            packageName: String,
+            activityName: String?,
+        ): Selector = Selector(packageName = packageName, activityName = activityName)
     }
 }
+
+/** Scopes an existing selector to a screen, keeping every other field. */
+fun Selector.scopedTo(
+    packageName: String?,
+    activityName: String?,
+): Selector = copy(packageName = packageName, activityName = activityName)
 
 /** A point on screen in device pixels. */
 data class Point(val x: Int, val y: Int)

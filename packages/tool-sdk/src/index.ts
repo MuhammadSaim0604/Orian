@@ -37,6 +37,8 @@ export const TOOL_NAMES = [
   'sendNotification',
   'launchIntent',
   'getSystemSetting',
+  'controlMedia',
+  'adjustVolume',
 ] as const;
 
 export type ToolName = (typeof TOOL_NAMES)[number];

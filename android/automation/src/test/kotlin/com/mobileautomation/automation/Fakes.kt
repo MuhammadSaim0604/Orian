@@ -12,10 +12,13 @@ import com.mobileautomation.tools.ClipboardTool
 import com.mobileautomation.tools.ContactsReader
 import com.mobileautomation.tools.IntentRequest
 import com.mobileautomation.tools.IntentTool
+import com.mobileautomation.tools.MediaCommand
+import com.mobileautomation.tools.MediaTool
 import com.mobileautomation.tools.MissingPermissionException
 import com.mobileautomation.tools.NotificationTool
 import com.mobileautomation.tools.SensitiveCapability
 import com.mobileautomation.tools.SystemSettingsReader
+import com.mobileautomation.tools.VolumeDirection
 import com.mobileautomation.tools.model.AlarmRequest
 import com.mobileautomation.tools.model.Contact
 import com.mobileautomation.tools.model.CurrentScreen
@@ -206,5 +209,24 @@ class RecordingGlobalActionPerformer(
     override fun invoke(action: GlobalAction): Boolean {
         performed.add(action)
         return succeeds
+    }
+}
+
+class FakeMediaTool(
+    override var isAnythingPlaying: Boolean = true,
+    var controlSucceeds: Boolean = true,
+    var volumeSucceeds: Boolean = true,
+) : MediaTool {
+    val commands = mutableListOf<MediaCommand>()
+    val volumeChanges = mutableListOf<VolumeDirection>()
+
+    override fun control(command: MediaCommand): Boolean {
+        commands.add(command)
+        return controlSucceeds
+    }
+
+    override fun adjustVolume(direction: VolumeDirection): Boolean {
+        volumeChanges.add(direction)
+        return volumeSucceeds
     }
 }

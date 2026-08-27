@@ -20,9 +20,12 @@ import com.mobileautomation.tools.ClipboardTool
 import com.mobileautomation.tools.ContactsReader
 import com.mobileautomation.tools.IntentRequest
 import com.mobileautomation.tools.IntentTool
+import com.mobileautomation.tools.MediaCommand
+import com.mobileautomation.tools.MediaTool
 import com.mobileautomation.tools.MissingPermissionException
 import com.mobileautomation.tools.NotificationTool
 import com.mobileautomation.tools.SystemSettingsReader
+import com.mobileautomation.tools.VolumeDirection
 import com.mobileautomation.tools.model.AlarmRequest
 import com.mobileautomation.tools.model.Contact
 import com.mobileautomation.tools.model.CurrentScreen
@@ -52,6 +55,7 @@ class DefaultAutomationRuntime(
     private val notificationTool: NotificationTool,
     private val intentTool: IntentTool,
     private val systemSettingsReader: SystemSettingsReader,
+    private val mediaTool: MediaTool,
     private val globalActionPerformer: (GlobalAction) -> Boolean,
     private val selectorResolver: SelectorResolver = SelectorResolver(),
 ) : AutomationRuntime {
@@ -332,6 +336,29 @@ class DefaultAutomationRuntime(
         }
         return ToolResult.catching { systemSettingsReader.getSystemSetting(key) }
     }
+
+    // --- media ------------------------------------------------------------
+
+    override suspend fun controlMedia(command: MediaCommand): ToolResult<Unit> =
+        if (mediaTool.control(command)) {
+            ToolResult.success(Unit)
+        } else {
+            ToolResult.failure(
+                AutomationError.ToolFailed(
+                    "controlMedia",
+                    "nothing is holding the media session, so ${command.name} had no effect",
+                ),
+            )
+        }
+
+    override suspend fun adjustVolume(direction: VolumeDirection): ToolResult<Unit> =
+        if (mediaTool.adjustVolume(direction)) {
+            ToolResult.success(Unit)
+        } else {
+            ToolResult.failure(
+                AutomationError.ToolFailed("adjustVolume", "the audio service rejected the change"),
+            )
+        }
 
     // --- helpers ----------------------------------------------------------
 

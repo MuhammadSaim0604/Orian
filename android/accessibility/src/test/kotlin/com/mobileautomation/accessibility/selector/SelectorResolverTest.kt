@@ -353,6 +353,55 @@ class SelectorResolverTest {
     }
 
     @Test
+    fun `refuses to act when the selector was recorded on a different screen`() {
+        // Same app, different activity: a "Send" selector from a conversation must
+        // not resolve against the chat list, where it could find a plausible but
+        // wrong element.
+        val selector =
+            Selector(
+                text = "Send",
+                packageName = "com.whatsapp",
+                activityName = "com.whatsapp.HomeActivity",
+            )
+
+        val notFound = resolver.resolve(tree, selector) as ResolutionResult.NotFound
+
+        assertTrue(notFound.reason.contains("activity"))
+        assertTrue(notFound.reason.contains("com.whatsapp.HomeActivity"))
+    }
+
+    @Test
+    fun `resolves when the recorded screen matches`() {
+        val selector =
+            Selector(
+                resourceId = "send_button",
+                packageName = "com.whatsapp",
+                activityName = "com.whatsapp.Conversation",
+            )
+
+        assertTrue(resolver.resolve(tree, selector).isMatch)
+    }
+
+    @Test
+    fun `does not refuse when the tree cannot report its activity`() {
+        // A hand-built tree, or a transient window with no activity known: the
+        // guard must not make the resolver unusable.
+        val unknownScreen = tree.copy(activityName = null)
+        val selector = Selector(resourceId = "send_button", activityName = "com.whatsapp.Conversation")
+
+        assertTrue(resolver.resolve(unknownScreen, selector).isMatch)
+    }
+
+    @Test
+    fun `scopedTo pins an existing selector to a screen`() {
+        val scoped = Selector.byText("Send").scopedTo("com.whatsapp", "com.whatsapp.Conversation")
+
+        assertEquals("com.whatsapp", scoped.packageName)
+        assertEquals("com.whatsapp.Conversation", scoped.activityName)
+        assertEquals("Send", scoped.text)
+    }
+
+    @Test
     fun `reports every strategy it tried when nothing matches`() {
         val selector =
             Selector(
