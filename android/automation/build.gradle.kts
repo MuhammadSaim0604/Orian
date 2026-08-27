@@ -28,10 +28,13 @@ android {
 }
 
 dependencies {
-    implementation(project(":accessibility"))
-    implementation(project(":gestures"))
-    implementation(project(":screen"))
-    implementation(project(":tools"))
+    // `api` rather than `implementation`: the automation runtime's public surface
+    // exposes types from these modules (UiTree, Selector, Screenshot, Contact),
+    // so consumers - the Phase 3 bridge - need them on their compile classpath.
+    api(project(":accessibility"))
+    api(project(":gestures"))
+    api(project(":screen"))
+    api(project(":tools"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.android)
@@ -41,5 +44,7 @@ dependencies {
     testImplementation(libs.kotlinx.coroutines.test)
 
     androidTestImplementation(libs.androidx.test.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.core.ktx)
     androidTestImplementation(libs.androidx.espresso.core)
 }

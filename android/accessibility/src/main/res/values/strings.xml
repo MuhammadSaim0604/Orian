@@ -1,0 +1,11 @@
+<resources>
+    <!-- Shown in system Settings as the name of the accessibility service. -->
+    <string name="accessibility_service_label">Mobile Automation</string>
+
+    <!--
+      Shown by the system on the accessibility consent screen. Written for a user
+      deciding whether to grant the most powerful permission in the app, so it
+      says what is read, what is done, and what is not done.
+    -->
+    <string name="accessibility_service_description">Lets Mobile Automation read what is on your screen and tap, swipe, and type on your behalf so it can run your automations and AI tasks. Screen content is used only while a task is running and is never uploaded anywhere you have not configured. You can turn this off at any time.</string>
+</resources>

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Accessibility service configuration.
+
+  The system shows `description` to the user on the consent screen in Settings,
+  so it must state plainly what the service does. `canRetrieveWindowContent` and
+  `canPerformGestures` are the two capabilities that make automation possible and
+  are also the reason this is the highest-trust permission in the app.
+
+  `packageNames` is deliberately omitted: the user's automations can target any
+  app they choose, so the service cannot be scoped to a fixed list.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows|flagIncludeNotImportantViews"
+    android:canPerformGestures="true"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/accessibility_service_description"
+    android:notificationTimeout="100"
+    android:settingsActivity="com.mobileautomation.MainActivity" />

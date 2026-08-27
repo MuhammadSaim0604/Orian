@@ -1,14 +1,51 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!--
-      Phase 1 declares only what the app shell needs. The sensitive permissions
-      (accessibility service, overlay, foreground service, media projection,
-      contacts, exact alarms) are added in the phase that implements them, each
-      with an in-app rationale and explicit opt-in - see
-      Development_Plan/conventions/Permission_Model.md.
+      Permissions are declared here; each one is *requested* only when the user
+      reaches the feature that needs it, behind an in-app rationale screen
+      (Development_Plan/conventions/Permission_Model.md). Declaring a permission
+      does not grant it - every entry below still requires explicit opt-in.
+
+      The accessibility service and the automation foreground service are declared
+      in the library modules that own them (android/accessibility and
+      android/automation) and arrive in this manifest by manifest merge once those
+      modules are wired into the app by the Turbo Module bridge in Phase 3.
     -->
+
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+      Keeps a user-initiated automation alive while the user is in another app.
+      SPECIAL_USE is required from API 34 because keeping accessibility-driven
+      automation running is not one of Android's predefined service types; the
+      justification is declared on the service itself.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+
+    <!-- The persistent "automation is running" notification, and workflow results. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Draws the Configure-with-AI toolset over other apps (Phase 8). -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!-- Resolves a person by name for goals such as "message Robert". Read-only. -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+
+    <!-- Time-based triggers and the createAlarm tool. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+
+    <!--
+      Lets the app resolve and open other apps by package name. Without this,
+      queryable packages are limited on API 30+ and listApps/openApp would see
+      almost nothing.
+    -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
 
     <application
         android:name=".MainApplication"

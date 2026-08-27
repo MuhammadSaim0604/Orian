@@ -56,6 +56,66 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  instrumentation-tests:
+    name: Instrumentation tests (API ${{ matrix.api-level }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: native-checks
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # 26 is the app's minSdk floor and 34 is where the foreground-service
+        # special-use rules changed, so both ends of the supported range are
+        # covered rather than just a convenient middle.
+        api-level: [26, 34]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up JDK
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Enable KVM
+        # Hardware acceleration; without it the emulator falls back to software
+        # rendering and routinely exceeds the job timeout.
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run instrumentation tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: ${{ matrix.api-level == 26 && 'default' || 'google_apis' }}
+          arch: x86_64
+          profile: pixel_2
+          # Snapshots are pointless for a single run and cost minutes to save.
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          working-directory: android
+          script: gradle connectedDebugAndroidTest --no-daemon
+
+      - name: Upload instrumentation reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: instrumentation-reports-api${{ matrix.api-level }}
+          path: android/*/build/reports/androidTests/
+          retention-days: 7
+          if-no-files-found: ignore
+
   build-apk:
     name: Build ${{ matrix.variant }} APK
     runs-on: ubuntu-latest

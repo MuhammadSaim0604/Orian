@@ -1,2 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" />
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      Declared in the library that owns the service so any consuming app module
+      gets a correct declaration by manifest merge.
+
+      FOREGROUND_SERVICE_SPECIAL_USE is required from API 34: this service does not
+      fit a standard type such as mediaPlayback or location - it keeps
+      accessibility-driven automation alive - and Android requires the special-use
+      type plus a stated justification.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <application>
+        <service
+            android:name=".service.AutomationForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps a user-initiated automation or AI task running while the user is in another app, so the task is not killed part-way through." />
+        </service>
+    </application>
+</manifest>
