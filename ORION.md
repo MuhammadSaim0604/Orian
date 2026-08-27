@@ -13,6 +13,7 @@ From `IMPORTANT_RULES.txt` — these override convenience in every case:
 5. **Maintain `tracking.md` at the repo root.** After each phase record what was implemented, which files changed, which phase is done, and which phases remain. Also you can read if for what previous ai agent completed.
 6. `plan_in_user_words/` is background context only — the original idea in the user's words. The authoritative plan is `Development_Plan/`.
 7. For Specific work load specific skill that needed.
+8. Before creating any files and logics make sure to analyze the existing directory structures and files so that if any file already present then you should not rewrite it and also if you write any thing then because of monorepo project make sure to properly hold functions and code logics to properly link and properly create files and logics....
 
 Environment is Windows; the user works in PowerShell/cmd. Git remote: `https://github.com/MuhammadSaim0604/Orian.git`.
 
