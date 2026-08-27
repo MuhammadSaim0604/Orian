@@ -4,7 +4,7 @@ Living record of what has been implemented, which phase is complete, and what re
 
 Authoritative plan: `Development_Plan/`. Phases execute strictly in order.
 
-Last updated: after Phase 2, with both CI workflows green on `main` (Android CI run `33047779509`, TypeScript CI run `33047779506`).
+Last updated: after the Phase 2 plan-conformance audit, with both CI workflows green on `main` (Android CI run `33057095459`, TypeScript CI run `33057095353`).
 
 ---
 
@@ -174,7 +174,7 @@ _`accessibility`_ — the module that matters most.
 - `NodeSource` abstraction plus `UiTreeWalker`, which enforces depth and node caps, skips invisible subtrees, and recycles every platform node it obtains.
 - `UiAutomationAccessibilityService` — tracks only the foreground package/activity from events and reads the hierarchy on demand; it never logs or persists screen content. Also implements `NodeActionPerformer` for set-text/click/focus by structural path.
 - `AccessibilityConnection`, a narrow process-wide holder, since only the system can construct the service.
-- `SelectorResolver` implementing the full ADR 0009 priority chain: `resourceId → accessibility semantics → text/contentDescription → structural path → relative position → coordinates`. Reports which strategy matched, how many other nodes matched, and whether the match is fragile.
+- `SelectorResolver` implementing the full ADR 0009 priority chain: `resourceId → accessibility semantics → text/contentDescription → structural path → relative position → coordinates → vision`. Reports which strategy matched, how many other nodes matched, and whether the match is fragile. The vision step is a `VisionMatcher` seam — see the audit below.
 
 _`gestures`_ — `GestureSpec` validates at construction, so a 100 ms long press is rejected rather than silently delivered as a tap. `GestureBuilder` owns the coordinate arithmetic including the edge inset that keeps paths clear of the system gesture strip. `GestureEngine` retries cancellation and settles afterwards so the next step does not read the pre-gesture screen. `AccessibilityGestureDispatcher` wraps the callback-based platform API in a cancellable coroutine with a timeout.
 
@@ -182,7 +182,7 @@ _`screen`_ — `ScreenshotStore` keeps captures in app-private storage and prune
 
 _`overlays`_ — `OverlayGeometry` computes and clamps window placement; `WindowManagerOverlayManager` refuses to draw without `SYSTEM_ALERT_WINDOW` and uses `FLAG_NOT_FOCUSABLE` so the overlay never steals input meant for the app beneath.
 
-_`tools`_ — `PermissionGate` as a hard precondition on every sensitive call, with `AndroidPermissionGate` handling the three different mechanisms Android requires: the package manager, `Settings.canDrawOverlays`, and parsing the enabled-accessibility-services string. `PermissionRationale` holds user-facing copy per capability in an exhaustive `when`. Implementations for apps, contacts, clipboard, alarms, notifications, intents, and settings.
+_`tools`_ — `PermissionGate` as a hard precondition on every sensitive call, with `AndroidPermissionGate` handling the three different mechanisms Android requires: the package manager, `Settings.canDrawOverlays`, and parsing the enabled-accessibility-services string. `PermissionRationale` holds user-facing copy per capability in an exhaustive `when`. Implementations for apps, contacts, clipboard, alarms, notifications, intents, settings, and media playback.
 
 _`automation`_ — `AutomationRuntime`, the single surface both engines call (ADR 0008), with `DefaultAutomationRuntime` composing all five modules through injected interfaces. `AutomationForegroundService` uses the `specialUse` type with a stated justification and a non-dismissible stop action.
 
@@ -203,6 +203,8 @@ pnpm turbo run typecheck lint test build             56/56 tasks
 ```
 
 **CI verification** — Android CI run `33047779509` and TypeScript CI run `33047779506` are both green on `main`. The Android run covers ktlint, Kotlin unit tests, instrumentation on API 26 and API 34 emulators, and both APKs.
+
+_(Superseded by the audit numbers further down: the suite is now 381 Kotlin tests, verified by run `33057095459`.)_
 
 ### Instrumentation coverage
 
@@ -235,7 +237,63 @@ apps/mobile/android/app/src/main/AndroidManifest.xml   Phase 2 permissions
 .github/workflows/ci-android.yml                       connectedDebugAndroidTest on API 26 + 34
 ```
 
-**Commits:** `b5f788c` (core), `3d0c315` (instrumentation fixes)
+Added by the audit:
+
+```
+android/accessibility/.../selector/VisionMatcher.kt              vision seam
+android/accessibility/.../selector/VisionFallbackTest.kt
+android/accessibility/.../serialization/UiNodeAttributeParityTest.kt
+android/automation/.../DeviceToolParityTest.kt
+android/tools/.../MediaTool.kt, android/AndroidMediaTool.kt, MediaToolTest.kt
+packages/screen-inspector/src/index.ts                           18 attributes + envelope + version guard
+packages/tool-sdk/src/index.ts                                   controlMedia, adjustVolume
+```
+
+**Commits:** `b5f788c` (core), `3d0c315` (instrumentation fixes), `7021b25` (plan-conformance audit)
+
+### Plan-conformance audit (commit `7021b25`)
+
+Before starting Phase 3 the implementation was read back against `Development_Plan/` line by line. Five places approximated the documents rather than matching them. All five would have surfaced as bugs once the bridge existed, and each is the kind of thing that fails quietly rather than loudly — which is why they are now pinned by tests rather than by intention.
+
+**1. The UI-tree contract was lying.** `UiNodeAttribute` is documented as the versioned, shared description of what the parser emits, and `screen-inspector` mirrors it — but it declared 8 keys while `UiTreeSerializer` emitted 18. The TypeScript side would have been blind to every interaction flag (`longClickable`, `scrollable`, `editable`, `checkable`, `checked`, `selected`, `enabled`, `visible`) and to `children` and `index`.
+
+- Both sides now declare all 18 in emission order, plus a new `UiTreeAttribute` enum for the envelope keys (`schemaVersion`, `packageName`, `activityName`, `capturedAtEpochMs`, `screenWidthPx`, `screenHeightPx`, `nodeCount`, `root`).
+- `UiNodeAttributeParityTest` asserts declared-equals-emitted **in order**, so drift is a build failure. It scans keys with a small hand-rolled walker rather than a JSON library, because `org.json` is stubbed in Android JVM unit tests.
+- `UI_TREE_SCHEMA_VERSION` bumped 1 → 2, with `isSupportedSchemaVersion` on the TS side so a mismatched payload is rejected rather than half-read.
+
+**2. Selectors were not scoped to a screen.** `Data_Models.md` specifies `screen: { package, activity }`, but `Selector` carried only `packageName`. One package renders many screens, so a "Send" selector recorded in a WhatsApp conversation could resolve against the chat list and act on the wrong element — worse than failing outright.
+
+- Added `Selector.activityName`, the `Selector.onScreen(...)` factory, and a `scopedTo(...)` extension for pinning an existing selector.
+- The resolver's `packageMatches` became `screenMismatchReason`, covering package and activity and naming which one mismatched. Both checks skip when the tree cannot report its identity, so a hand-built tree or a transient window still resolves.
+
+**3. The selector chain stopped at step 6.** Strategy 7 was in the enum and returned an empty list, so a chain documented as seven steps silently ran six. Vision needs a screenshot and a model, neither of which the accessibility module may depend on.
+
+- Vision is now a `VisionMatcher` interface with `VisionMatch` (bounds + confidence + description) and `UnavailableVisionMatcher` as the default, so the "no provider" path is exercised rather than being a null check.
+- `SelectorResolver.resolveWithVision` completes the chain. It is suspending and separate from `resolve`, so callers wanting only the cheap structural strategies do not pay for a model call.
+- Three outcomes that used to collapse into one are now distinct: **vision not attempted** (no screenshot or model — fixable by asking the user), **vision found nothing**, and a **match carrying its confidence** so the recorder can flag a 0.42 guess instead of presenting it as equivalent to a `resourceId` match. A vision match reports `structuralPath = "vision"` because there is often no node in the tree to point at — precisely why vision was needed.
+
+**4. The `media` tool was missing** from the Android Tool Layer deliverables.
+
+- `MediaCommand` (play/pause/stop/next/previous/fast-forward/rewind) and `VolumeDirection`, with `AndroidMediaTool` dispatching media **key events** via `AudioManager.dispatchMediaKeyEvent` — always as a down/up pair, since sending only the down event leaves some players stuck.
+- Scoped to control on purpose: key events need **no new permission** and reach whichever app holds the media session, which is also what the user expects from "pause". Reading _what_ is playing needs notification-listener access and media files need `READ_MEDIA_*`; neither is in the Phase 2 permission table, so both are out of scope rather than a quiet expansion of the sensitive surface.
+- Surfaced as `controlMedia` and `adjustVolume` on `AutomationRuntime`, and added to `DeviceTool` and `tool-sdk`.
+
+**5. Nothing stopped the tool vocabulary drifting.** `DeviceTool` and `tool-sdk`'s `TOOL_NAMES` must match exactly (ADR 0008) — the AI and MCP server name tools from the TypeScript list while the runtime implements the Kotlin one, so divergence lets the model name a tool it cannot call, showing up as a confusing agent loop rather than an error.
+
+- `DeviceToolParityTest` restates the TypeScript list as a literal and asserts equality, and a matching Vitest test does the reverse. A one-sided change now fails the build.
+- It also checks every tool name maps to an `AutomationRuntime` method, using Java reflection since `kotlin-reflect` is not on the test classpath. The check is one-directional by design: every tool must be a method, but `openAppByName`, `clickAt`, and `swipeBetween` are convenience overloads outside the named vocabulary.
+
+**Audit verification**
+
+```
+cd android && gradle ktlintCheck                     clean, all 6 modules
+cd android && gradle testDebugUnitTest               381 tests, 0 failures (was 334)
+cd android && gradle assembleDebugAndroidTest        compiles
+pnpm format:check                                    clean
+pnpm turbo run typecheck lint test build             56/56 tasks
+```
+
+CI run `33057095459` (Android) and `33057095353` (TypeScript) green: ktlint, Kotlin unit tests, instrumentation on API 26 and 34, and both APKs.
 
 ---
 
@@ -245,8 +303,9 @@ Phases 3–10, in order. Next is **Phase 3 — the native bridge**: a Turbo Modu
 
 Carry-forward notes:
 
-- **`AutomationRuntime` is the contract to preserve.** Method names match `DeviceTool.toolName` and `@mobile-automation/tool-sdk`. The bridge should expose it as-is rather than inventing a parallel surface, or the AI will be able to name tools it cannot call.
-- **The UI-tree JSON is versioned for a reason.** `UI_TREE_SCHEMA_VERSION` must be bumped whenever a key changes, and the TypeScript side should reject a version it does not understand rather than silently misreading a payload.
+- **`AutomationRuntime` is the contract to preserve.** Method names match `DeviceTool.toolName` and `@mobile-automation/tool-sdk`, and parity tests on both sides now enforce that. The bridge should expose the runtime as-is rather than inventing a parallel surface, or the AI will be able to name tools it cannot call.
+- **The UI-tree JSON is versioned for a reason.** `UI_TREE_SCHEMA_VERSION` is at **2**; bump it whenever a key changes, update `UiNodeAttribute` and `UI_NODE_ATTRIBUTES` together, and let the TypeScript side reject a version it does not understand rather than silently misreading a payload. `UiNodeAttributeParityTest` catches the Kotlin half; nothing yet catches a stale TS list, so keep them in the same commit.
+- **Vision needs a provider before it does anything.** `SelectorResolver` defaults to `UnavailableVisionMatcher`, so today the chain reports "vision was not attempted" and stops at coordinates. A real `VisionMatcher` needs a screenshot plus a model call, which makes it Phase 7 work; wiring one in is the only step needed to complete the chain at runtime.
 - **Big payloads cross by reference.** Screenshots are passed as file paths and the UI tree has a compact serialization mode. Neither should become inline base64 on the bridge.
 - **`MediaProjectionScreenCapture.attachProjection` still needs a caller.** The consent flow — launching the system dialog and handing the resulting token over — is UI work and belongs with the RN layer in Phase 3.
 - **`isEntirelyBlack` samples a 16×16 grid.** If a real app is ever misreported as secure, that is the tuning knob.
@@ -258,4 +317,12 @@ Carry-forward notes:
 
 ### Not yet verified on a real device
 
-Phase 2's definition of done requires a physical run: the service reading a third-party app's tree, tapping a resolved element, swiping, typing, and capturing a screenshot. That cannot be automated here — it needs a user to enable the accessibility service and grant screen capture — and no APK is built locally per ADR 0010. **The CI artifacts from run `33047779509` are the build to sideload for that check.** Until it is done, the device-dependent paths are verified only by instrumentation on emulators.
+Phase 2's definition of done requires a physical run: the service reading a third-party app's tree, tapping a resolved element, swiping, typing, and capturing a screenshot. That cannot be automated here — it needs a user to enable the accessibility service and grant screen capture — and no APK is built locally per ADR 0010. **The CI artifacts from run `33057095459` are the build to sideload for that check.** Until it is done, the device-dependent paths are verified only by instrumentation on emulators.
+
+### Deliberately out of scope in Phase 2
+
+Recorded so these read as decisions rather than oversights:
+
+- **Reading current media state** ("what is playing") and **media file access** — both need permissions the Phase 2 table does not authorise. The `media` tool is playback control only.
+- **A working vision matcher** — the seam exists and the chain is complete by construction, but no provider is wired in until there is a model client.
+- **Absolute volume** — `adjustVolume` nudges by one step, since setting a level outright needs `MODIFY_AUDIO_SETTINGS` and overrides the user's choice.
