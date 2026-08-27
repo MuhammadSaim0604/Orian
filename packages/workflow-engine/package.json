@@ -26,6 +26,11 @@
   "dependencies": {
     "@mobile-automation/node-sdk": "workspace:*",
     "@mobile-automation/shared-types": "workspace:*",
-    "@mobile-automation/workflow-schema": "workspace:*"
+    "@mobile-automation/workflow-schema": "workspace:*",
+    "zod": "3.24.1"
+  },
+  "devDependencies": {
+    "@mobile-automation/android-nodes": "workspace:*",
+    "@mobile-automation/core-nodes": "workspace:*"
   }
 }

@@ -26,9 +26,11 @@
     "clean": "rimraf dist .turbo"
   },
   "dependencies": {
+    "@mobile-automation/core-nodes": "workspace:*",
     "@mobile-automation/node-sdk": "workspace:*",
     "@mobile-automation/shared-types": "workspace:*",
     "@mobile-automation/tool-sdk": "workspace:*",
+    "@mobile-automation/workflow-schema": "workspace:*",
     "zod": "3.24.1"
   }
 }

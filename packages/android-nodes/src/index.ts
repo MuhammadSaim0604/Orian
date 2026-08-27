@@ -1,21 +1,52 @@
 /**
  * `@mobile-automation/android-nodes`
  *
- * Device capability nodes. Each one is a thin wrapper that calls a tool on the
- * Android Tool Runtime through the native bridge - no automation logic lives
- * here, because that belongs in Kotlin (ADR 0001).
+ * Device capability nodes. Each is a thin wrapper that calls one tool on the Android
+ * Tool Runtime through the SDK's abstract `ToolInvoker` - no automation logic lives
+ * here, because that belongs in Kotlin (ADR 0001), and nothing imports the native
+ * bridge directly.
  *
- * Phase 1 scaffold - node implementations arrive in Phase 4, once the bridge
- * from Phase 3 exists.
+ * That indirection is what lets this package be unit-tested with no device attached,
+ * and it is the single seam the Phase 9 execution recorder observes to capture every
+ * device action.
  */
 
+import { type AnyNodeDefinition } from '@mobile-automation/node-sdk';
 import { type ToolName, isToolName } from '@mobile-automation/tool-sdk';
+
+import {
+  alarmNode,
+  clickNode,
+  clipboardReadNode,
+  clipboardWriteNode,
+  contactNode,
+  currentScreenNode,
+  findElementNode,
+  launchIntentNode,
+  longPressNode,
+  mediaNode,
+  notificationNode,
+  openAppNode,
+  pressBackNode,
+  pressHomeNode,
+  readScreenNode,
+  swipeNode,
+  systemSettingNode,
+  takeScreenshotNode,
+  typeTextNode,
+  volumeNode,
+  waitForElementNode,
+} from './nodes';
 
 export const PACKAGE_NAME = '@mobile-automation/android-nodes' as const;
 
 /**
- * Planned node type identifiers mapped to the runtime tool each one calls.
- * Declaring the mapping up front keeps node names and tool names honest.
+ * Node type identifiers mapped to the runtime tool each one calls.
+ *
+ * Declared as data rather than left implicit inside each node, so the mapping can be
+ * checked against `tool-sdk`'s vocabulary in a test. A node wired to a tool the
+ * runtime does not expose would otherwise fail only when someone ran that step on a
+ * real phone.
  */
 export const NODE_TO_TOOL = {
   openApp: 'openApp',
@@ -29,10 +60,16 @@ export const NODE_TO_TOOL = {
   takeScreenshot: 'takeScreenshot',
   pressBack: 'pressBack',
   pressHome: 'pressHome',
+  currentScreen: 'getCurrentScreen',
   notification: 'sendNotification',
   contact: 'getContacts',
   clipboardRead: 'readClipboard',
   clipboardWrite: 'writeClipboard',
+  alarm: 'createAlarm',
+  media: 'controlMedia',
+  volume: 'adjustVolume',
+  launchIntent: 'launchIntent',
+  systemSetting: 'getSystemSetting',
 } as const satisfies Record<string, ToolName>;
 
 export type AndroidNodeType = keyof typeof NODE_TO_TOOL;
@@ -43,3 +80,94 @@ export const toolForNode = (node: AndroidNodeType): ToolName => NODE_TO_TOOL[nod
 /** Guards against a node being wired to a tool the runtime does not expose. */
 export const everyNodeMapsToAKnownTool = (): boolean =>
   Object.values(NODE_TO_TOOL).every((tool) => isToolName(tool));
+
+/**
+ * Every Android node, in palette order.
+ *
+ * Registered as one batch so a mistake in any of them fails at startup rather than
+ * leaving the registry half-populated.
+ */
+export const androidNodes: readonly AnyNodeDefinition[] = [
+  openAppNode,
+  clickNode,
+  longPressNode,
+  swipeNode,
+  typeTextNode,
+  findElementNode,
+  waitForElementNode,
+  readScreenNode,
+  takeScreenshotNode,
+  currentScreenNode,
+  pressBackNode,
+  pressHomeNode,
+  notificationNode,
+  contactNode,
+  clipboardReadNode,
+  clipboardWriteNode,
+  alarmNode,
+  mediaNode,
+  volumeNode,
+  launchIntentNode,
+  systemSettingNode,
+];
+
+export {
+  alarmNode,
+  clickNode,
+  clipboardReadNode,
+  clipboardWriteNode,
+  contactNode,
+  currentScreenNode,
+  findElementNode,
+  launchIntentNode,
+  longPressNode,
+  mediaNode,
+  notificationNode,
+  openAppNode,
+  pressBackNode,
+  pressHomeNode,
+  readScreenNode,
+  swipeNode,
+  systemSettingNode,
+  takeScreenshotNode,
+  typeTextNode,
+  volumeNode,
+  waitForElementNode,
+} from './nodes';
+
+export {
+  AlarmConfigSchema,
+  ClipboardWriteConfigSchema,
+  ContactsConfigSchema,
+  LaunchIntentConfigSchema,
+  LongPressConfigSchema,
+  MediaConfigSchema,
+  NoArgumentConfigSchema,
+  NotificationConfigSchema,
+  OpenAppConfigSchema,
+  ReadScreenConfigSchema,
+  SelectorConfigSchema,
+  SwipeConfigSchema,
+  SystemSettingConfigSchema,
+  TypeTextConfigSchema,
+  VolumeConfigSchema,
+  WaitForElementConfigSchema,
+  type AlarmConfig,
+  type ClipboardWriteConfig,
+  type ContactsConfig,
+  type LaunchIntentConfig,
+  type LongPressConfig,
+  type MediaConfig,
+  type NoArgumentConfig,
+  type NotificationConfig,
+  type OpenAppConfig,
+  type ReadScreenConfig,
+  type SelectorConfig,
+  type SwipeConfig,
+  type SystemSettingConfig,
+  type TypeTextConfig,
+  type VolumeConfig,
+  type WaitForElementConfig,
+} from './config';
+
+export { DATA_CATEGORY, DEVICE_CATEGORY, invokeTool } from './shared';

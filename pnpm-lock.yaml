@@ -171,6 +171,9 @@ importers:
 
   packages/android-nodes:
     dependencies:
+      '@mobile-automation/core-nodes':
+        specifier: workspace:*
+        version: link:../core-nodes
       '@mobile-automation/node-sdk':
         specifier: workspace:*
         version: link:../node-sdk
@@ -180,6 +183,9 @@ importers:
       '@mobile-automation/tool-sdk':
         specifier: workspace:*
         version: link:../tool-sdk
+      '@mobile-automation/workflow-schema':
+        specifier: workspace:*
+        version: link:../workflow-schema
       zod:
         specifier: 3.24.1
         version: 3.24.1
@@ -192,6 +198,9 @@ importers:
       '@mobile-automation/shared-types':
         specifier: workspace:*
         version: link:../shared-types
+      '@mobile-automation/workflow-schema':
+        specifier: workspace:*
+        version: link:../workflow-schema
       zod:
         specifier: 3.24.1
         version: 3.24.1
@@ -247,6 +256,9 @@ importers:
       '@mobile-automation/shared-types':
         specifier: workspace:*
         version: link:../shared-types
+      zod:
+        specifier: 3.24.1
+        version: 3.24.1
 
   packages/prompt-engine:
     dependencies:
@@ -304,6 +316,16 @@ importers:
       '@mobile-automation/workflow-schema':
         specifier: workspace:*
         version: link:../workflow-schema
+      zod:
+        specifier: 3.24.1
+        version: 3.24.1
+    devDependencies:
+      '@mobile-automation/android-nodes':
+        specifier: workspace:*
+        version: link:../android-nodes
+      '@mobile-automation/core-nodes':
+        specifier: workspace:*
+        version: link:../core-nodes
 
   packages/workflow-schema:
     dependencies:
@@ -6343,7 +6365,9 @@ snapshots:
     transitivePeerDependencies:
       - '@babel/core'
       - '@babel/preset-env'
+      - bufferutil
       - supports-color
+      - utf-8-validate
 
   '@react-native/normalize-colors@0.76.6': {}
 

@@ -2,24 +2,74 @@
  * `@mobile-automation/workflow-engine`
  *
  * Executes a workflow JSON by walking the DAG, resolving each node through the
- * registry, and calling the Android Tool Runtime. Deliberately independent of
- * React Native: nothing here may import from `apps/mobile`.
+ * registry, and calling the Android Tool Runtime through the SDK's abstract
+ * `ToolInvoker`.
  *
- * Phase 1 scaffold - the executor is built in Phase 5.
+ * Deliberately independent of React Native: nothing here may import from
+ * `apps/mobile`, and the engine runs in plain Node against a fake invoker. That is
+ * what makes the whole execution path testable without a phone.
  */
 
 export const PACKAGE_NAME = '@mobile-automation/workflow-engine' as const;
 
-/** Lifecycle states a node passes through during execution. */
-export const NODE_STATES = ['pending', 'running', 'succeeded', 'failed', 'skipped'] as const;
+export {
+  ERROR_BEHAVIOURS,
+  NODE_STATES,
+  type ErrorBehaviour,
+  type NodeState,
+  isTerminalState,
+} from '@mobile-automation/shared-types';
 
-export type NodeState = (typeof NODE_STATES)[number];
+export {
+  type AcceptedPackage,
+  type DiscoverablePackage,
+  type DiscoveryResult,
+  type PackageRejectionReason,
+  type RejectedPackage,
+  discoverNodePackages,
+  isBuiltInPackage,
+  qualifyNodeType,
+  readManifest,
+  registerBuiltInNodes,
+} from './discovery';
 
-/** What to do when a node fails, honoured per node via `executionPolicy`. */
-export const ERROR_BEHAVIOURS = ['stop', 'continue', 'retry'] as const;
+export {
+  EXECUTION_EVENT_TYPES,
+  EXECUTION_OUTCOMES,
+  ExecutionEventBus,
+  type BranchTakenEvent,
+  type ExecutionEvent,
+  type ExecutionEventListener,
+  type ExecutionEventType,
+  type ExecutionOutcome,
+  type LogEvent,
+  type NodeFailedEvent,
+  type NodeRetryingEvent,
+  type NodeSkippedEvent,
+  type NodeStartedEvent,
+  type NodeSucceededEvent,
+  type VariableChangedEvent,
+  type WorkflowFinishedEvent,
+  type WorkflowStartedEvent,
+  stateForEvent,
+} from './events';
 
-export type ErrorBehaviour = (typeof ERROR_BEHAVIOURS)[number];
+export {
+  DEFAULT_MAX_STEPS,
+  type ExecuteOptions,
+  type ExecutionResult,
+  executeWorkflow,
+  runWorkflow,
+} from './executor';
 
-/** A node is finished when it can no longer transition. */
-export const isTerminalState = (state: NodeState): boolean =>
-  state === 'succeeded' || state === 'failed' || state === 'skipped';
+export {
+  WorkflowLoadError,
+  type LoadedWorkflow,
+  type ResolvedNode,
+  branchHandle,
+  isWorkflowLoadError,
+  loadWorkflow,
+  nextNodeIds,
+} from './loader';
+
+export { RunVariableStore } from './variables';
