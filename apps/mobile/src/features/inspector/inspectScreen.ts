@@ -8,14 +8,20 @@ import {
 import { type Selector } from '@mobile-automation/workflow-schema';
 
 /**
- * Reading the live screen for the inspector.
+ * Reading the live screen for element picking.
  *
  * `screen-inspector` owns the attribute contract; this turns a captured tree into a flat list
  * the UI can render and, crucially, into a **selector** for each element.
  *
- * The selector is the point of the whole screen inspector. A user picking an element should get
- * something durable - a resourceId where one exists - rather than the coordinates they happened
- * to tap. Coordinates are included only as a last resort, and the UI says so (ADR 0009).
+ * The selector is the point of the whole thing. A user picking an element should get something
+ * durable - a resourceId where one exists - rather than the coordinates they happened to tap.
+ * Coordinates are included only as a last resort, and the UI says so (ADR 0009).
+ *
+ * **Consumed by the node toolset overlay**, which is the only place screen inspection means
+ * anything: from inside the app it reads our own screen, because the app in the foreground when
+ * you press the button is this one. That is why the standalone Screen Inspector tab was deleted in
+ * Step 1 (issue A4) while this module was kept - Step 9 builds the overlay around it, and
+ * `ConfigureOverlay` already imports `strategyDescription` from here.
  */
 
 export type InspectedElement = {

@@ -5,6 +5,7 @@ import com.facebook.react.bridge.NativeModule
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.uimanager.ViewManager
 import com.mobileautomation.overlay.OverlayModule
+import com.mobileautomation.preferences.AppPreferencesModule
 import com.mobileautomation.settings.ProviderSettingsModule
 import com.mobileautomation.storage.WorkflowStorageModule
 
@@ -27,6 +28,9 @@ class AutomationPackage : ReactPackage {
             // Phase 8: the Configure-with-AI floating window, which has to be a real
             // WindowManager overlay because a modal dies the moment the user switches apps.
             OverlayModule(reactContext),
+            // Step 1: shell preferences. Read synchronously at startup so the first paint
+            // shows the right screen rather than guessing and correcting itself.
+            AppPreferencesModule(reactContext),
         )
 
     override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> = emptyList()

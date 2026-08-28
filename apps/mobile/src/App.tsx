@@ -4,6 +4,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import './global.css';
 import { RootScreen } from './features/shell/RootScreen';
+import { useShellStore } from './features/shell/shellStore';
 
 /**
  * App shell.
@@ -14,10 +15,14 @@ import { RootScreen } from './features/shell/RootScreen';
  * maths rather than a missing style.
  */
 export default function App() {
+  // Read here rather than inside the provider so the whole tree re-renders on a theme change.
+  // `null` means follow the system setting, which is what `ThemeProvider` calls 'system'.
+  const themePreference = useShellStore((state) => state.themePreference);
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
-        <ThemeProvider>
+        <ThemeProvider preference={themePreference ?? 'system'}>
           <RootScreen />
         </ThemeProvider>
       </SafeAreaProvider>
