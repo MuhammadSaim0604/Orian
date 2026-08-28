@@ -32,7 +32,11 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.android)
 
-    implementation(libs.room.runtime)
+    // `api` rather than `implementation` for room-runtime: `AutomationDatabase` extends
+    // `RoomDatabase`, so anything holding one needs that supertype on its compile classpath.
+    // With `implementation` the app module fails to compile with "cannot access RoomDatabase"
+    // - which is why `WorkflowStore` exists to keep Room behind the boundary entirely.
+    api(libs.room.runtime)
     implementation(libs.room.ktx)
     ksp(libs.room.compiler)
 

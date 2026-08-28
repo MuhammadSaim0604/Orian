@@ -15,18 +15,22 @@ import kotlinx.coroutines.launch
 /**
  * Workflow persistence, exposed to React Native.
  *
+ * Talks to `WorkflowStore` rather than to Room directly. That is not just tidiness: Room's
+ * generated code needs its annotation processor on the compile classpath, and reaching past the
+ * facade made this file fail to compile in CI with "cannot access RoomDatabase" - the module
+ * boundary has to be real to be useful.
+ *
  * The workflow document crosses as a JSON **string** rather than a bridge map. Converting a
  * nested workflow to `ReadableMap` and back would need a Kotlin mirror of a schema that
  * TypeScript and third-party node packages own, and every node config change would break it.
- * As a string the document is opaque here, which is exactly what keeps this layer stable.
  *
- * Database work runs on IO with its own scope, cancelled when the module is torn down - a
- * write outliving the React context would otherwise resolve a promise nobody is listening to.
+ * Database work runs on IO with its own scope, cancelled when the module is torn down - a write
+ * outliving the React context would otherwise resolve a promise nobody is listening to.
  */
 class WorkflowStorageModule(
     reactContext: ReactApplicationContext,
 ) : ReactContextBaseJavaModule(reactContext) {
-    private val dao = AutomationDatabase.get(reactContext.applicationContext).workflows()
+    private val store = WorkflowStore(reactContext.applicationContext)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun getName(): String = NAME
@@ -43,13 +47,13 @@ class WorkflowStorageModule(
             try {
                 val array = WritableNativeArray()
 
-                for (summary in dao.listSummaries()) {
+                for (summary in store.list()) {
                     val map = WritableNativeMap()
                     map.putString("id", summary.id)
                     map.putString("name", summary.name)
                     map.putString("description", summary.description)
                     map.putInt("nodeCount", summary.nodeCount)
-                    // Doubles because the bridge has no 64-bit integer, and an epoch
+                    // A double because the bridge has no 64-bit integer, and an epoch
                     // millisecond value silently truncates as an Int.
                     map.putDouble("updatedAtEpochMs", summary.updatedAtEpochMs.toDouble())
                     array.pushMap(map)
@@ -62,7 +66,6 @@ class WorkflowStorageModule(
         }
     }
 
-    /** The full document, or null when there is no such workflow. */
     @ReactMethod
     fun load(
         id: String,
@@ -70,19 +73,13 @@ class WorkflowStorageModule(
     ) {
         scope.launch {
             try {
-                promise.resolve(dao.findById(id)?.document)
+                promise.resolve(store.load(id))
             } catch (error: Exception) {
                 promise.reject("storage_read_failed", error.message, error)
             }
         }
     }
 
-    /**
-     * Saves a workflow.
-     *
-     * The queryable columns are derived from the document here rather than passed separately,
-     * so a list row can never disagree with the document it describes.
-     */
     @ReactMethod
     fun save(
         id: String,
@@ -91,23 +88,7 @@ class WorkflowStorageModule(
     ) {
         scope.launch {
             try {
-                val existing = dao.findById(id)
-                val nowMs = System.currentTimeMillis()
-
-                dao.upsert(
-                    WorkflowEntity(
-                        id = id,
-                        name = WorkflowDocumentReader.readName(document),
-                        description = WorkflowDocumentReader.readDescription(document),
-                        document = document,
-                        nodeCount = WorkflowDocumentReader.readNodeCount(document),
-                        // Preserved on update, so re-saving does not make an old workflow look
-                        // newly created.
-                        createdAtEpochMs = existing?.createdAtEpochMs ?: nowMs,
-                        updatedAtEpochMs = nowMs,
-                    ),
-                )
-
+                store.save(id, document)
                 promise.resolve(null)
             } catch (error: Exception) {
                 promise.reject("storage_write_failed", error.message, error)
@@ -122,7 +103,7 @@ class WorkflowStorageModule(
     ) {
         scope.launch {
             try {
-                dao.deleteById(id)
+                store.remove(id)
                 promise.resolve(null)
             } catch (error: Exception) {
                 promise.reject("storage_write_failed", error.message, error)
@@ -134,7 +115,7 @@ class WorkflowStorageModule(
     fun count(promise: Promise) {
         scope.launch {
             try {
-                promise.resolve(dao.count())
+                promise.resolve(store.count())
             } catch (error: Exception) {
                 promise.reject("storage_read_failed", error.message, error)
             }
