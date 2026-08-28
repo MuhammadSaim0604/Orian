@@ -21,26 +21,29 @@ interface OverlayManager {
     /** Geometry of the visible overlay, or null when nothing is shown. */
     val currentSpec: OverlayWindowSpec?
 
+    /** A consistent snapshot, so a caller never reads a state that never existed. */
+    val state: OverlayState
+
     /**
      * Shows the overlay for [nodeId].
      *
-     * Returns false when the overlay permission has not been granted - the user
-     * must allow "display over other apps" in system settings first, and there is
-     * no way to grant it silently.
+     * Returns a typed failure rather than a boolean, because the reasons demand different
+     * responses: a permission denial needs a settings deep link, an empty node id is a
+     * programming error, and a rejected window is worth reporting but not the user's fault.
      */
     fun show(
         nodeId: String,
         layout: OverlayLayout = OverlayLayout.COMPACT,
-    ): Boolean
+    ): OverlayResult
 
     /** Switches between the compact and expanded toolsets. */
-    fun setLayout(layout: OverlayLayout): Boolean
+    fun setLayout(layout: OverlayLayout): OverlayResult
 
     /** Moves the overlay, clamped on screen. */
     fun moveTo(
         x: Int,
         y: Int,
-    ): Boolean
+    ): OverlayResult
 
     /** Hides the overlay and releases its window. */
     fun hide()

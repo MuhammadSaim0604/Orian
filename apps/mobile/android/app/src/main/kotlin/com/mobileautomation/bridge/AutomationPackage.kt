@@ -4,6 +4,7 @@ import com.facebook.react.ReactPackage
 import com.facebook.react.bridge.NativeModule
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.uimanager.ViewManager
+import com.mobileautomation.overlay.OverlayModule
 import com.mobileautomation.settings.ProviderSettingsModule
 import com.mobileautomation.storage.WorkflowStorageModule
 
@@ -23,6 +24,9 @@ class AutomationPackage : ReactPackage {
             ProviderSettingsModule(reactContext),
             // Phase 6: Room-backed workflow storage (ADR 0005).
             WorkflowStorageModule(reactContext),
+            // Phase 8: the Configure-with-AI floating window, which has to be a real
+            // WindowManager overlay because a modal dies the moment the user switches apps.
+            OverlayModule(reactContext),
         )
 
     override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> = emptyList()

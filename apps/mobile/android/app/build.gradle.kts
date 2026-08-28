@@ -101,5 +101,11 @@ dependencies {
     // Phase 6: Room-backed workflow persistence (ADR 0005).
     implementation(project(":storage"))
 
+    // Phase 8: the Configure-with-AI floating window. Declared explicitly because
+    // `:overlays` is deliberately not part of `:automation`'s `api` surface - the
+    // automation runtime does not draw windows, and coupling them would make every
+    // consumer of the runtime depend on the overlay layer.
+    implementation(project(":overlays"))
+
     testImplementation("junit:junit:4.13.2")
 }

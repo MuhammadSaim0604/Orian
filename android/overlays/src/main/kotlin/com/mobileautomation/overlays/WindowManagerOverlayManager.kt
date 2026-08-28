@@ -20,11 +20,14 @@ import android.view.WindowManager
  *
  * @param viewFactory supplies the content view. In Phase 8 this returns a React
  *   Native root view; keeping it injected means this class knows nothing about RN.
+ * @param onDetached called when the window goes away, so the RN side can release
+ *   its root view rather than leaking one per overlay session.
  */
 class WindowManagerOverlayManager(
     private val context: Context,
     private val geometry: OverlayGeometry,
     private val viewFactory: (nodeId: String) -> View,
+    private val onDetached: (nodeId: String) -> Unit = {},
 ) : OverlayManager {
     private val windowManager: WindowManager =
         context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -41,6 +44,19 @@ class WindowManagerOverlayManager(
 
     override val currentSpec: OverlayWindowSpec?
         get() = spec
+
+    override val state: OverlayState
+        get() =
+            if (view == null) {
+                OverlayState.HIDDEN
+            } else {
+                OverlayState(
+                    isShowing = true,
+                    boundNodeId = nodeId,
+                    layout = spec?.layout,
+                    spec = spec,
+                )
+            }
 
     /**
      * Whether the user has granted "display over other apps".
@@ -59,10 +75,14 @@ class WindowManagerOverlayManager(
     override fun show(
         nodeId: String,
         layout: OverlayLayout,
-    ): Boolean {
+    ): OverlayResult {
+        // An unbound overlay would leave the AI guessing which node it is configuring, so this
+        // is refused rather than shown with a placeholder.
+        if (nodeId.isBlank()) return OverlayResult.Failed(OverlayFailure.NO_BOUND_NODE)
+
         if (!hasOverlayPermission()) {
             Log.w(TAG, "Overlay permission not granted; refusing to show overlay")
-            return false
+            return OverlayResult.Failed(OverlayFailure.PERMISSION_DENIED)
         }
 
         // Showing for a different node replaces the window rather than stacking:
@@ -77,55 +97,61 @@ class WindowManagerOverlayManager(
             this.view = content
             this.spec = windowSpec
             this.nodeId = nodeId
-            true
+            OverlayResult.Shown(state) as OverlayResult
         }.getOrElse { error ->
             Log.e(TAG, "Failed to add overlay window", error)
             clearState()
-            false
+            OverlayResult.Failed(OverlayFailure.WINDOW_REJECTED)
         }
     }
 
-    override fun setLayout(layout: OverlayLayout): Boolean {
-        val content = view ?: return false
-        val current = spec ?: return false
+    override fun setLayout(layout: OverlayLayout): OverlayResult {
+        val content = view ?: return OverlayResult.Failed(OverlayFailure.NOT_SHOWING)
+        val current = spec ?: return OverlayResult.Failed(OverlayFailure.NOT_SHOWING)
 
         val updated = geometry.applyLayout(current, layout)
         return runCatching {
             windowManager.updateViewLayout(content, updated.toLayoutParams())
             spec = updated
-            true
+            OverlayResult.Shown(state) as OverlayResult
         }.getOrElse { error ->
             Log.e(TAG, "Failed to change overlay layout", error)
-            false
+            OverlayResult.Failed(OverlayFailure.WINDOW_REJECTED)
         }
     }
 
     override fun moveTo(
         x: Int,
         y: Int,
-    ): Boolean {
-        val content = view ?: return false
-        val current = spec ?: return false
+    ): OverlayResult {
+        val content = view ?: return OverlayResult.Failed(OverlayFailure.NOT_SHOWING)
+        val current = spec ?: return OverlayResult.Failed(OverlayFailure.NOT_SHOWING)
 
         val moved = geometry.moveWithinScreen(current, OverlayPoint(x, y))
         return runCatching {
             windowManager.updateViewLayout(content, moved.toLayoutParams())
             spec = moved
-            true
+            OverlayResult.Shown(state) as OverlayResult
         }.getOrElse { error ->
             Log.e(TAG, "Failed to move overlay", error)
-            false
+            OverlayResult.Failed(OverlayFailure.WINDOW_REJECTED)
         }
     }
 
     override fun hide() {
         val content = view ?: return
+        val detachedNode = nodeId
+
         // Removal can throw if the window is already gone (process restart, user
         // revoked the permission). Losing the view reference matters more than
         // the exception, so state is cleared either way.
         runCatching { windowManager.removeView(content) }
             .onFailure { Log.w(TAG, "Overlay window was already removed", it) }
         clearState()
+
+        // After clearing, so a listener that re-shows cannot be clobbered by the
+        // cleanup of the window it replaced.
+        if (detachedNode != null) onDetached(detachedNode)
     }
 
     private fun clearState() {
@@ -150,14 +176,28 @@ class WindowManagerOverlayManager(
                     WindowManager.LayoutParams.TYPE_PHONE
                 }
 
-            // NOT_FOCUSABLE keeps the keyboard and touch focus with the app
-            // underneath, so the overlay never steals input the user meant for the
-            // app it is inspecting. The overlay's own views still receive touches.
+            // NOT_FOCUSABLE keeps touch focus with the app underneath, so the overlay
+            // never steals input the user meant for the app it is inspecting. Its own
+            // views still receive touches.
+            //
+            // ALT_FOCUSABLE_IM is paired with it so the soft keyboard can still open for
+            // the overlay's own text input - without it, NOT_FOCUSABLE means the user can
+            // never type the instruction that the whole feature exists to accept.
             flags =
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
 
             format = PixelFormat.TRANSLUCENT
+
+            // Adjust rather than pan: panning would slide the toolset off screen when the
+            // keyboard opens, which is exactly when the user needs to see it.
+            //
+            // Deprecated for activity windows in favour of insets listeners, but this is a
+            // WindowManager overlay - it has no decor view to fit insets against, so the flag
+            // remains the mechanism that applies here.
+            @Suppress("DEPRECATION")
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         }
 
     private companion object {

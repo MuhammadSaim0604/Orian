@@ -5,6 +5,7 @@ import { useCanvasStore } from '../canvas/canvasStore';
 import { useExecutionStore } from '../canvas/executionStore';
 import { definitionFor } from '../canvas/registry';
 import { useSelectionStore } from '../canvas/selectionStore';
+import { useOverlayLauncher } from '../overlay/useOverlayLauncher';
 
 import { SchemaForm } from './SchemaForm';
 
@@ -14,9 +15,9 @@ import { SchemaForm } from './SchemaForm';
  * Subscribes to **one node** rather than the node map, so editing a config repaints this
  * panel and nothing else on the canvas (ADR 0003).
  *
- * Also where the Configure-with-AI entry point will live in Phase 8 - the button is present
- * and disabled, rather than absent, because a feature that appears from nowhere in a later
- * release is harder to find than one whose place is already visible.
+ * Also where Configure-with-AI starts. That button opens a real floating window rather than a
+ * modal, because the whole point is to keep the toolset visible while the user switches to the app
+ * they are configuring against.
  */
 export const NodeInspector = () => {
   const selectedNodeId = useSelectionStore((state) => state.selectedNodeId);
@@ -32,6 +33,8 @@ export const NodeInspector = () => {
   const nodeState = useExecutionStore((state) =>
     selectedNodeId === null ? undefined : state.nodeStates[selectedNodeId],
   );
+
+  const overlay = useOverlayLauncher();
 
   if (selectedNodeId === null || node === undefined) {
     return (
@@ -92,16 +95,37 @@ export const NodeInspector = () => {
         />
       </Card>
 
-      <Button
-        label="Configure with AI"
-        variant="secondary"
-        disabled
-        accessibilityLabel="Configure with AI, available in a later version"
-      />
-      <Text className="-mt-1 text-xs text-text-muted">
-        Coming soon: describe what this step should do while looking at the app, and the AI fills in
-        the configuration.
-      </Text>
+      {overlay.available && (
+        <View className="gap-2">
+          {overlay.showing ? (
+            <Button
+              label="Close the floating toolset"
+              variant="secondary"
+              onPress={overlay.close}
+            />
+          ) : (
+            <Button
+              label="Configure with AI"
+              variant="secondary"
+              onPress={() => overlay.open(selectedNodeId)}
+              accessibilityLabel="Open the floating toolset to configure this step with AI"
+            />
+          )}
+
+          <Text className="text-xs text-text-muted">
+            {overlay.showing
+              ? 'Switch to the app you want to automate — the toolset stays on top.'
+              : 'Opens a small floating panel that stays visible while you switch to another app, so the AI can see the screen you are configuring against.'}
+          </Text>
+
+          {overlay.error != null && <Text className="text-xs text-danger">{overlay.error}</Text>}
+
+          {overlay.needsPermission && (
+            // There is no runtime prompt for this permission; Settings is the only route.
+            <Button label="Open Android settings" size="sm" onPress={overlay.openSettings} />
+          )}
+        </View>
+      )}
 
       <Button
         label="Delete step"

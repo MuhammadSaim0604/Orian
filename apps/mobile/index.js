@@ -10,5 +10,13 @@ import { AppRegistry } from 'react-native';
 
 import { name as appName } from './app.json';
 import App from './src/App';
+import OverlayRoot from './src/overlay/OverlayRoot';
 
 AppRegistry.registerComponent(appName, () => App);
+
+// The Configure-with-AI overlay is a second React root, mounted by Kotlin into a
+// WindowManager window rather than into the activity. Registered here because
+// AppRegistry is process-wide, and the name must match
+// `OverlayReactHost.COMPONENT_NAME` - a mismatch produces an empty window with
+// only a log warning.
+AppRegistry.registerComponent('ConfigureWithAiOverlay', () => OverlayRoot);

@@ -56,6 +56,22 @@ export {
 export { invokeTool, tapCoordinate } from './tools';
 
 export {
+  OVERLAY_ERROR_CODES,
+  OverlayError,
+  type OverlayErrorCode,
+  type OverlayWindowState,
+  getOverlayState,
+  hasOverlayPermission,
+  hideOverlay,
+  isOverlayAvailable,
+  moveOverlay,
+  onOverlayDismissed,
+  requestOverlayPermission,
+  setOverlayExpanded,
+  showOverlay,
+} from './overlay';
+
+export {
   AUTOMATION_ERROR_CODES,
   AutomationError,
   type AutomationErrorCode,
