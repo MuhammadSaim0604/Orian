@@ -10,8 +10,8 @@ From `IMPORTANT_RULES.txt` — these override convenience in every case:
 2. **Never build the APK locally on this machine.** No `gradlew assemble*`, no `react-native run-android`, no local emulator builds.
 3. **All builds and tests run through GitHub Actions.** CI must build and test both the debug and release APKs.
 4. **After every meaningful chunk of work: commit, push, then verify CI with `gh`.** Watch the run, read failing logs, fix before moving on.
-5. **Maintain `tracking.md` at the repo root.** After each phase record what was implemented, which files changed, which phase is done, and which phases remain. Also you can read if for what previous ai agent completed.
-6. `plan_in_user_words/` is background context only — the original idea in the user's words. The authoritative plan is `Development_Plan/`.
+5. **Maintain `tracking.md` at the repo root.** After each step record what was implemented, which files changed, which step is done, and which remain. Read it first for what previous agents completed — and **never rewrite its history**; only append.
+6. `plan_in_user_words/` is background context only — the original idea plus the later corrections in the user's words. The authoritative plan is `Development_Plan/`.
 7. For Specific work load specific skill that needed.
 8. Before creating any files and logics make sure to analyze the existing directory structures and files so that if any file already present then you should not rewrite it and also if you write any thing then because of monorepo project make sure to properly hold functions and code logics to properly link and properly create files and logics....
 
@@ -19,9 +19,21 @@ Environment is Windows; the user works in PowerShell/cmd. Git remote: `https://g
 
 ## Current repository state
 
-Phases 0-9 are **complete** and CI is green on `main`. Milestones M3 and M4 are closed; **only Phase 10 remains**. The repo holds a working pnpm + Turborepo monorepo (15 packages), the RN app with a Skia workflow builder, an agent screen, a trace review screen and the Configure-with-AI floating overlay, eight Kotlin Gradle modules under `android/`, a typed native bridge, the node system and workflow engine, the AI agent, and the execution recorder. `tracking.md` is the living record - read it first to see exactly what exists and what was deliberately deferred.
+**The engines are built. The product around them is being rebuilt.**
 
-The commands below are real and current.
+Phases 0-9 shipped with CI green on `main`: a pnpm + Turborepo monorepo (15 packages), eight Kotlin Gradle modules under `android/`, a typed native bridge, the node system, the workflow engine, the AI agent, the execution recorder, a Skia canvas, and a first Configure-with-AI overlay. Roughly 1069 TypeScript tests and 498 Kotlin unit tests.
+
+Device testing then established that **the engines largely work and the product surface does not**. The UI was built as a six-tab home screen when the product is two separate modes; the agent stops the moment the user leaves the app; the overlay crashes; the canvas renders nodes as blank rectangles and its drag fights its selection.
+
+So **the plan is no longer organised by phases.** `Development_Plan/` is now organised as **13 numbered steps** that rebuild the product on top of the engines, fix what device testing found, and add what was missing — the mode-based shell, permission onboarding, background execution, OCR, and per-node screen tooling.
+
+Read in this order before starting work:
+
+1. `Development_Plan/README.md` — where the project stands and how the plan is organised.
+2. `Development_Plan/03_Issue_Register.md` — every confirmed defect, with IDs. Steps close specific IDs.
+3. `Development_Plan/00_Overview.md` — the two-mode product shape, which the current code does not implement.
+4. `tracking.md` — the living record of what exists and what was deliberately deferred.
+5. The step file you are about to work on, under `Development_Plan/steps/`.
 
 The commands below are real and current.
 
@@ -73,7 +85,13 @@ gh run view <run-id> --log-failed
 
 Full detail lives in `Development_Plan/architecture/`. The essentials that span multiple files:
 
-**Two engines, one runtime.** An **AI Agent Engine** (natural-language goal → plan → observe → choose tool → execute → replan) and a **Workflow Engine** (n8n-style node DAG) are independent and must never merge. Both call the identical **Android Tool Runtime** (`click`, `swipe`, `typeText`, `findElement`, `getUiTree`, `takeScreenshot`, `openApp`, `getContacts`, `createAlarm`, …).
+**Two modes, one runtime.** The app is **Agent Mode** and **Workflow Mode**, chosen from a mode switcher after onboarding — not tabs in one shell (ADR 0011). Each mode owns its navigation, settings, sessions, and memory. They share the Android tool runtime, the agent loop engine, the prompt engine, and the provider registry, and share no UI at all. **The current code still implements the old tabbed shell; Step 1 replaces it.**
+
+**Two engines, one runtime.** An **AI Agent Engine** (natural-language goal → plan → observe → choose tool → execute → replan) and a **Workflow Engine** (n8n-style node DAG) are independent and must never merge. Both call the identical **Android Tool Runtime** (`click`, `swipe`, `typeText`, `findElement`, `getUiTree`, `takeScreenshot`, `runOcr`, `openApp`, `getContacts`, `createAlarm`, …) by name through `invokeTool`. Every consumer — the agent, the engine, the overlays, the MCP server — uses that one dispatch. There is no second path to the device.
+
+**One loop engine, several agents.** `runAgent` takes its tools and prompts as inputs, so Agent Mode's agent and Workflow Mode's builder agent are the same engine with different configurations (ADR 0014). The builder agent deliberately has **no device tools**: an agent with `click` available turns "build me a workflow" into "do the thing once".
+
+**The agent loop runs in JavaScript, kept alive by a foreground service** (ADR 0012). The service keeps the process alive; it does not become the agent. Run state lives in a module-level controller, not a React component, so no unmount can abort a run.
 
 **Language boundary is the core principle.** React Native + TypeScript is the product/UI layer; Kotlin is the Android OS-integration layer (AccessibilityService, gesture engine, screen capture, UI tree parser, overlay manager, foreground service). Never implement deep automation in React Native. The bridge is Turbo Modules / JSI with a typed promise-based API.
 
@@ -81,13 +99,15 @@ Full detail lives in `Development_Plan/architecture/`. The essentials that span 
 
 **Generic core, Android as a package.** Node types (`input`, `action`, `condition`, `loop`, `variable`, `transform`, `trigger`) are device-agnostic in `core-nodes`; device capabilities live in `android-nodes`. Third-party packages declaring a node manifest are discovered from npm, validated against `workflow-schema`, and registered — the n8n community-node model.
 
-**Selectors, not coordinates.** Every recorded target keeps a priority chain: `resourceId → accessibility semantics → text/contentDescription → structural UI selector → relative position → coordinates → screenshot/vision fallback`. This is what makes replay robust; coordinates are a last resort.
+**Selectors, not coordinates.** Every recorded target keeps a priority chain: `resourceId → accessibility semantics → text/contentDescription → structural UI selector → relative position → OCR text → coordinates → vision`. This is what makes replay robust; coordinates are a last resort.
+
+**Perception is a fallback chain** (ADR 0013). Accessibility tree first — fastest, richest, real selectors. Then **OCR**, on-device, returning text with bounding boxes. Then **vision**, a screenshot to a vision-capable model. Some apps expose almost nothing through Accessibility, which is why the chain exists rather than a single source. OCR sits above raw coordinates because a text match survives layout shifts and is checkable; it sits below a tree text match because OCR misreads characters, so fuzzy matching is mandatory. OCR runs **on-device only** — a cloud service would break the promise that screen content leaves the phone only for the configured provider.
 
 **Execution recording is first-class.** During an agent run the recorder captures per step: screenshot path, UI hierarchy, package, activity, action, coordinates, nodeId, selected element, selector, timestamp, result. `ExecutionTrace = ExecutionStep[]` compiles into a reusable `Workflow` **deterministically** - no model involved, since the trace already says what happened. The generator's real work is choosing a more durable selector than the agent used, from the element the resolver matched.
 
-**Configure-with-AI overlay** is a native Kotlin overlay window hosting RN content, bound to a node ID. It sends the model node config + screen package/activity + UI tree + screenshot + available tools, and the model must return a **structured node configuration** validated by that node's Zod schema — never prose. It is a real `WindowManager` window rather than a modal because a modal dies the moment the user switches to the app they are configuring against, which means **two React roots in one process**: the bound node id crosses as an initial prop, and shared state comes from the Zustand store module both roots import.
+**Two overlays, both real windows.** The **agent status overlay** (Agent Mode) shows the running agent's task with a stop button and expands into a compact chat. The **node toolset overlay** (Workflow Mode) is bound to a node id and lets the user configure it against a live screen — it sends the model node config + screen package/activity + UI tree + OCR text + screenshot + available tools, and the model must return a **structured node configuration** validated by that node's Zod schema, never prose. Both are `WindowManager` windows rather than modals because a modal dies the moment the user switches to the app in question, which is exactly when both are needed. Each means **a second React root in one process**: bound state crosses as an initial prop, and shared state comes from the Zustand store module both roots import.
 
-**MCP is a boundary, not a feature.** `External AI → MCP → Agent Tool Gateway → Android Tool Runtime → Device`. Local-only and authenticated by default.
+**MCP is bidirectional.** As a server: `External AI → MCP → Agent Tool Gateway → Android Tool Runtime → Device`, local-only and authenticated by default, tool list generated from `allToolDefinitions()` rather than restated. As a client: external MCP servers' tools merge into Agent Mode's tool set, marked as external.
 
 ### Dependency direction
 
@@ -96,7 +116,7 @@ Full detail lives in `Development_Plan/architecture/`. The essentials that span 
 ```
 apps/mobile → ui, workflow-engine, core-nodes, android-nodes, node-sdk, ai-agent,
               prompt-engine, execution-recorder, screen-inspector, native-automation
-native-automation → android/bridge → android/automation → the five capability modules
+native-automation → android/bridge → android/automation → the capability modules
 apps/mobile/android/app → android/bridge, android/storage, android/overlays
 workflow-engine → node-sdk, workflow-schema, shared-types
 core-nodes / android-nodes → node-sdk, tool-sdk, shared-types
@@ -113,14 +133,17 @@ mcp-server → tool-sdk, shared-types
 
 `android/storage` keeps Room behind `WorkflowStore`, its only public type. Reaching past it makes the app module need Room on its own classpath — which is how the Phase 6 CI failure happened.
 
-`packages/native-automation` is the **only** place TypeScript touches the native layer. Nothing else may import `NativeModules`; ESLint enforces the no-upward-import rule. `invokeTool` there is the by-name tool dispatch shared by the agent and the MCP server.
+`android/ocr` (Step 5) depends on `screen` for the bitmap and **must not depend on `accessibility`** — OCR is an independent way of seeing, and coupling the two would make the fallback chain circular.
 
-### Two contracts that are duplicated on purpose
+`packages/native-automation` is the **only** place TypeScript touches the native layer. Nothing else may import `NativeModules`; ESLint enforces the no-upward-import rule. `invokeTool` there is the by-name tool dispatch shared by the agent, the workflow engine, the overlays, and the MCP server.
 
-Both are cross-language, so a parity test on each side restates the other's list. Changing one side alone fails the build — that is the point.
+### Three contracts that are duplicated on purpose
+
+Each is restated in two places so a parity test can catch drift. Changing one side alone should fail the build — that is the point, though the third has no test yet.
 
 - **Tool names.** `DeviceTool` (`android/automation`) and `TOOL_NAMES` (`packages/tool-sdk`). If they drift, the AI can name a tool it cannot call.
-- **UI-tree keys.** `UiNodeAttribute`/`UiTreeAttribute` (`android/accessibility`) and `UI_NODE_ATTRIBUTES`/`UI_TREE_ATTRIBUTES` (`packages/screen-inspector`). Bump `UI_TREE_SCHEMA_VERSION` (currently 2) on any key change. A Kotlin test catches the Kotlin half; nothing catches a stale TS list, so edit both in one commit.
+- **UI-tree keys.** `UiNodeAttribute`/`UiTreeAttribute` (`android/accessibility`) and `UI_NODE_ATTRIBUTES`/`UI_TREE_ATTRIBUTES` (`packages/screen-inspector`). Bump `UI_TREE_SCHEMA_VERSION` (currently 2) on any key change. A Kotlin test catches the Kotlin half; **nothing catches a stale TS list** (issue G7), so edit both in one commit until Step 5 adds the test.
+- **Node/tool maps.** `NODE_TO_TOOL` (`packages/android-nodes`) and `TOOL_TO_NODE` (`packages/execution-recorder`) are inverse maps in different packages with **no parity test** (issue G8). If a tool is added to one and not the other, a recorded step silently produces no node, reported as "no workflow step exists for this action yet" — which reads like a known limitation rather than a bug. Step 11 adds the test.
 
 ### Traps that have already cost time
 
@@ -131,34 +154,52 @@ Both are cross-language, so a parity test on each side restates the other's list
 - **Provider credentials never enter JS state.** The API key lives in the Android Keystore; `getSettings` returns `hasApiKey` rather than the value, and the TS provider takes `apiKey` as a function read at request time. Never render it, log it, or put it in a prompt.
 - **Gesture Handler has three easily-missed wiring requirements**: imported first in `index.js`, `MainActivity.onCreate` passing `null` to `super`, and a `flex: 1` `GestureHandlerRootView`. Each fails silently or obscurely rather than with a useful error.
 
-## Phase execution
+## What phases 0-9 built (historical)
 
-Each file in `Development_Plan/phases/` has goals, deliverables, and a definition of done. Read the phase file before starting it, and honour its definition of done rather than declaring the phase finished when the code compiles.
+The previous plan was organised into phases 0-10 and all of 0-9 shipped. `Development_Plan/02_What_Was_Built.md` is the one-page record; `tracking.md` has the detail and the reasoning. In brief: phase 1 the monorepo and CI, phase 2 the Kotlin automation core, phase 3 the native bridge, phases 4-5 the node system and workflow engine, phase 6 the canvas and builder UI, phase 7 the AI agent, phase 8 the first Configure-with-AI overlay, phase 9 the execution recorder and generator.
 
-**Phases 0-9 are complete**, so Milestones M3 and M4 are closed and only Phase 10 remains. The order below was agreed with the user and **deviated from the plan's strict numeric sequence**; the dependency graph in `01_Roadmap.md` permitted it, since Phase 7 needs only 3 and 4, not 5 or 6.
+That work is why the steps below are a product rebuild rather than a rewrite: the engines exist and are tested. Do not resurrect the phase structure — the step files supersede it.
 
-| Order | Phase | Scope | Why here |
-| --- | --- | --- | --- |
-| 1 | **4 + 5 together** ✅ | Node SDK & Zod schema, then the workflow engine | The executor contract and node config schemas have no consumer until the engine exists; building them apart means guessing the shape and reworking it |
-| 2 | **7** ✅ | AI agent engine | Needs only 3 and 4. Pure TS, testable offline with a mocked provider. **Recorder seam built in** - `toolExecuted` carries everything Phase 9 needs, so that phase never reopens the loop |
-| 3 | **6** ✅ | Workflow builder UI (Skia canvas, Zustand) | The largest, most iterative phase; kept alone. With 7 done it wired the real "Create by AI" entry point instead of a stub |
-| 4 | **9** ✅ | Execution recorder, generator, review UI | The review screen needs 6's canvas, so this follows it |
-| 5 | **8** ✅ | Configure-with-AI overlay | The hardest integration: needs 2's overlay, 6's node editor, and 7's agent all working - all three were by then |
-| 6 | **10** | MCP server, npm publishing | MCP is a small self-contained TS unit |
+## Step execution
 
-**Hardening is continuous, not a phase.** Permission UX, error recovery, foreground-service reliability, and performance belong to whichever phase introduces the surface. Phase 10 keeps only MCP and distribution.
+Each file in `Development_Plan/steps/` has a goal, what is wrong today, deliverables, tasks, and a definition of done. Read the step file before starting it, and honour its definition of done rather than declaring the step finished when the code compiles. Every step names the issue IDs from `03_Issue_Register.md` that it closes; a step is not done while one of its issues survives.
 
-Milestones for reference: M1 = phases 0-1, M2 = 2-3, M3 = 4-6, M4 = 7-9, M5 = 10.
+| Step | Scope | Closes |
+| --- | --- | --- |
+| **1** | App shell & onboarding — welcome, mode switcher, root settings, delete the dead tabs | A1–A5 |
+| **2** | Permission engine — required vs optional, rationale, just-in-time, capability status | E1–E4 |
+| **3** | Background execution — foreground service + agent status overlay | B1, B2 |
+| **4** | Agent Mode — chat sessions, provider registry, tools management | B3, B4, B6 |
+| **5** | OCR & perception chain — on-device OCR tool + node; wire the vision fallback | F1, F2, G7 |
+| **6** | Workflow Mode shell — workflow list, loading screen, mode settings | A6 |
+| **7** | Canvas rebuild — node text, drag vs selection, zoom controls | C1, C2, C3, G2 |
+| **8** | Node editor & palette — searchable palette, form fixes, permission-aware nodes | C4 |
+| **9** | Node toolset overlay — fix the crash, restrict to screen-targeting nodes | C5, C6 |
+| **10** | Workflow builder agent — isolated sessions, chat UI, a real loop | D1, D2, D3 |
+| **11** | Generation & recorder quality — valid generated workflows, per-step screenshots | G4, G8 |
+| **12** | MCP server & clients, npm distribution | B5 |
+| **13** | Device verification & hardening | G1, G3, G5, G6 |
 
-Cross-cutting from Phase 1 onward: testing, centralized theming, prompt engineering (7-9), and permission gating.
+Order matters and the reasoning is in `01_Roadmap.md`. The three that are easiest to get wrong: **Step 1 first** because everything needs somewhere to live; **Step 3 before Step 4** because an agent that dies when the user leaves the app makes Agent Mode untestable; **Step 9 after Steps 7 and 8** because the toolset writes into the node editor, and fixing it against a broken editor means fixing it twice.
+
+**Do not rewrite the engines.** The Kotlin core, the bridge, the node system, the workflow engine, the agent loop, the prompt engine, and the recorder are sound. Extend them where a step needs a new capability. What is being rebuilt is the **product surface**: screens, navigation, canvas interaction, and the overlays.
+
+**Hardening is continuous.** Permission UX, error recovery, foreground-service reliability, and performance belong to whichever step introduces the surface. Step 13 is the device sweep and release readiness, not a dumping ground.
+
+Milestones: M6 = steps 1-3, M7 = 4-5, M8 = 6-9, M9 = 10-11, M10 = 12-13.
 
 ### Outstanding device verification
 
-Phases 2, 3, 5, 6, 7, 8, and 9 all have definition-of-done items that need physical hardware and are **not yet done** - they are covered only by emulator instrumentation and by tests against fakes. One session can now clear all seven, because they chain: run the agent (7), which records a trace (9), generate a workflow, run it from the canvas (5), which exercises the bridge (3) and the Kotlin core (2), judging canvas smoothness while doing it (6), then open the overlay on one of its steps (8). This is the single largest gap in the project; see the table in `tracking.md`.
+Almost nothing has been proven against hardware — every layer is tested against fakes, and the device testing that has happened is what produced the issue register. Step 13 runs the whole chain in one session, in an order where each stage feeds the next so a failure localises itself: onboarding → agent outside the app → OCR on a tree-less screen → the recorded trace → generation → running the workflow from the canvas → the toolset overlay → a force-stop persistence check. See the table in `tracking.md`.
 
 ## Skills
 
-The subsystem playbooks are **already installed in your AI agent** — they are not files in this repository. Load the matching skill before starting that subsystem: `monorepo-master` (phases 1, 4, 10), `theme-and-styling-nativewind` (1, 6, 8), `testing-quality` (all), `kotlin-native-module` (2, 3, 8), `node-sdk-author` (4, 5, 9), `rn-ui-builder-zustand` (6, 8), `ai-agent-builder` (7, 8, 9), `prompt-engine` (7, 8, 9), `mcp-server` (10). Each phase file also lists its skills under "Skills to load".
+The subsystem playbooks are **already installed in your AI agent** — they are not files in this repository. Load the matching skill before starting that subsystem: `monorepo-master` (steps 5, 12), `theme-and-styling-nativewind` (1, 4, 6, 7, 8, 9), `testing-quality` (all), `kotlin-native-module` (2, 3, 5, 9), `node-sdk-author` (5, 8, 11, 12), `rn-ui-builder-zustand` (1, 4, 6, 7, 8, 9, 10), `ai-agent-builder` (4, 9, 10, 11), `prompt-engine` (4, 5, 9, 10, 11), `mcp-server` (12). Each step file also lists its skills under "Skills to load".
+
 ## Sensitive surface
 
-`AccessibilityService`, `SYSTEM_ALERT_WINDOW`, foreground service, MediaProjection screen capture, and contacts are high-trust permissions — request each with explicit rationale and user opt-in, and gate per phase. AI provider keys go in Android secure storage, never plain SQLite, never logged. Accessibility-driven automation has Play Store policy implications; sideload-vs-Play distribution is an open question flagged in Phase 0.
+`AccessibilityService`, `SYSTEM_ALERT_WINDOW`, the default assistant role, usage access, foreground service, MediaProjection screen capture, and contacts are high-trust permissions. `conventions/Permission_Model.md` now splits them into a **required** tier granted during onboarding and an **optional** tier requested at the moment of need — request each with explicit rationale and user opt-in, never fake a grant, and never automate the settings screen.
+
+OCR runs **on-device only**. Screen content leaves the phone only for the provider the user configured, and only for a vision call they triggered.
+
+AI provider keys go in Android secure storage, never plain SQLite, never logged, never in a prompt, and never reachable over MCP. Accessibility-driven automation has Play Store policy implications; sideload-vs-Play distribution is still open and is decided in Step 13.

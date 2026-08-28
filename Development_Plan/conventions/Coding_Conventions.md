@@ -119,6 +119,6 @@ Subject is imperative, lower-case, no trailing period, under ~70 characters.
 
 ## Branches and CI
 
-- Work on `main` for scaffolding phases; use `feat/<scope>-<short-desc>` branches for larger feature work.
+- Work on `main` for small, self-contained changes; use `feat/<scope>-<short-desc>` branches for larger feature work.
 - After every meaningful chunk: commit, push, then verify the GitHub Actions run with `gh` and fix failures before continuing.
 - **Never build the APK locally.** All Android builds and tests run in CI.

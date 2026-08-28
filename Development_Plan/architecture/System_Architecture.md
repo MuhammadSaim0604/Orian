@@ -2,94 +2,137 @@
 
 ## Mental model
 
-Two engines share one Android capability layer.
+**Two modes, one runtime.** Agent Mode and Workflow Mode are separate products sharing a device layer, an agent loop, a prompt engine, and a provider registry. They share no UI, no navigation, no sessions, and no settings.
 
 ```
-                     Mobile Automation Platform
-                             │
-             ┌────────────────┴───────────────┐
-             │                               │
-       AI Agent Engine                 Workflow Engine
-             │                               │
-      Agent Loop / Planner             Workflow DAG
-      Tool Selection                   Node Execution
-      Memory                           Conditions
-      Screen Reasoning                 Loops / Variables
-      Replanning                       
-             │                               │
-             └────────────────┬───────────────┘
-                             │
-                    Automation Runtime
-                             │
-                 ┌───────────┴───────────┐
-          Android Tool Layer       Accessibility
-          (contacts, apps,          (UI tree, gestures,
-           screenshots, intents,      click, swipe, long
-           clipboard, alarms…)        press, text input)
-                 └───────────┬───────────┘
-                             │
-                           Kotlin
+                        Mobile Automation Platform
+                                   │
+                         Welcome → Permissions
+                                   │
+                            Mode switcher ──────→ Root settings
+                                   │                (providers, theme,
+                  ┌────────────────┴────────────────┐   data, permissions)
+                  │                                 │
+            Agent Mode                       Workflow Mode
+       chat · sessions · tools           workflows · canvas · builder agent
+       MCP clients · overlay             node toolset overlay
+                  │                                 │
+         AI Agent Engine                    Workflow Engine
+         loop · planner · memory            DAG · nodes · conditions
+         tool selection                     loops · variables
+                  │                                 │
+                  └────────────────┬────────────────┘
+                                   │
+                     shared: agent loop engine, prompt engine,
+                             provider registry, tool-sdk
+                                   │
+                          Automation Runtime
+                                   │
+        ┌──────────────┬───────────┴───────────┬──────────────┐
+   Accessibility     Gestures              Screen + OCR    Android Tools
+   UI tree,          click, swipe,         capture,        contacts, apps,
+   selectors         long press, type      text recog.     alarms, intents,
+                                                           clipboard…
+        └──────────────┴───────────┬───────────┴──────────────┘
+                                   │
+                                 Kotlin
 ```
 
 ## Layered view
 
 ```
 React Native (product layer)
-│  Workflow Canvas · Node Editor · AI Floating Toolset · Screen Inspector
-│  Workflow Debugger · Execution Logs · Agent UI · Settings
+│  Onboarding · Mode switcher · Root settings
+│  Agent Mode:    chat · sessions · provider config · tools management · MCP clients
+│  Workflow Mode: workflow list · canvas · node editor · builder agent · trace review
+│  Overlay roots: agent status overlay · node toolset overlay
 │
-│  RN Turbo Modules / JSI
+│  RN Turbo Modules / JSI   ← packages/native-automation is the only crossing
 ▼
 Kotlin (Android OS integration layer)
-├── AccessibilityService
-├── Gesture Engine
-├── Screen Capture
-├── UI Tree Parser
-├── Android APIs (contacts, alarms, intents…)
-├── App Manager
-├── Overlay Manager
-├── Foreground Service
-└── Automation Runtime
+├── AccessibilityService          ├── OCR engine
+├── Gesture Engine                ├── Overlay Manager
+├── Screen Capture                ├── Foreground Service
+├── UI Tree Parser                ├── Permission registry
+├── Android APIs                  └── Automation Runtime
+└── Room storage
 ```
 
-**Rule:** RN owns product/UI; Kotlin owns deep automation. Do not implement automation in RN.
+**Rule:** RN owns product and UI; Kotlin owns deep automation. Never implement automation in RN.
 
 ## Key architectural decisions
 
-1. **Generic node system, Android nodes as a package.** The core node types (`Input, Action, Condition, Loop, Variable, Transform, Trigger`) are device-agnostic. Android capabilities live in a separate `android-nodes` package. This mirrors n8n's core-vs-integration split and keeps the engine portable.
+1. **Two modes, not two tabs.** Each mode is a whole interface with its own navigation stack, settings, sessions, and memory. A tab bar would force both into one navigation model and make "switch modes" meaningless. See ADR 0011.
 
-2. **Workflow definition independent of React Native.** A workflow is plain JSON (metadata, variables, nodes[], edges[]). Flow: `RN → Workflow JSON → Workflow Engine → Node Registry → Node Executor → Android Tool Runtime`. The same workflow could run from another environment.
+2. **The agent loop runs in JavaScript, kept alive by a foreground service.** The service keeps the process alive; it does not become the agent. Reimplementing the loop in Kotlin would create a second agent that can disagree with the tested one. See ADR 0012.
 
-3. **Two engines never merge.** AI Agent and Workflow Engine stay separate but both call the identical `Android Tool Runtime` functions (`click, swipe, findElement, getUiTree, screenshot, typeText, openApp, pressBack, getContacts, createAlarm…`).
+3. **Perception is a fallback chain, not a single source.** Accessibility tree → OCR → vision, tried in that order, with the AI choosing how far to descend. The tree is fastest and richest; OCR is on-device and verifiable; vision is the last resort. See ADR 0013.
 
-4. **Execution recording is a first-class subsystem.** Not an afterthought — it produces the rich traces that workflow generation depends on.
+4. **Generic node system, Android nodes as a package.** Core node types (`Input, Action, Condition, Loop, Variable, Transform, Trigger`) are device-agnostic. Android capabilities, including OCR, live in `android-nodes`.
 
-5. **Robust selectors over coordinates.** Every recorded target keeps a priority chain of selectors with a coordinate/vision fallback.
+5. **Workflow definition independent of React Native.** A workflow is plain JSON (metadata, variables, nodes[], edges[]). Flow: `RN → Workflow JSON → Workflow Engine → Node Registry → Node Executor → Android Tool Runtime`.
 
-6. **MCP as a clean boundary.** External AI → MCP → Agent Tool Gateway → Android Tool Runtime → Device. External agents use the phone without knowing the internal workflow engine.
+6. **Two engines never merge.** The AI agent and the workflow engine stay separate but both call the identical Automation Runtime functions.
 
-## The shared Android Tool Runtime
+7. **One agent loop engine, several agents.** Agent Mode's agent and Workflow Mode's builder agent are the same `runAgent` with different tool sets, prompts, and sessions. The builder agent deliberately has **no device tools** — building a workflow is not performing it. See ADR 0014.
 
-Both engines depend on one interface. Example tool surface:
+8. **Execution recording is a first-class subsystem.** It produces the traces workflow generation depends on.
+
+9. **Robust selectors over coordinates.** Every recorded target keeps a priority chain with OCR and vision fallbacks.
+
+10. **MCP is bidirectional.** We expose our tools as a server, and we consume external servers as a client whose tools merge into Agent Mode's tool set.
+
+## The shared Automation Runtime
+
+Both modes depend on one interface, dispatched by name through `invokeTool`. Every consumer — the agent, the workflow engine, the node toolset overlay, the MCP server — uses that same dispatch. There is no second path to the device.
 
 ```
-click(selector)          swipe(from, to)        longPress(selector)
-typeText(selector, text) findElement(selector)  waitForElement(selector, timeout)
-getUiTree()              takeScreenshot()       pressBack() / pressHome()
-openApp(package)         listApps()             getCurrentScreen()
-getContacts()            createAlarm(config)     readClipboard() / writeClipboard()
-sendNotification(cfg)    launchIntent(intent)    getSystemSetting(key)
+click(selector)            swipe(from, to)          longPress(selector)
+typeText(selector, text)   findElement(selector)    waitForElement(selector, timeout)
+getUiTree()                takeScreenshot()         pressBack() / pressHome()
+runOcr()                   findTextOnScreen(text)   getCurrentScreen()
+openApp(package)           listApps()               getContacts()
+createAlarm(config)        readClipboard()          writeClipboard()
+sendNotification(cfg)      launchIntent(intent)     getSystemSetting(key)
+controlMedia(cmd)          adjustVolume(dir)
 ```
 
-The TS side sees typed wrappers (via Turbo Modules); Kotlin implements them against Android APIs and the Accessibility layer.
+The TS side sees typed wrappers via Turbo Modules; Kotlin implements them against Android APIs, the Accessibility layer, and the OCR engine.
 
-## AI Agent loop
+## The perception chain
+
+```
+                    "find the Send button"
+                             │
+                   ┌─────────▼─────────┐
+                   │ Accessibility tree│  fast · rich · durable selectors
+                   └─────────┬─────────┘
+                        found?│ no
+                   ┌─────────▼─────────┐
+                   │       OCR         │  on-device · text + bounding boxes
+                   └─────────┬─────────┘
+                        found?│ no
+                   ┌─────────▼─────────┐
+                   │  Vision (model)   │  screenshot → coordinates · costs money
+                   └───────────────────┘
+```
+
+Selector priority for a resolved target:
+
+```
+resourceId → accessibility semantics → text/contentDescription
+   → structural UI selector → relative position → OCR text → coordinates → vision
+```
+
+OCR sits above raw coordinates because a text match survives layout shifts and is checkable — the text either matches or it does not.
+
+## AI agent loop
 
 ```
 Goal → Plan → Observe → Choose Tool → Execute → Observe → Replan → … → Done
 ```
 
-Perception = screenshot + UI tree. Actions = Android Tool Runtime calls. The loop is driven by a Chat Completions provider through the prompt engine.
+Perception is the chain above. Actions are Automation Runtime calls. The loop is driven by a Chat Completions provider through the prompt engine, and it **runs inside a foreground service** so it survives the user leaving the app. Progress surfaces through the agent status overlay.
 
 ## Workflow execution
 
@@ -99,23 +142,29 @@ Trigger → Node → Condition ──true─→ Node
                  → Loop → Node → Done
 ```
 
-The engine walks the DAG, resolves each node type against the Node Registry, and invokes the executor which calls the Android Tool Runtime.
+The engine walks the DAG, resolves each node type against the Node Registry, and invokes the executor, which calls the Automation Runtime.
 
-## Configure-with-AI overlay
+## The two overlays
+
+Both are `WindowManager` windows hosting React content as second React roots, sharing state with the app only through the Zustand store modules both roots import.
 
 ```
-Node Editor ──Configure with AI─→ AI Configuration Overlay
-   ├─ Current Node        ├─ Element Inspector
-   ├─ Screen              ├─ Coordinate Inspector
-   ├─ UI Tree             ├─ Test Action
-   ├─ Screenshot          ├─ Ask AI
-   └─ Available Tools     └─ More Tools (eye toggle)
+Agent status overlay (Agent Mode)      Node toolset overlay (Workflow Mode)
+├─ current task                        ├─ Current node    ├─ Element inspector
+├─ stop                                ├─ Screen          ├─ Coordinate inspector
+└─ expanded: tool calls, thinking,      ├─ UI tree         ├─ OCR
+   input wired to the session          ├─ Screenshot      ├─ Test action
+                                       └─ Available tools ├─ Ask AI
+                                                          └─ eye toggle
 ```
 
-The overlay is a native Kotlin overlay window hosting RN content, bound to a node ID so the AI always knows which node it is configuring. The AI returns a **structured config object**, and the node editor applies it.
+A modal cannot do either job: it dies the moment the user switches to the app being automated, which is exactly when both are needed.
 
-## Security & permissions (sensitive)
+The node toolset is bound to a node id, so the AI always knows what it is configuring, and it returns a **structured config object** validated against that node's own Zod schema — never prose.
 
-- `AccessibilityService`, `SYSTEM_ALERT_WINDOW` (overlay), foreground service, screen capture, and contacts are high-trust permissions. Each must be requested with clear rationale and gated behind explicit user opt-in.
-- The MCP server exposes device control — it must require authentication and run locally by default. Never expose it to the network without explicit user action.
-- AI provider keys are secrets: store in secure storage, never log, never send to third parties beyond the configured provider.
+## Security & permissions
+
+- `AccessibilityService`, `SYSTEM_ALERT_WINDOW`, assistant role, usage access, foreground service, screen capture, and contacts are high-trust. Each is requested with a rationale and gated behind explicit opt-in. See `conventions/Permission_Model.md`.
+- OCR runs **on-device**. Screen content leaves the phone only for the provider the user configured, and only for a vision call they triggered.
+- The MCP server exposes full device control: authentication mandatory, localhost by default, every call validated, destructive tools gated, and an audit log.
+- AI provider keys live in the Android Keystore. They are never rendered, logged, placed in a prompt, or reachable over MCP.

@@ -160,3 +160,5 @@ temp/
 *.tmp
 *.bak
 *.orig
+
+plan_in_user_words/

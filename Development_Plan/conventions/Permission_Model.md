@@ -1,59 +1,103 @@
 # Permission Model
 
-This app requests some of the most powerful permissions Android offers. Every one is requested with an explicit rationale, gated behind user opt-in, and introduced only in the phase that needs it. Nothing is enabled silently.
+This app requests some of the most powerful permissions Android offers. Every one is requested with an explicit rationale and gated behind user opt-in. Nothing is enabled silently.
 
 ## Guiding rules
 
-1. **Never enable a sensitive capability silently.** Each requires an in-app rationale screen before the system prompt or settings redirect.
-2. **Request at the moment of need**, not all at once on first launch.
-3. **Degrade gracefully.** If a permission is denied, the dependent feature is disabled with a clear explanation - the app must not crash or nag in a loop.
-4. **Revocable.** The user can turn any capability off from Settings inside the app, and the app must stop using it immediately.
-5. **Visible when active.** Automation running in the background always shows a persistent foreground-service notification.
-6. **Secrets are separate.** AI provider keys are not an Android permission concern - they live in Keystore-backed secure storage, are never logged, and never enter prompts.
+1. **Never enable a sensitive capability silently.** Each requires an in-app rationale before the system prompt or settings redirect.
+2. **Two tiers.** A small **required** set is granted during onboarding, because the product does not function without it. Everything else is **optional** and requested at the moment of need.
+3. **Never fake a grant and never automate the settings screen.** Accessibility-driven automation is already policy-sensitive; automating its own permission grant would be indefensible.
+4. **Read state live.** Capability state is checked on every use, never cached. A cached value means acting on a permission the user revoked a minute ago.
+5. **Degrade gracefully.** If a permission is denied, the dependent feature disables with a clear explanation. The app must not crash or nag in a loop.
+6. **Revocable.** The user can turn any capability off from system settings, and the app must notice without a restart.
+7. **Visible when active.** Automation running in the background always shows a persistent foreground-service notification.
+8. **Secrets are separate.** AI provider keys are not an Android permission concern — they live in Keystore-backed storage, are never logged, and never enter prompts.
 
-## The sensitive surface
+## Tier 1 — required, granted during onboarding
 
-| Capability | Mechanism | Why it is needed | Introduced |
-|-----------|-----------|------------------|-----------|
-| **Accessibility service** | `AccessibilityService` (user enables in system settings) | Read the on-screen UI hierarchy and dispatch gestures - the core of all automation | Phase 2 |
-| **Overlay window** | `SYSTEM_ALERT_WINDOW` | The Configure-with-AI floating toolset must stay on top of other apps | Phase 2 (host), Phase 8 (feature) |
-| **Foreground service** | `FOREGROUND_SERVICE` + notification channel | Keep automation alive while the user is in another app | Phase 2 |
-| **Screen capture** | `MediaProjection` (per-session user consent) | Screenshots for AI screen reasoning and the vision fallback selector | Phase 2 |
-| **Contacts** | `READ_CONTACTS` | Resolve a person by name for goals such as "message Robert" | Phase 2 (tool), on demand at runtime |
-| **Alarms / scheduling** | `SCHEDULE_EXACT_ALARM`, AlarmManager | The `createAlarm` tool and time-based workflow triggers | Phase 2 (tool) |
-| **Notifications** | `POST_NOTIFICATIONS` | Foreground-service notification and workflow result notices | Phase 2 |
-| **Query installed apps** | `QUERY_ALL_PACKAGES` | `openApp` / `listApps` need to resolve package names | Phase 2 |
-| **Network** | `INTERNET` | Calls to the configured Chat Completions provider | Phase 7 |
+Onboarding cannot be completed without these. The product does not work at all otherwise.
 
-## Accessibility service - the highest-trust grant
+| Capability | Mechanism | Why it is needed |
+| --- | --- | --- |
+| **Accessibility service** | user enables in system settings | Read the on-screen UI hierarchy and dispatch gestures — the core of all automation |
+| **Display over other apps** | `SYSTEM_ALERT_WINDOW` | The agent status overlay and the node toolset overlay must stay on top of other apps |
+| **Default assistant role** | assistant role request | More precise screen reading than Accessibility alone provides |
+| **Usage access** | `PACKAGE_USAGE_STATS` | Reliable detection of which app is in the foreground |
+| **Notifications** | `POST_NOTIFICATIONS` | The foreground-service notification, which is how the user knows automation is running |
 
-This is the permission that makes the product possible and also the one most open to abuse. Treatment:
+Four of the five have **no runtime prompt** — they can only be granted in system settings. The app explains each, deep-links to the right settings page, and re-checks on resume. Onboarding is designed around that round trip rather than pretending it is a dialog.
 
-- A dedicated onboarding screen explains, in plain language, that the service can read screen content and perform taps and swipes on the user's behalf, and that it is used only to run automations the user creates or requests.
-- The user is then taken to system Accessibility settings; the app never fakes or automates that grant.
+## Tier 2 — optional, requested at the moment of need
+
+Offered during onboarding with a clear *skip*, and requested again when something actually needs them.
+
+| Capability | Mechanism | Requested when |
+| --- | --- | --- |
+| **Screen capture** | `MediaProjection` (per-session consent) | OCR, vision fallback, or a screenshot tool is first used |
+| **Contacts** | `READ_CONTACTS` | A contacts node is added, or the contacts tool is enabled |
+| **Phone / calling** | `CALL_PHONE` | A calling node is added, or the calling tool is enabled |
+| **SMS** | `SEND_SMS`, `READ_SMS` | An SMS node is added, or the SMS tool is enabled |
+| **Calendar** | `READ_CALENDAR`, `WRITE_CALENDAR` | A calendar node is added or its tool enabled |
+| **Exact alarms** | `SCHEDULE_EXACT_ALARM` | An alarm node is added, or a time trigger is configured |
+| **Query installed apps** | `QUERY_ALL_PACKAGES` | `openApp` / `listApps` resolve a package name |
+| **Network** | `INTERNET` | Any call to the configured provider |
+
+Two just-in-time paths, both required:
+
+- **Adding a node** that needs a capability requests it there and then. The node is added either way, with a visible warning if declined — a workflow with a step that cannot run is better than a silently missing step.
+- **Toggling a tool on** in Agent Mode's tools management page requests it. A tool whose permission is already granted simply enables.
+
+## Accessibility service — the highest-trust grant
+
+This is the permission that makes the product possible and the one most open to abuse.
+
+- A dedicated onboarding screen explains in plain language that the service can read screen content and perform taps and swipes on the user's behalf, and that it is used only for automations the user creates or requests.
+- The user is then taken to system Accessibility settings. The app never fakes or automates that grant.
 - The app shows the current service state and a one-tap route to disable it.
+- If the service dies or is revoked mid-run, the run stops cleanly and says why.
 - Screen content is processed on-device by default. It leaves the device **only** when the user runs an AI feature, and only to the provider they configured.
 
-## Screen capture
+## Screen capture and OCR
 
-- MediaProjection consent is requested per session; the app does not attempt to persist a capture token across reboots.
-- Screenshots are written to app-private storage, referenced from the database by path, and are deletable from Settings.
-- A screenshot is sent to the AI provider only when an AI feature that needs vision is invoked.
+- MediaProjection consent is requested per session. The app does not attempt to persist a capture token across reboots.
+- **Granting consent must immediately reflect as enabled.** A confirmed defect had the app still reporting the capability disabled after the user allowed it; that class of bug makes the permission model untrustworthy.
+- **OCR runs entirely on-device.** Recognised text never leaves the phone. A cloud OCR service would silently break the promise that screen content goes only to the configured provider.
+- Screenshots are written to app-private storage, referenced from the database by path, deleted with their trace, and wipeable from root settings.
+- A screenshot is sent to the AI provider only when a vision feature the user invoked needs it.
 
-## MCP server (Phase 10)
+## Overlays
 
-The MCP server exposes full device control to an external client, which makes it the highest-risk network surface in the product.
+Two overlay windows exist and both need `SYSTEM_ALERT_WINDOW`:
+
+- **The agent status overlay** — shows the running agent's task with a stop button. This is a transparency feature as much as a convenience: the user must be able to see and stop automation from wherever they are.
+- **The node toolset overlay** — lets the user configure a node against a live screen.
+
+Both use `FLAG_NOT_FOCUSABLE` so they never steal touches meant for the app underneath, paired with `FLAG_ALT_FOCUSABLE_IM` so the keyboard still opens for their own text fields.
+
+## Foreground service
+
+- Required for the agent to keep running while the user is in another app.
+- The notification is mandatory and always reflects the current task, with a stop action.
+- If the service is killed by the system, the app reports it rather than leaving a dead run showing as active.
+
+## MCP server and clients
+
+The MCP server exposes full device control to an external client, which makes it the highest-risk surface in the product.
 
 - **Authentication is mandatory.** There is no anonymous mode.
 - **Localhost-only by default.** Binding to a network interface requires an explicit user action with an unambiguous warning.
-- Every tool invocation is validated and audit-logged (without secrets).
+- Every tool invocation is validated and audit-logged, without secrets.
+- Destructive tools require a grant beyond mere connection — every tool definition carries an `impact` field for exactly this.
+- The provider key must never be reachable over MCP, directly or through a tool that echoes settings.
+
+As a **client**, external MCP servers' tools are merged into Agent Mode's tool set but marked as external. A user should never be unsure whether a tool runs on their phone or someone else's server.
 
 ## Privacy posture
 
-- No analytics or telemetry that includes screen content, UI trees, or contact data.
-- Traces and screenshots stay on-device unless the user exports them.
-- The user can wipe all traces, screenshots, and workflows from Settings.
+- No analytics or telemetry that includes screen content, UI trees, OCR text, or contact data.
+- Traces, screenshots, and sessions stay on-device unless the user exports them.
+- The user can wipe all traces, screenshots, workflows, and sessions from root settings.
 
 ## Distribution caveat
 
-Accessibility-driven automation has Play Store policy implications. Sideload-versus-Play distribution is an open question flagged in Phase 0; the permission model above is written to satisfy the stricter (Play) reading regardless of the final channel.
+Accessibility-driven automation has Play Store policy implications. Sideload-versus-Play distribution is still an open question, decided in Step 13. The permission model above is written to satisfy the stricter (Play) reading regardless of the final channel.

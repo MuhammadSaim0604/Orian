@@ -14,3 +14,9 @@ Short, dated records of the decisions that shape this project. Each ADR states t
 | [0008](0008-two-engines-one-runtime.md) | Two engines, one shared Android Tool Runtime | Accepted |
 | [0009](0009-selectors-over-coordinates.md) | Robust selectors over raw coordinates | Accepted |
 | [0010](0010-ci-only-apk-builds.md) | APKs are built only in CI, never locally | Accepted |
+| [0011](0011-two-modes-not-tabs.md) | Two modes, not one tabbed shell | Accepted |
+| [0012](0012-agent-loop-in-js-with-foreground-service.md) | The agent loop stays in JS, kept alive by a foreground service | Accepted |
+| [0013](0013-perception-fallback-chain.md) | Perception is a fallback chain: tree, then OCR, then vision | Accepted |
+| [0014](0014-one-loop-engine-several-agents.md) | One agent loop engine, several agents | Accepted |
+
+ADRs 0011–0014 came out of device testing after phases 0–9 shipped. 0011 supersedes the tabbed shell that Phase 6 built; the rest fill gaps the original plan did not anticipate.
