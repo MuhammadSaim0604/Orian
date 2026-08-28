@@ -4,7 +4,7 @@ Living record of what has been implemented, which phase is complete, and what re
 
 Authoritative plan: `Development_Plan/`. Phase order was agreed with the user and **deviates from the plan's strict numeric sequence** for the remaining work - see `ORION.md`. The roadmap's own dependency graph permits it.
 
-Last updated: after Phase 7, with both CI workflows green on `main` (Android CI run `33137160631`, TypeScript CI run `33137160688`).
+Last updated: after Phase 6, with both CI workflows green on `main` (Android CI run `33143486251`, TypeScript CI run `33143486309`).
 
 ---
 
@@ -19,12 +19,12 @@ Last updated: after Phase 7, with both CI workflows green on `main` (Android CI 
 | 4     | Node SDK & Zod workflow schema                       | M3 Workflows      | **Complete** |
 | 5     | Workflow engine (DAG, registry, executor)            | M3 Workflows      | **Complete** |
 | 7     | AI agent engine (loop, planner, memory)              | M4 Intelligence   | **Complete** |
-| 6     | Workflow builder UI (Skia canvas, Zustand)           | M3 Workflows      | Next         |
-| 9     | Execution recorder & workflow generation             | M4 Intelligence   | Not started  |
+| 6     | Workflow builder UI (Skia canvas, Zustand)           | M3 Workflows      | **Complete** |
+| 9     | Execution recorder & workflow generation             | M4 Intelligence   | Next         |
 | 8     | Configure-with-AI floating overlay                   | M4 Intelligence   | Not started  |
 | 10    | MCP server, node distribution, polish                | M5 Platform       | Not started  |
 
-Rows below Phase 5 are listed in **execution order**, not numeric order.
+Rows below Phase 5 are listed in **execution order**, not numeric order. **Milestone M3 is complete**, and M4 needs only 9 and 8.
 
 ---
 
@@ -655,27 +655,183 @@ The definition of done requires the WhatsApp scenario completing on hardware. Ev
 
 ---
 
+## Phase 6 — Workflow Builder UI (complete)
+
+The app now has a front door: a list of workflows, one of which you can open, edit, run, and watch happen.
+
+### The canvas
+
+Skia + Reanimated + Gesture Handler, arranged so the camera never crosses into JavaScript during a gesture. Pan and pinch write to **shared values on the UI thread** and commit to the store only on release (ADR 0003) — writing every frame would put a store update, a React reconcile, and a bridge hop between the finger and the pixels, and the canvas would visibly lag the touch.
+
+Everything draws inside one `Group` carrying the camera transform, so panning changes a transform rather than rebuilding paths. The grid is one `Path` with a bounded line count: a node per line would mean hundreds of Skia elements reconciled on every zoom, and an unbounded loop at maximum zoom-out would freeze rather than degrade.
+
+Two interaction rules decide whether the canvas feels deliberate or fidgety:
+
+- **Ports are hit-tested before node bodies.** A port sits on the node's edge, so a touch near it is inside both. Testing the body first makes drawing an edge nearly impossible, because every attempt drags the node instead.
+- **The port touch radius is 22px against a 7px drawn dot.** A 7px circle is a reasonable thing to look at and an unreasonable thing to hit with a fingertip.
+
+The camera maths has two non-obvious corrections. Pan divides by scale, so a drag moves content the same screen distance at every zoom — without it, panning while zoomed out feels sluggish and while zoomed in feels violent. Pinch zooms about the **focal point**, because scaling about the origin makes content shoot away from the fingers, which feels like the canvas is fighting back.
+
+Gestures are composed `Simultaneous(Exclusive(node, camera), tap)`: a drag starting on a node moves the node, a drag on empty canvas moves the view, and a pinch always zooms. Without the explicit ordering, Gesture Handler resolves the race by activation order, which varies with where the finger lands.
+
+Other decisions worth keeping:
+
+- Only an **input port** completes an edge. Dropping on a node body is ambiguous when it has several inputs, and guessing would silently wire the wrong handle.
+- Nodes are hit-tested in reverse, so the one drawn on top is the one selected.
+- Node size is fixed rather than measured. Measuring text inside a Skia canvas would mean a layout pass per node per frame, and a uniform grid is easier to read anyway.
+- Run state **overrides** selection on a node's border: during a run, which step is live matters more than which node was last tapped.
+- Culling is padded by a node's width, because culling exactly at the boundary makes edges visibly pop in and out at the screen edge.
+
+### The node editor
+
+`packages/node-sdk/src/introspection.ts` reads a node's Zod config into field descriptors, and the form is generated from those. **This is what lets the builder edit a node it has never heard of**, including one from a third-party package installed after the app shipped. A hand-written form per node type could not do that, and would drift from the schema the executor actually validates against.
+
+| Decision                                                | Why                                                                                  |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Unwraps `optional`/`default`/`describe`/`refine` stacks | Otherwise an ordinary field reads as an unsupported wrapper and renders as raw JSON  |
+| Union branches stay separate, keyed by discriminator    | Flattening shows every variant's fields at once, most invalid together               |
+| Selector recognised **structurally**                    | A third-party node using the same shape gets the element picker, not nine text boxes |
+| Exotic types degrade to a JSON editor                   | An unusual node stays editable rather than breaking the editor                       |
+| Discriminator rendered as a fixed choice                | An editable one invites setting it to something the schema then rejects              |
+
+The form validates on every change but writes back **only when the problem is not in the field being edited**, so fields can be filled in any order rather than the user being blocked until the whole config is valid.
+
+The selector control is where durability is decided, so it names it: "By id — survives app updates" against "By position — will break if the layout changes". Typing a resourceId by hand is something nobody will do, so the picker has to be the easy path (ADR 0009).
+
+### Stores
+
+Three, one per domain (ADR 0003). Splitting them is not tidiness: selection changes on every tap, and a node that only cares whether it is selected must not re-render when another node's config changes.
+
+`canvasStore` holds the working copy as normalized keyed maps and **refuses invalid shapes at the point of drawing** rather than at the point of running:
+
+- A self-loop is refused — it is always a cycle the loader rejects.
+- An exact duplicate edge is refused.
+- A second edge from one output handle **replaces** the first. The executor follows only the first edge from a handle, so a second would be drawn but never taken, and a silently dead connection is worse than a replaced one.
+- Deleting a node takes its edges with it, or the workflow fails to load with a dangling-edge error the user cannot see on the canvas.
+
+`executionStore` is fed by the engine's event stream, with a 500-entry log cap — a thousand-iteration loop would otherwise make the log unscrollable.
+
+### Persistence
+
+A new **`android/storage`** Gradle module, Room-backed (ADR 0005).
+
+The workflow document is **one JSON column**, not decomposed into node and edge tables. Node config schemas are owned by TypeScript and by third-party packages, so a relational shape here would mirror something Kotlin cannot validate and would need a migration every time a node package changed. As an opaque column it is stable.
+
+Summary queries exclude the document, so listing workflows never reads them — fifty saved workflows would otherwise be several megabytes for a screen that shows names. `WorkflowDocumentReader` hand-rolls its parsing because **`org.json` is stubbed in JVM unit tests**, the same reason `android/bridge` does; a parser built on it would appear to work in tests and report every workflow as empty on a device.
+
+**No destructive migration fallback.** Losing a user's saved workflows on a schema change is not an acceptable upgrade path, so every future version must ship a real migration.
+
+Validation happens on the way **in** as well as out: a document written by an older version, hand-edited, or model-generated could be anything, and loading it unchecked would put an invalid workflow onto a canvas where every subsequent operation assumes it is well-formed. Saving an invalid document is refused, because a workflow that cannot be loaded back is not saved in any useful sense.
+
+### Running from the canvas
+
+The real engine, through `invokeTool`, with node borders coloured by live state and every event appended to a log. Load errors are kept **separate** from run failures because they mean different things to the user: one means the workflow is invalid and nothing happened, the other means the phone was driven and something went wrong partway. Collapsing them would leave someone unsure whether their device had been touched.
+
+The log auto-scrolls while running and stops following when the run ends, so the user can read back through what happened without the list moving under them.
+
+### Screen inspector
+
+Its real job is not listing elements — it is showing **how durable each one is to target**. An inspector that just lists them invites picking whatever is convenient, and the convenient choice is usually coordinates. Every row names its strategy, coordinates are marked fragile, and the selector is computed in the same priority order as the Kotlin resolver — so what the inspector offers is what the device will actually try first.
+
+The tree is flattened to targetable elements only. A full tree is mostly layout containers, and listing them buries the twelve things that matter under two hundred that do not. A tree whose schema version this build cannot read is **refused rather than partially read**, since misreading it would show elements that are not there.
+
+### Create by AI
+
+Deliberately **not** the agent loop. The agent drives the device to achieve a goal now; this produces a reusable workflow without touching the phone, which is what "create a workflow" means. Compiling an agent trace into a workflow is a better path for a task the user is doing anyway — that is Phase 9.
+
+Output is validated against `WorkflowSchema` and every node's own config schema before it reaches the canvas, and it is loaded **unsaved** so the user reviews it first. A generated workflow is exactly the case where unchecked output does most damage: it looks authoritative, the user did not write it, and it drives their phone.
+
+The document shape is described by hand rather than converted from the full Zod schema. The complete schema is thousands of tokens of recursive definitions, and a model given all of it reliably spends its attention on the wrong parts.
+
+### `packages/ui` grew a component library
+
+`Button`, `Card`, `Badge`, `Field`, `TextField`, `NumberField`, `Select`, `Toggle`, `EmptyState` — all semantic classes, no raw values. Two are worth explaining:
+
+- **`NumberField` keeps its own text.** Parsing on every keystroke makes `1.` collapse to `1` and `-` impossible to type, because both are invalid numbers mid-entry.
+- **`Select` is segmented, not a dropdown.** Node config enums have two to five options; every one visible and one tap away beats a picker that hides them behind a modal.
+
+Components are written with `createElement` so the package stays `.ts` throughout — a couple of `.tsx` files would split its build configuration for no gain.
+
+### Metro entrypoints
+
+Seven packages gained a **`react-native` entrypoint field** pointing at source. Metro and Jest read it; Node and vitest keep `main` at `dist`. That avoids the Phase 3 release-bundle trap — a `dist` entry breaks the release bundle while the debug APK still passes — without making every package source-only and losing the published-package story for `node-sdk`, `core-nodes`, and `android-nodes`.
+
+**Verification**
+
+```
+pnpm turbo run typecheck lint test build     60/60 tasks, 890 TypeScript tests
+                                             (802 in packages, 88 in the app)
+pnpm format:check                            clean
+pnpm install --frozen-lockfile               clean
+cd android && gradle ktlintCheck testDebugUnitTest   472 tests, 8 modules, clean
+npx react-native bundle --dev false          succeeds
+```
+
+The bundle check is the one that matters most here: it proves Metro resolves Skia and Gesture Handler, and that the entrypoint change still bundles for release.
+
+CI runs `33143486251` (Android) and `33143486309` (TypeScript) are green, including both APKs and instrumentation on API 26 and 34.
+
+**A CI failure worth recording.** The first push failed both APK builds with `Cannot access androidx.room.RoomDatabase which is a supertype of AutomationDatabase`. The app module was calling `AutomationDatabase.get(...)` directly, and `:storage` declared room-runtime as `implementation`. Local ktlint and unit tests could not catch it, because **neither compiles the app module** — only an assemble does, and those are CI-only (ADR 0010). Fixed by making `WorkflowStore` the module's only public surface, so Room types stay behind the boundary, plus exposing room-runtime as `api`. `gradle :storage:assembleDebug` locally is what would have caught it.
+
+**Files**
+
+```
+apps/mobile/src/features/canvas/{geometry,canvasStore,selectionStore,executionStore}.ts
+apps/mobile/src/features/canvas/{useCamera,useCanvasInteraction,useWorkflowRun,registry}.ts
+apps/mobile/src/features/canvas/{CanvasScene,CanvasScreen,ExecutionLog}.tsx
+apps/mobile/src/features/node-editor/{SchemaForm,NodeInspector,NodePalette}.tsx
+apps/mobile/src/features/workflows/{storage,useWorkflowGeneration}.ts
+apps/mobile/src/features/workflows/{WorkflowListScreen,CreateWithAiScreen}.tsx
+apps/mobile/src/features/inspector/{inspectScreen.ts,ScreenInspectorScreen.tsx}
+apps/mobile/src/features/shell/RootScreen.tsx          tab + modal routing
+packages/node-sdk/src/introspection.ts                 schema → form descriptors
+packages/ui/src/components/{Button,Card,Field}.ts
+android/storage/                                       new Room module
+apps/mobile/android/.../storage/WorkflowStorageModule.kt
+```
+
+**Commits:** `76eac4c`, `bc516e4`
+
+### Not yet verified on a real device
+
+- **60fps with dozens of nodes.** The architecture is right — gestures on the UI thread, one transform, culling — but frame timing is a device measurement.
+- **A workflow running end to end**, which is also Phase 5's outstanding definition-of-done item and is now reachable from the UI.
+- **Room persistence across restarts.**
+
+### Deliberately deferred
+
+- **react-navigation.** The shell is a tab switch plus one modal route. Five destinations, one of them a full-bleed canvas, did not justify a navigator; Phase 8's overlay is where real routing needs deciding.
+- **Node labels are drawn by Skia's text primitive.** Adequate, but shipping a font file for better typography is a size cost worth weighing later.
+- **No multi-select, copy/paste, or undo.** Each is a real feature rather than a polish item, and none is needed to build and run a workflow.
+- **Variables have no editor.** They are read and displayed during a run; declaring them by hand comes with the Input-node work.
+- **The "Configure with AI" button exists and is disabled.** A feature that appears from nowhere in a later release is harder to find than one whose place is already visible.
+
+---
+
 ## Remaining
 
-Order agreed with the user, deviating from the plan's numeric sequence (`ORION.md` records the rationale per phase). Next is **Phase 6 — the workflow builder UI**: the Skia canvas, node editor, schema-driven config forms, debugger, and workflow persistence. It is the largest and most iterative phase, which is why it is kept alone.
+Order agreed with the user, deviating from the plan's numeric sequence (`ORION.md` records the rationale per phase). **Milestone M3 is complete.** Next is **Phase 9 — the execution recorder, workflow generator, and review UI**: capture what the agent does, compile a trace into a workflow, and let the user review it before saving.
 
-With Phase 7 already done, Phase 6 can wire the real **"Create by AI"** entry point rather than leaving a stub - `runAgent` and the plan context both exist.
+Phase 9 is deliberately positioned after 6 because the review screen needs the canvas, which now exists. The two seams it consumes are already built and tested — `toolExecuted` from the agent and `ToolInvoker` from the engine — so it should not need to reopen either engine.
 
-Then: 9 (recorder + generator + review), 8 (overlay), 10 (MCP + publishing).
+Then: 8 (overlay), 10 (MCP + publishing).
 
 Carry-forward notes:
 
 - **`AutomationRuntime` is the contract to preserve.** Method names match `DeviceTool.toolName`, `@mobile-automation/tool-sdk`, and the TS wrapper, with parity tests on both sides. Adding a tool means editing both sides in one commit.
-- **The bridge is the only crossing.** `packages/native-automation` is where TypeScript meets Kotlin. Nothing else should import `NativeModules`, and nothing in `packages/` may import from `apps/mobile` (enforced by ESLint). `invokeTool` in that package is the by-name dispatch both the agent and the MCP server use.
-- **`ToolInvoker` is the workflow engine's device seam; `toolExecuted` is the agent's.** The Phase 9 recorder consumes both, and each already carries the screen, the tree, and the resolved selector.
-- **Node config schemas are the AI's output contract.** Phase 8's overlay must return config validated against the node's own `configSchema`, never prose. `buildNodeConfigContext` and `parseStructured` already exist for exactly this, so that phase is UI work.
+- **The bridge is the only crossing.** `packages/native-automation` is where TypeScript meets Kotlin. Nothing else should import `NativeModules`, and nothing in `packages/` may import from `apps/mobile` (enforced by ESLint). `invokeTool` in that package is the by-name dispatch the agent, the workflow engine, and the MCP server all use.
+- **`toolExecuted` already carries everything an `ExecutionStep` needs** — screen identity, the UI tree before, the resolved element and which strategy matched, the result or error, and the screen after — for failures as richly as successes. Phase 9's recorder should consume it rather than adding capture points.
+- **Reuse `buildGenerationContext`.** Create-by-AI already calls it with an empty `steps` array; Phase 9 passes a real trace to the same builder. The prompt already tells the model to collapse observation steps, keep waits, and prefer recorded selectors over coordinates.
+- **Node config schemas are the AI's output contract.** Phase 8's overlay must return config validated against the node's own `configSchema`, never prose. `buildNodeConfigContext`, `describeSchema`, and `parseStructured` all exist, so that phase is UI plus the native overlay window.
+- **`describeSchema` is how any node becomes editable.** A node type the UI has never seen still gets a form. Phase 8's overlay should render config through the same path rather than building a second one.
 - **The UI-tree JSON is versioned for a reason.** `UI_TREE_SCHEMA_VERSION` is at **2**; bump it whenever a key changes and update `UiNodeAttribute`, `UI_NODE_ATTRIBUTES`, and the `UiTree` type in `native-automation` together. `UiNodeAttributeParityTest` catches the Kotlin half; nothing yet catches a stale TS list, so keep them in the same commit.
-- **Vision is still not wired.** `SelectorResolver` defaults to `UnavailableVisionMatcher`, so the chain reports "vision was not attempted" and stops at coordinates. The agent now has a provider client and a screenshot path in context, so a real `VisionMatcher` is a small piece of work - it needs a vision-capable model and a cost decision, not new plumbing.
-- **Big payloads cross by reference.** Screenshots are file paths and the UI tree has a compact mode. Neither should become inline base64, and the compact tree is what belongs in a model context.
-- **Workspace packages the RN app imports must be source-entry.** Metro does not run Turborepo's build first, so a package pointing at `dist/` breaks the release bundle while the debug APK may still pass. `ui`, `native-automation`, `shared-types`, `tool-sdk`, `prompt-engine`, and `ai-agent` are already converted; convert any other package the moment the app imports it.
-- **pnpm strictness.** When adding any React Native tool that Gradle or Metro invokes, declare it explicitly in `apps/mobile/package.json`; three Phase 1 CI failures were undeclared transitive dependencies. Phase 6 will hit this with Skia and Gesture Handler.
-- **Theme values are duplicated by necessity.** `packages/ui/src/theme/semantic.ts` and `apps/mobile/src/global.css` must change together; a parity test is worth adding in Phase 6.
-- **Navigation is an open decision.** The app is a three-tab switch, deliberately. Phase 6 should choose react-navigation or an alternative based on what the canvas and node editor actually need.
+- **Vision is still not wired.** `SelectorResolver` defaults to `UnavailableVisionMatcher`, so the chain reports "vision was not attempted" and stops at coordinates. The plumbing is all present — a provider client and a screenshot path in context — so this needs a vision-capable model and a cost decision, not new code paths.
+- **Big payloads cross by reference.** Screenshots are file paths and the UI tree has a compact mode. Neither should become inline base64. Phase 9 will store screenshots on the filesystem with DB references (ADR 0005), and orphaned files need a cleanup story.
+- **Packages the RN app imports need a source entrypoint.** Metro does not run Turborepo's build first, so a `dist` entry breaks the release bundle while the debug APK may still pass. Every workspace package now has either a source `main` or a `react-native` field; add one to any new package the app imports.
+- **pnpm strictness.** When adding any React Native tool that Gradle or Metro invokes, declare it explicitly in `apps/mobile/package.json`. Skia and Gesture Handler both autolinked cleanly, but three Phase 1 CI failures were undeclared transitive dependencies.
+- **Only an assemble compiles the app module.** ktlint and unit tests do not, so a broken dependency between the app and an `android/` module passes locally and fails in CI — which is exactly what happened with `:storage`. Run `gradle :<module>:assembleDebug` when changing a module's public surface.
+- **Theme values are duplicated by necessity.** `packages/ui/src/theme/semantic.ts` and `apps/mobile/src/global.css` must change together; a parity test is still worth adding.
+- **Navigation is still an open decision.** The shell is a tab switch plus one modal route. Phase 8's overlay is the point at which real routing has to be chosen.
 - **`isEntirelyBlack` samples a 16×16 grid.** If a real app is ever misreported as secure, that is the tuning knob.
 - Local Gradle runs need `ANDROID_HOME` set (`%LOCALAPPDATA%\Android\Sdk` on this machine).
 - The Gradle wrapper JAR is deliberately not committed; CI provisions Gradle 8.11.1 via `gradle/actions/setup-gradle`.
@@ -683,18 +839,19 @@ Carry-forward notes:
 
 ### Outstanding device verification
 
-Four phases now have a definition of done that needs physical hardware, and none can be automated here — each requires a user to enable the accessibility service and grant screen capture, and no APK is built locally per ADR 0010.
+Five phases now have a definition of done that needs physical hardware, and none can be automated here — each requires a user to enable the accessibility service and grant screen capture, and no APK is built locally per ADR 0010.
 
 | Phase | What needs checking on a device                                                                       |
 | ----- | ----------------------------------------------------------------------------------------------------- |
 | 2     | the service reads a third-party app's tree; tap a resolved element, swipe, type, capture a screenshot |
 | 3     | `automation.getUiTree()` and `automation.click(selector)` from JS drive that same device              |
 | 5     | a workflow runs end to end: `RN → JSON → engine → registry → executor → tool runtime → device`        |
+| 6     | the canvas holds 60fps with dozens of nodes, and a workflow survives a restart                        |
 | 7     | the agent completes the WhatsApp scenario with a real provider key                                    |
 
-**The `app-debug` artifact from run `33137160631` is the build to sideload.** Phases 2, 3, and 7 can all be cleared with that single build - 7 is now testable because the agent screen and provider settings both exist in it. Phase 5's check additionally needs an RN entry point that runs a workflow, which arrives with Phase 6.
+**The `app-debug` artifact from run `33143486251` is the build to sideload, and it can now clear all five.** Phase 5's check became reachable with this phase: the canvas has a Run button, so building a two-step workflow and running it exercises the whole path.
 
-Clearing these matters more with each phase: a failure on device is currently ambiguous between four unverified layers.
+This is the point at which the backlog is worth clearing rather than growing. A failure on device is currently ambiguous between five unverified layers, and the app is now complete enough that a single session with a phone would settle all of them.
 
 ### Deliberately out of scope
 
@@ -709,13 +866,20 @@ _Phase 3:_
 
 - **Generated codegen bindings** — the interop layer already serves the module to `TurboModuleRegistry.get`, and TypeScript is fully typed by the spec.
 - **JSI hot paths** — no measured bottleneck yet, since large payloads already cross by reference.
-- **An emitter for `ExecutionProgressEvent`** — the native channel exists; the workflow engine now emits its own events, and bridging the two is Phase 6 work.
+- **An emitter for `ExecutionProgressEvent`** — the native channel exists but is unused: the workflow engine's own event bus reaches the UI directly in-process, so bridging the two would add a hop for nothing. It stays for a future native-initiated run.
 
 _Phases 4+5:_
 
 - **RN wiring** — the engine is headless by design; the app gains a screen that runs a workflow in Phase 6.
 - **Workflow persistence** — SQLite storage belongs with Phase 6, where there is a UI to save from.
 - **Parallel branches** — execution is sequential because there is only one screen to drive. The loader permits a fan-out shape; the executor follows the first edge.
+
+_Phase 6:_
+
+- **react-navigation** — the shell is a tab switch plus one modal route. Five destinations, one a full-bleed canvas, did not justify a navigator; Phase 8's overlay is where routing has to be decided.
+- **Multi-select, copy/paste, and undo** — each is a real feature rather than polish, and none is needed to build and run a workflow.
+- **A variables editor** — variables are read and displayed during a run, but declaring them by hand comes with the Input-node work.
+- **A bundled font for the canvas** — Skia's text primitive is adequate; a font file is a size cost worth weighing separately.
 
 _Phase 7:_
 
