@@ -4,7 +4,7 @@ Living record of what has been implemented, which phase is complete, and what re
 
 Authoritative plan: `Development_Plan/`. Phase order was agreed with the user and **deviates from the plan's strict numeric sequence** for the remaining work - see `ORION.md`. The roadmap's own dependency graph permits it.
 
-Last updated: after Phase 9, with both CI workflows green on `main` (Android CI run `33148607526`, TypeScript CI run `33148607576`).
+Last updated: after Phase 8, with both CI workflows green on `main` (Android CI run `33158531604`, TypeScript CI run `33158531545`).
 
 ---
 
@@ -21,10 +21,10 @@ Last updated: after Phase 9, with both CI workflows green on `main` (Android CI 
 | 7     | AI agent engine (loop, planner, memory)              | M4 Intelligence   | **Complete** |
 | 6     | Workflow builder UI (Skia canvas, Zustand)           | M3 Workflows      | **Complete** |
 | 9     | Execution recorder & workflow generation             | M4 Intelligence   | **Complete** |
-| 8     | Configure-with-AI floating overlay                   | M4 Intelligence   | Next         |
-| 10    | MCP server, node distribution, polish                | M5 Platform       | Not started  |
+| 8     | Configure-with-AI floating overlay                   | M4 Intelligence   | **Complete** |
+| 10    | MCP server, node distribution, polish                | M5 Platform       | Next         |
 
-Rows below Phase 5 are listed in **execution order**, not numeric order. **Milestone M3 is complete**, and M4 needs only Phase 8.
+Rows below Phase 5 are listed in **execution order**, not numeric order. **Milestones M3 and M4 are both complete**; only Phase 10 remains.
 
 ---
 
@@ -935,36 +935,149 @@ android/storage/src/main/kotlin/.../AutomationDatabase.kt   migration 1→2
 
 ---
 
+## Phase 8 — Configure-With-AI Floating Overlay (complete)
+
+Select a step, tap **Configure with AI**, switch to WhatsApp, type "Return true if the Send button is visible" — and the condition node fills itself in. **Milestone M4 closes here.**
+
+### Why it is a real window
+
+The overlay is a `WindowManager` window hosting its own React root, not a React Native modal. That is the entire feature: **a modal disappears the moment the user switches to the app they are configuring against**, which is precisely when the toolset is needed. Only `SYSTEM_ALERT_WINDOW` survives leaving the app.
+
+So there are now **two React roots in one process**, registered separately in `index.js` and mounted by Kotlin into different windows. The overlay shares no component tree with the app, which forces two things:
+
+- **The bound node id crosses as an initial prop.** Not through a store or an event — there is no shared React context to read from. Passing it at mount means the overlay can never render without knowing which node it is configuring.
+- **Shared state comes from the Zustand store module both roots import.** Which is exactly how a store living outside React is supposed to work (ADR 0003): a config the overlay produces lands in the canvas store, and the node editor updates itself with no navigation and no message passing.
+
+### The new architecture caught a real bug
+
+`OverlayReactHost` was first written against `ReactRootView.startReactApplication`. That does not work here: this app runs `newArchEnabled=true`, and **under bridgeless there is no `ReactInstanceManager`** to start a root view against. It compiles against the old API and fails at runtime.
+
+Rewritten to use `ReactHost.createSurface`. Its return is nullable, and rather than throwing inside `WindowManager.addView` — which would leave a half-created overlay the user cannot dismiss — a null host returns an empty container that still closes.
+
+`gradle :app:compileDebugKotlin` is what found this, because ktlint and unit tests do not compile the app module.
+
+### Typed failures, because the UI must respond differently
+
+`OverlayManager` now returns `OverlayResult` rather than a boolean. Three failures need three responses, and a boolean collapses them into "it didn't work":
+
+| Failure             | What the UI does                       |
+| ------------------- | -------------------------------------- |
+| `PERMISSION_DENIED` | offers a deep link to Android settings |
+| `NO_BOUND_NODE`     | nothing — it is a programming error    |
+| `WINDOW_REJECTED`   | reports it, without blaming the user   |
+| `NOT_SHOWING`       | nothing to do                          |
+
+`OverlayState` was added as a consistent snapshot. Reading `isShowing` and then `boundNodeId` separately invites a state that never existed, since the user can dismiss the overlay between the two reads.
+
+### Two window flags that decide whether this works at all
+
+- **`FLAG_ALT_FOCUSABLE_IM` paired with `FLAG_NOT_FOCUSABLE`.** `NOT_FOCUSABLE` is what stops the overlay stealing touches meant for the app underneath — but on its own it also means the soft keyboard never opens for the overlay's own text field, so the user could never type the instruction the whole feature exists to accept.
+- **`SOFT_INPUT_ADJUST_RESIZE` rather than pan.** Panning slides the toolset off screen when the keyboard opens, which is exactly when it needs to be visible.
+
+Neither fails loudly. Both would present as "the overlay is broken".
+
+### The model contract already existed
+
+Everything on the prompt side was built in Phase 7: `buildNodeConfigContext` assembles the `Data_Models` payload, and `parseStructured` distinguishes "no JSON" from "wrong shape". So this phase is the window plus the UI, not a second prompt pipeline — which is what the early investment was for.
+
+The one new piece is **`configJsonSchemaFor`**, which derives the model's schema from `describeSchema` — the same field descriptors that drive the node editor's form. One source, two consumers: what the user sees as a form and what the model is told to produce cannot silently diverge from the Zod schema that validates both.
+
+Output is validated against **the node's own `configSchema`**, the same schema the executor applies, so a shape failure cannot move to run time. Two attempts; the second carries the validation error as a correction.
+
+The proposal is **offered, not applied**. The user is standing in another app and cannot see the node, so it arrives with a one-line summary ("Checks element exists for 'Send'") and Apply/Discard. A silent write would leave them unable to tell whether anything happened, let alone whether it was right.
+
+### Test Action never performs the action
+
+Testing a `click` resolves the element via `findElement` rather than tapping it; testing `typeText` checks the field is there rather than typing into it. **A "test" that sent a message would be indefensible** — the user is checking a configuration, not asking to act.
+
+It tests the AI's pending proposal in preference to the saved config, since that is the point of testing before accepting. `argumentsFor` reads both the direct `selector` and a condition node's nested one, so the very node type the phase's definition of done names does not silently find nothing.
+
+### Smaller decisions
+
+- **The compact set is a fixed four** — Ask, Element, Screen, Node — rather than the first four declared, because those are the ones that matter. Choosing a tool the compact layout does not show expands automatically instead of making the user press the eye toggle first.
+- **The coordinate inspector's real job is getting the user _off_ a coordinate.** It probes the point, finds a real element there if one exists, and upgrades the selection. Every element row states its durability, for the same reason the standalone screen inspector does (ADR 0009).
+- **Every device call goes through `invokeTool`**, the same by-name dispatch the agent and the workflow engine use. Nothing here reimplements a capability.
+- **Screenshots stay paths.** An image in JS state would cross the bridge as base64 and defeat the by-reference design.
+- **The overlay hides on `invalidate()`.** A `WindowManager` window is owned by the system, not the activity, so a reload would otherwise leave an orphaned overlay nothing can dismiss.
+- **`onOverlayDismissed` exists** because the window can be closed from inside itself or torn down with the React context; without it the app's button would keep claiming the toolset is open.
+
+**Verification**
+
+```
+pnpm turbo run typecheck lint test build     60/60 tasks, 1069 TypeScript tests
+pnpm format:check                            clean
+pnpm install --frozen-lockfile               clean
+cd android && gradle ktlintCheck testDebugUnitTest   498 tests, 8 modules, clean
+gradle :overlays:assembleDebug                       clean
+cd apps/mobile/android && gradle :app:compileDebugKotlin   clean
+npx react-native bundle --dev false          succeeds, both roots registered
+```
+
+CI runs `33158531604` (Android) and `33158531545` (TypeScript) are green.
+
+**Two real issues were found by the new tests**, not by review: `bind()` reset on every remount, discarding the user's screen reading on a re-render; and the Ask AI button duplicated the tool tab's accessibility label, so a screen reader announced "Ask AI" twice with no way to tell them apart.
+
+**A CI failure worth recording — the assemble trap, second form.** The first push failed both instrumentation jobs: `OverlayManagerInstrumentedTest` still asserted on booleans after the switch to `OverlayResult`. **Neither ktlint nor unit tests compile the `androidTest` source set** — only `assembleDebugAndroidTest` does. Phase 6 hit the same shape of problem with the app module. Both source sets need an explicit assemble to be checked at all.
+
+**Files**
+
+```
+android/overlays/src/main/kotlin/.../{OverlayState,FakeOverlayManager}.kt
+android/overlays/src/main/kotlin/.../{OverlayManager,WindowManagerOverlayManager}.kt
+apps/mobile/android/app/src/main/kotlin/.../overlay/{OverlayReactHost,OverlayModule}.kt
+packages/native-automation/src/overlay.ts        the only place TS touches the window
+apps/mobile/src/overlay/OverlayRoot.tsx          the second React root
+apps/mobile/src/features/overlay/{overlayStore,configJsonSchema}.ts
+apps/mobile/src/features/overlay/{useAskAi,useOverlayTools,useOverlayLauncher}.ts
+apps/mobile/src/features/overlay/ConfigureOverlay.tsx
+```
+
+**Commits:** `370c45a`, `91e50af`
+
+### Not yet verified on a real device
+
+The definition of done needs hardware: open the overlay on a condition node, switch to WhatsApp, type the instruction, and get `{ condition: { type: "element_exists", selector: { text: "Send" } } }` back. That needs `SYSTEM_ALERT_WINDOW` granted by hand and a real provider key. Everything up to the model call is covered by tests, including that exact config passing the condition node's schema.
+
+Also unverified on device: whether the compact overlay is genuinely usable one-handed, and whether the keyboard flags behave as intended on a manufacturer skin.
+
+### Deliberately deferred
+
+- **The overlay is not draggable yet.** `moveOverlay` exists and clamps correctly, but no gesture is wired to it — the anchored position is reachable, and a drag handle inside a 30%-height window competes with the tool row for space.
+- **No screenshot is sent to the model.** The path is captured and named in the prompt, but no image crosses. Same blocker as Phase 7: a vision-capable model and a cost decision.
+- **The eye toggle changes which tools are listed, not the window's height in one motion.** `setLayout` resizes the window and the RN content reflows; a synchronised animation would need the two sides to agree on timing.
+- **No overlay-driven element picking by tapping the app underneath.** `NOT_FOCUSABLE` means the overlay cannot intercept touches meant for the app, which is deliberate — picking is done from the element list instead.
+
+---
+
 ## Remaining
 
-Order agreed with the user, deviating from the plan's numeric sequence (`ORION.md` records the rationale per phase). **Milestone M3 is complete, and M4 needs only Phase 8.** Next is **Phase 8 — the Configure-with-AI overlay**: a native Kotlin overlay window hosting RN content, bound to a node id, that returns a structured node configuration validated by that node's own Zod schema.
+**Milestones M3 and M4 are complete. Only Phase 10 remains** — the MCP server and npm distribution, which is the whole of M5.
 
-Phase 8 is last of the intelligence work because it is the hardest integration - it needs Phase 2's overlay manager, Phase 6's node editor, and Phase 7's agent all working. All three now are. The pieces it should reuse rather than rebuild:
+Phase 10 is a small, self-contained TypeScript unit by comparison with everything before it, because the boundary it exposes already exists. `External AI → MCP → Agent Tool Gateway → Android Tool Runtime → Device`, where every layer to the right of MCP is built and tested:
 
-- **`buildNodeConfigContext`** already assembles the payload (node config + screen identity + UI tree + screenshot + available tools) that `Data_Models.md` specifies.
-- **`parseStructured`** already validates model output against a schema and phrases failures as corrections.
-- **`describeSchema`** already renders a form for any node type, including one the UI has never seen. The overlay should render config through that same path rather than building a second one.
-- **`OverlayManager`** in `android/overlays` already handles the `SYSTEM_ALERT_WINDOW` gate and the COMPACT/EXPANDED states.
+- **`tool-sdk` is the single source of tool definitions.** Name, description, args schema, returns, impact. The MCP tool list should be generated from `allToolDefinitions()` rather than restated, or the two will drift and an external agent will call something that does not exist.
+- **`invokeTool` in `native-automation` is the dispatch.** The agent, the workflow engine, and now the overlay all go through it; MCP becomes the fourth caller rather than a new path to the device.
+- **`validateToolCall` already rejects bad arguments** before anything reaches the device. External input is the case that most needs it.
 
-So Phase 8 is the native overlay window hosting RN content, plus the UI inside it. The model contract already exists and is tested.
+What Phase 10 must decide rather than inherit: **local-only and authenticated by default** (the plan is explicit), how a token is issued and stored, and what happens when an external agent asks for a destructive tool. The `impact` field on every definition exists for that question.
 
-Then: 10 (MCP + publishing).
+Distribution is the other half: `node-sdk`, `workflow-schema`, `core-nodes`, and `android-nodes` are already shaped for publishing (`main` at `dist`, a `react-native` field for Metro), and `node-sdk/AUTHORING.md` documents third-party node authoring. What remains is the npm mechanics and a real end-to-end test with a mock published package.
 
 Carry-forward notes:
 
 - **`AutomationRuntime` is the contract to preserve.** Method names match `DeviceTool.toolName`, `@mobile-automation/tool-sdk`, and the TS wrapper, with parity tests on both sides. Adding a tool means editing both sides in one commit.
-- **The bridge is the only crossing.** `packages/native-automation` is where TypeScript meets Kotlin. Nothing else should import `NativeModules`, and nothing in `packages/` may import from `apps/mobile` (enforced by ESLint). `invokeTool` in that package is the by-name dispatch the agent, the workflow engine, and the MCP server all use.
-- **The overlay must never render a credential.** It shows model output; the API key stays in the Keystore and is read only by the provider client at request time (ADR 0007).
-- **A generated or AI-supplied config is validated before it is applied.** The recorder's generator and Create-by-AI both do this already; the overlay is the third case and the most exposed, since the user is watching another app rather than the workflow.
+- **The bridge is the only crossing.** `packages/native-automation` is where TypeScript meets Kotlin. Nothing else should import `NativeModules`, and nothing in `packages/` may import from `apps/mobile` (enforced by ESLint).
+- **Credentials never enter JS state.** The API key lives in the Keystore and is read by a function at request time (ADR 0007). The overlay renders model output, so this matters most there — and an MCP server accepting external connections must never expose it either.
+- **AI-supplied config is validated before it is applied.** Three places do this now: the recorder's generator, Create-by-AI, and the overlay. MCP is the fourth and the least trusted, since the caller is not even the user.
 - **The UI-tree JSON is versioned for a reason.** `UI_TREE_SCHEMA_VERSION` is at **2**; bump it whenever a key changes and update `UiNodeAttribute`, `UI_NODE_ATTRIBUTES`, and the `UiTree` type in `native-automation` together. `UiNodeAttributeParityTest` catches the Kotlin half; nothing yet catches a stale TS list, so keep them in the same commit.
-- **Vision is still not wired.** `SelectorResolver` defaults to `UnavailableVisionMatcher`, so the chain reports "vision was not attempted" and stops at coordinates. The plumbing is all present — a provider client, a screenshot path in context, and now a trace that records one per step — so this needs a vision-capable model and a cost decision, not new code paths.
-- **Big payloads cross by reference.** Screenshots are file paths and the UI tree has a compact mode. Neither should become inline base64. Trace screenshots live on the filesystem with the directory recorded on the row, and `TraceScreenshotStore.deleteOrphans` is the cleanup for a crash between writing files and committing the row.
-- **Packages the RN app imports need a source entrypoint.** Metro does not run Turborepo's build first, so a `dist` entry breaks the release bundle while the debug APK may still pass. Every workspace package now has either a source `main` or a `react-native` field; add one to any new package the app imports.
-- **pnpm strictness.** When adding any React Native tool that Gradle or Metro invokes, declare it explicitly in `apps/mobile/package.json`. Skia and Gesture Handler both autolinked cleanly, but three Phase 1 CI failures were undeclared transitive dependencies.
-- **Only an assemble compiles the app module.** ktlint and unit tests do not, so a broken dependency between the app and an `android/` module passes locally and fails in CI — which is exactly what happened with `:storage`. Run `gradle :<module>:assembleDebug` when changing a module's public surface.
+- **Vision is still not wired.** `SelectorResolver` defaults to `UnavailableVisionMatcher`, so the chain reports "vision was not attempted" and stops at coordinates. A provider client, a screenshot path in agent context, a trace that records one per step, and now an overlay that captures one are all present — this needs a vision-capable model and a cost decision, not new code paths.
+- **Big payloads cross by reference.** Screenshots are file paths and the UI tree has a compact mode. Neither should become inline base64 — and an MCP response is exactly where someone would be tempted.
+- **Packages the RN app imports need a source entrypoint.** Metro does not run Turborepo's build first, so a `dist` entry breaks the release bundle while the debug APK may still pass. Every workspace package now has either a source `main` or a `react-native` field.
+- **pnpm strictness.** When adding any React Native tool that Gradle or Metro invokes, declare it explicitly in `apps/mobile/package.json`.
+- **Only an assemble compiles what ktlint and unit tests skip.** This has now bitten twice: the app module in Phase 6 (`:storage` and Room) and the `androidTest` source set in Phase 8 (`OverlayResult`). Run `gradle :<module>:assembleDebug` when changing a module's public surface, and `gradle assembleDebugAndroidTest` when changing anything an instrumentation test touches.
 - **A component using a themed primitive needs `renderWithTheme`** in tests. `useTheme` throws outside `ThemeProvider` by design.
 - **Theme values are duplicated by necessity.** `packages/ui/src/theme/semantic.ts` and `apps/mobile/src/global.css` must change together; a parity test is still worth adding.
-- **Navigation is still an open decision.** The shell is a tab switch plus one modal route. Phase 8's overlay is the point at which real routing has to be chosen.
+- **Navigation was decided by not deciding.** The shell is a tab switch plus modal routes, and the overlay turned out to need a separate React root rather than a route — so react-navigation was never required. Worth revisiting only if a genuine deep-linking need appears.
 - **`isEntirelyBlack` samples a 16×16 grid.** If a real app is ever misreported as secure, that is the tuning knob.
 - Local Gradle runs need `ANDROID_HOME` set (`%LOCALAPPDATA%\Android\Sdk` on this machine).
 - The Gradle wrapper JAR is deliberately not committed; CI provisions Gradle 8.11.1 via `gradle/actions/setup-gradle`.
@@ -972,7 +1085,7 @@ Carry-forward notes:
 
 ### Outstanding device verification
 
-Six phases now have a definition of done that needs physical hardware, and none can be automated here — each requires a user to enable the accessibility service and grant screen capture, and no APK is built locally per ADR 0010.
+Seven phases now have a definition of done that needs physical hardware, and none can be automated here — each requires a user to enable the accessibility service, grant screen capture, or allow display over other apps, and no APK is built locally per ADR 0010.
 
 | Phase | What needs checking on a device                                                                       |
 | ----- | ----------------------------------------------------------------------------------------------------- |
@@ -981,11 +1094,12 @@ Six phases now have a definition of done that needs physical hardware, and none 
 | 5     | a workflow runs end to end: `RN → JSON → engine → registry → executor → tool runtime → device`        |
 | 6     | the canvas holds 60fps with dozens of nodes, and a workflow survives a restart                        |
 | 7     | the agent completes the WhatsApp scenario with a real provider key                                    |
+| 8     | the overlay stays on top in WhatsApp and returns a valid condition config                             |
 | 9     | replaying a generated workflow reproduces the recorded outcome                                        |
 
-**The `app-debug` artifact from run `33148607526` is the build to sideload, and one session can now clear all six** — they chain naturally: run the agent (7), which records a trace (9), generate a workflow, run it from the canvas (5), which exercises the bridge (3) and the Kotlin core (2), on a canvas whose smoothness is judged while doing it (6).
+**The `app-debug` artifact from run `33158531604` is the build to sideload, and one session can now clear all seven** — they chain naturally: run the agent (7), which records a trace (9), generate a workflow, run it from the canvas (5), which exercises the bridge (3) and the Kotlin core (2), on a canvas whose smoothness is judged while doing it (6); then open the overlay on one of its steps and configure it against a real app (8).
 
-That chaining is the argument for doing it now rather than later. Six unverified layers means a failure anywhere is ambiguous between all of them; run in this order, a failure localises itself.
+This is now the single largest gap in the project. Every layer is built and tested against fakes; none has been proven against hardware, and a failure anywhere is currently ambiguous between seven candidates. Run in the order above, a failure localises itself.
 
 ### Deliberately out of scope
 
@@ -1010,7 +1124,7 @@ _Phases 4+5:_
 
 _Phase 6:_
 
-- **react-navigation** — the shell is a tab switch plus one modal route. Five destinations, one a full-bleed canvas, did not justify a navigator; Phase 8's overlay is where routing has to be decided.
+- **react-navigation** — the shell is a tab switch plus modal routes. Six destinations, one a full-bleed canvas, did not justify a navigator; Phase 8 then turned out to need a separate React root rather than a route, so the decision was settled by not making it.
 - **Multi-select, copy/paste, and undo** — each is a real feature rather than polish, and none is needed to build and run a workflow.
 - **A variables editor** — variables are read and displayed during a run, but declaring them by hand comes with the Input-node work.
 - **A bundled font for the canvas** — Skia's text primitive is adequate; a font file is a size cost worth weighing separately.
@@ -1027,3 +1141,10 @@ _Phase 9:_
 - **No trace-to-trace diffing** — comparing two runs of the same goal would be a good way to find the fragile step, but it needs several recordings of the same task to be useful.
 - **The generator produces a straight chain** — a trace where the agent recovered contains the information for a condition node, but inferring one would be guessing at intent the user never expressed.
 - **No replay-on-device validation** — `checkReplay` is a pre-flight check by design. Actually running the generated workflow and comparing outcomes is the device-verification item.
+
+_Phase 8:_
+
+- **The overlay is not draggable** — `moveOverlay` exists and clamps correctly, but no gesture is wired to it. A drag handle inside a 30%-height window competes with the tool row for space, and the anchored position is already thumb-reachable.
+- **No screenshot sent to the model** — captured and named in the prompt, but no image crosses. Same blocker as Phase 7.
+- **No element picking by tapping the app underneath** — `FLAG_NOT_FOCUSABLE` is what stops the overlay stealing touches meant for the app, which is deliberate. Picking is done from the element list instead.
+- **The eye toggle resizes the window and reflows the content separately** — a synchronised animation would need the Kotlin and RN sides to agree on timing for little gain.

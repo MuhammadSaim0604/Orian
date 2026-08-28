@@ -19,7 +19,7 @@ Environment is Windows; the user works in PowerShell/cmd. Git remote: `https://g
 
 ## Current repository state
 
-Phases 0-7 and 9 are **complete** and CI is green on `main`. Milestone M3 (Workflows) is done and M4 needs only Phase 8. The repo holds a working pnpm + Turborepo monorepo (15 packages), the RN app with a Skia workflow builder, an agent screen, and a trace review screen, eight Kotlin Gradle modules under `android/`, a typed native bridge, the node system and workflow engine, the AI agent, and the execution recorder. `tracking.md` is the living record - read it first to see exactly what exists and what was deliberately deferred.
+Phases 0-9 are **complete** and CI is green on `main`. Milestones M3 and M4 are closed; **only Phase 10 remains**. The repo holds a working pnpm + Turborepo monorepo (15 packages), the RN app with a Skia workflow builder, an agent screen, a trace review screen and the Configure-with-AI floating overlay, eight Kotlin Gradle modules under `android/`, a typed native bridge, the node system and workflow engine, the AI agent, and the execution recorder. `tracking.md` is the living record - read it first to see exactly what exists and what was deliberately deferred.
 
 The commands below are real and current.
 
@@ -85,7 +85,7 @@ Full detail lives in `Development_Plan/architecture/`. The essentials that span 
 
 **Execution recording is first-class.** During an agent run the recorder captures per step: screenshot path, UI hierarchy, package, activity, action, coordinates, nodeId, selected element, selector, timestamp, result. `ExecutionTrace = ExecutionStep[]` compiles into a reusable `Workflow` **deterministically** - no model involved, since the trace already says what happened. The generator's real work is choosing a more durable selector than the agent used, from the element the resolver matched.
 
-**Configure-with-AI overlay** is a native Kotlin overlay window hosting RN content, bound to a node ID. It sends the model node config + screen package/activity + UI tree + screenshot + available tools, and the model must return a **structured node configuration** validated by that node's Zod schema — never prose.
+**Configure-with-AI overlay** is a native Kotlin overlay window hosting RN content, bound to a node ID. It sends the model node config + screen package/activity + UI tree + screenshot + available tools, and the model must return a **structured node configuration** validated by that node's Zod schema — never prose. It is a real `WindowManager` window rather than a modal because a modal dies the moment the user switches to the app they are configuring against, which means **two React roots in one process**: the bound node id crosses as an initial prop, and shared state comes from the Zustand store module both roots import.
 
 **MCP is a boundary, not a feature.** `External AI → MCP → Agent Tool Gateway → Android Tool Runtime → Device`. Local-only and authenticated by default.
 
@@ -97,7 +97,7 @@ Full detail lives in `Development_Plan/architecture/`. The essentials that span 
 apps/mobile → ui, workflow-engine, core-nodes, android-nodes, node-sdk, ai-agent,
               prompt-engine, execution-recorder, screen-inspector, native-automation
 native-automation → android/bridge → android/automation → the five capability modules
-apps/mobile/android/app → android/bridge, android/storage
+apps/mobile/android/app → android/bridge, android/storage, android/overlays
 workflow-engine → node-sdk, workflow-schema, shared-types
 core-nodes / android-nodes → node-sdk, tool-sdk, shared-types
 android-nodes (runtime) → native-automation
@@ -108,6 +108,8 @@ mcp-server → tool-sdk, shared-types
 ```
 
 `execution-recorder` deliberately does **not** depend on `ai-agent`. It takes a plain object shaped like `toolExecuted`, so it can be tested without the agent and the dependency does not run upward toward the loop.
+
+`android/overlays` is depended on by the app module **directly**, not through `:automation`. The automation runtime does not draw windows, and routing the dependency through it would make every consumer of the runtime pull in the overlay layer.
 
 `android/storage` keeps Room behind `WorkflowStore`, its only public type. Reaching past it makes the app module need Room on its own classpath — which is how the Phase 6 CI failure happened.
 
@@ -124,7 +126,7 @@ Both are cross-language, so a parity test on each side restates the other's list
 
 - **pnpm's strict layout breaks RN tooling.** Anything Gradle or Metro invokes must be declared explicitly in `apps/mobile/package.json` — the RN gradle-plugin, codegen, community CLI, and the babel JSX transform all had to be added after CI failures.
 - **Workspace packages the app imports must be source-entry.** Metro does not run Turborepo's build first, so a package pointing at `dist/` breaks the release bundle **while the debug APK still passes** — a misleading green. Two working shapes: `main` at `./src/index.ts` (for private packages like `ui`, `native-automation`, `ai-agent`), or keep `main` at `dist` and add a `"react-native": "./src/index.ts"` field so Metro reads source while Node and vitest read dist (for publishable packages like `node-sdk`, `core-nodes`, `android-nodes`). Verify with `npx react-native bundle --dev false`.
-- **Only an assemble compiles the app module.** ktlint and unit tests do not, so a broken dependency between `apps/mobile/android/app` and an `android/` module passes locally and fails in CI — this cost a round trip with `:storage` and Room. When changing a module's public surface, run `gradle :<module>:assembleDebug`.
+- **Only an assemble compiles the app module.** ktlint and unit tests do not, so a broken dependency between `apps/mobile/android/app` and an `android/` module passes locally and fails in CI — this cost a round trip with `:storage` and Room. The `androidTest` source set has the same problem: it is compiled only by `assembleDebugAndroidTest`, which cost a second round trip in Phase 8. When changing a module's public surface run `gradle :<module>:assembleDebug`, and when changing anything an instrumentation test touches run `gradle assembleDebugAndroidTest`.
 - **`org.json` is stubbed in Android JVM unit tests**, returning default values. Kotlin code that must be unit-testable off-device cannot use it; `android/bridge` and `android/storage` hand-roll their JSON for this reason.
 - **Provider credentials never enter JS state.** The API key lives in the Android Keystore; `getSettings` returns `hasApiKey` rather than the value, and the TS provider takes `apiKey` as a function read at request time. Never render it, log it, or put it in a prompt.
 - **Gesture Handler has three easily-missed wiring requirements**: imported first in `index.js`, `MainActivity.onCreate` passing `null` to `super`, and a `flex: 1` `GestureHandlerRootView`. Each fails silently or obscurely rather than with a useful error.
@@ -133,7 +135,7 @@ Both are cross-language, so a parity test on each side restates the other's list
 
 Each file in `Development_Plan/phases/` has goals, deliverables, and a definition of done. Read the phase file before starting it, and honour its definition of done rather than declaring the phase finished when the code compiles.
 
-**Phases 0-7 and 9 are complete**, so Milestone M3 is closed and M4 needs only Phase 8. The remaining order below was agreed with the user and **deviates from the plan's strict numeric sequence**; the dependency graph in `01_Roadmap.md` permits it, since Phase 7 needs only 3 and 4, not 5 or 6.
+**Phases 0-9 are complete**, so Milestones M3 and M4 are closed and only Phase 10 remains. The order below was agreed with the user and **deviated from the plan's strict numeric sequence**; the dependency graph in `01_Roadmap.md` permitted it, since Phase 7 needs only 3 and 4, not 5 or 6.
 
 | Order | Phase | Scope | Why here |
 | --- | --- | --- | --- |
@@ -141,7 +143,7 @@ Each file in `Development_Plan/phases/` has goals, deliverables, and a definitio
 | 2 | **7** ✅ | AI agent engine | Needs only 3 and 4. Pure TS, testable offline with a mocked provider. **Recorder seam built in** - `toolExecuted` carries everything Phase 9 needs, so that phase never reopens the loop |
 | 3 | **6** ✅ | Workflow builder UI (Skia canvas, Zustand) | The largest, most iterative phase; kept alone. With 7 done it wired the real "Create by AI" entry point instead of a stub |
 | 4 | **9** ✅ | Execution recorder, generator, review UI | The review screen needs 6's canvas, so this follows it |
-| 5 | **8** | Configure-with-AI overlay | The hardest integration: needs 2's overlay, 6's node editor, and 7's agent all working - all three now are |
+| 5 | **8** ✅ | Configure-with-AI overlay | The hardest integration: needs 2's overlay, 6's node editor, and 7's agent all working - all three were by then |
 | 6 | **10** | MCP server, npm publishing | MCP is a small self-contained TS unit |
 
 **Hardening is continuous, not a phase.** Permission UX, error recovery, foreground-service reliability, and performance belong to whichever phase introduces the surface. Phase 10 keeps only MCP and distribution.
@@ -152,7 +154,7 @@ Cross-cutting from Phase 1 onward: testing, centralized theming, prompt engineer
 
 ### Outstanding device verification
 
-Phases 2, 3, 5, 6, 7, and 9 all have definition-of-done items that need physical hardware and are **not yet done** - they are covered only by emulator instrumentation and by tests against fakes. One session can now clear all six, because they chain: run the agent (7), which records a trace (9), generate a workflow, run it from the canvas (5), which exercises the bridge (3) and the Kotlin core (2), judging canvas smoothness while doing it (6). See the table in `tracking.md`.
+Phases 2, 3, 5, 6, 7, 8, and 9 all have definition-of-done items that need physical hardware and are **not yet done** - they are covered only by emulator instrumentation and by tests against fakes. One session can now clear all seven, because they chain: run the agent (7), which records a trace (9), generate a workflow, run it from the canvas (5), which exercises the bridge (3) and the Kotlin core (2), judging canvas smoothness while doing it (6), then open the overlay on one of its steps (8). This is the single largest gap in the project; see the table in `tracking.md`.
 
 ## Skills
 
