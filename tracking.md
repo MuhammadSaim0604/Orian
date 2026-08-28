@@ -4,7 +4,7 @@ Living record of what has been implemented, which phase is complete, and what re
 
 Authoritative plan: `Development_Plan/`. Phase order was agreed with the user and **deviates from the plan's strict numeric sequence** for the remaining work - see `ORION.md`. The roadmap's own dependency graph permits it.
 
-Last updated: after Phases 4+5, with both CI workflows green on `main` (Android CI run `33095669422`, TypeScript CI run `33095669365`).
+Last updated: after Phase 7, with both CI workflows green on `main` (Android CI run `33137160631`, TypeScript CI run `33137160688`).
 
 ---
 
@@ -18,8 +18,8 @@ Last updated: after Phases 4+5, with both CI workflows green on `main` (Android 
 | 3     | Native bridge (Turbo Modules / JSI)                  | M2 Device control | **Complete** |
 | 4     | Node SDK & Zod workflow schema                       | M3 Workflows      | **Complete** |
 | 5     | Workflow engine (DAG, registry, executor)            | M3 Workflows      | **Complete** |
-| 7     | AI agent engine (loop, planner, memory)              | M4 Intelligence   | Next         |
-| 6     | Workflow builder UI (Skia canvas, Zustand)           | M3 Workflows      | Not started  |
+| 7     | AI agent engine (loop, planner, memory)              | M4 Intelligence   | **Complete** |
+| 6     | Workflow builder UI (Skia canvas, Zustand)           | M3 Workflows      | Next         |
 | 9     | Execution recorder & workflow generation             | M4 Intelligence   | Not started  |
 | 8     | Configure-with-AI floating overlay                   | M4 Intelligence   | Not started  |
 | 10    | MCP server, node distribution, polish                | M5 Platform       | Not started  |
@@ -518,26 +518,164 @@ Phase 5's definition of done requires `RN → Workflow JSON → Engine → Regis
 
 ---
 
+## Phase 7 — AI Agent Engine (complete)
+
+Natural-language goal in, device driven out. Separate from the workflow engine and sharing only the tool vocabulary (ADR 0008), so the agent's non-determinism never leaks into deterministic workflow execution.
+
+### `tool-sdk` — one definition per tool
+
+Four modules: `names.ts` (the vocabulary Kotlin mirrors), `arguments.ts` (a strict Zod schema per tool), `definitions.ts` (what the model is told), `validation.ts` (the gate before execution).
+
+The `description` field is written **for the model**, not for a reader. The commonest agent failure is not a malformed call but a plausible call to the wrong tool, so each description says what the tool is for and, where it matters, what to prefer instead — "use `waitForElement` if the screen may still be loading".
+
+Every argument schema is `.strict()`. A model that invents a field is misunderstanding the tool, and dropping it silently would hide that while doing something other than what the model intended.
+
+`impact` and `idempotent` make retry policy **data rather than guesswork**: a read is always safe to repeat, a tap might submit a form twice, and sending a message twice is worse than not sending it.
+
+`validateToolCall` distinguishes three failures because the useful correction differs — an unknown tool needs the list of real ones, malformed JSON needs "send valid JSON", bad arguments need the specific field. Each message is phrased as an instruction, since it goes straight into the next prompt.
+
+The Zod-to-JSON-Schema conversion is hand-rolled rather than taken from a library. The subset needed is small, and it has to **unwrap `.refine()`** — without that the selector renders as an empty schema and the model cannot construct one at all.
+
+### `prompt-engine` — context assembly is the agent's perception
+
+The model cannot see the phone. It sees what `buildAgentContext` assembles, so what is included, what is omitted, and how it is labelled _is_ what the agent is capable of. That is why this is a tested function rather than string concatenation at a call site: a context that silently loses the current screen produces an agent that confidently acts on a stale one, which looks like a bad model rather than a bug.
+
+Ordering is deliberate — the goal first because everything serves it, the current screen **last** because recency weighs heavily on a model's attention and the screen is what the next decision rests on.
+
+The token budget is divided explicitly rather than filled naively, because the parts are not equally important: one busy screen's UI tree would otherwise crowd out the goal. Memory trimming keeps the most recent steps and **announces the drop**, since a model shown steps 4–9 with no indication that 1–3 existed may conclude it has just started and repeat work.
+
+Every rule in `AGENT_SYSTEM_PROMPT` exists to prevent a specific failure:
+
+| Rule                                     | Failure it prevents                                         |
+| ---------------------------------------- | ----------------------------------------------------------- |
+| read the screen before acting            | tapping coordinates remembered from two screens ago         |
+| prefer `resourceId`                      | text selectors breaking on any label or language change     |
+| wait after an action that loads a screen | the commonest false "element not found" — looking too early |
+| say when you are finished                | running to the step ceiling on every success                |
+| never invent an element                  | guessing a plausible id and tapping something unintended    |
+
+Redaction strips credential-shaped keys **recursively** — a key at depth four is exactly as dangerous as one at the top — and preserves structure so the model still sees that a field existed, which matters when reasoning about a login screen. Truncation announces itself, because text that stops mid-sentence reads as the whole content and the model will reason confidently about a screen it half saw.
+
+`parser.ts` extracts JSON by brace matching rather than regex, tolerating fences, a preamble, a trailing explanation, and braces inside string values. Repair fixes **formatting only, never meaning**: trailing commas, smart quotes, unquoted keys. A missing required field is reported rather than invented — guessing would produce a config that validates and then does the wrong thing on someone's phone.
+
+Node-config and generation contexts were built here too, so Phase 8 and Phase 9 are UI work rather than a second prompt pipeline.
+
+### `ai-agent` — the loop
+
+```
+goal → plan → observe → choose tool → validate → execute → observe → replan → done
+```
+
+**Four independent stops**, because a confused model driving someone's phone is the worst failure this product can have: a step ceiling, a wall-clock deadline, stuck detection, and cancellation. The deadline is separate from the step count because a step is not a fixed cost — forty `waitForElement` steps could be twenty minutes of a phone being driven.
+
+Memory derives three signals a model does not reliably notice about itself:
+
+- **Consecutive failures** (≥2 replans). Not one: a single failure is usually a screen that had not finished loading, and replanning on it throws away a correct plan.
+- **An identical action repeated** (≥3 is stuck). Not two — tapping the same "next" button twice is normal.
+- **Steps without the screen changing** (≥6 is stuck). The subtler and more common loop: different selectors tried on a screen that does not contain what the agent wants.
+
+`summarise()` is mechanical rather than a model call, because summarising would cost a round trip and a wait at exactly the moment the agent is already struggling.
+
+Three decisions in the loop worth carrying forward:
+
+- **The screen is observed every iteration, never cached.** Acting on a stale reading is the failure this ordering exists to prevent.
+- **One tool call at a time.** A model will propose three taps at once, but the second depends on what the first did to the screen and it cannot know that yet.
+- **A rejected call is fed back as a correction and does not charge the step budget.** Otherwise a confused model exhausts the run without ever acting.
+
+`toolChoice` is `auto`, not `required`: forcing a tool call would leave the model no way to say it is finished, and the run could only end by hitting the ceiling.
+
+### The recorder seam
+
+`toolExecuted` is built in now rather than retrofitted in Phase 9. It carries everything `ExecutionStep` requires — screen identity, the UI tree before the action, the resolved element and which strategy matched, the result or the error and its code, and the screen after — for **failures as much as successes**, since the failed step is the one a person most wants to look at.
+
+The resolved element is the point: a trace of coordinates compiles into a workflow that breaks on the next app update, while one carrying the element that actually matched compiles into one that survives (ADR 0009).
+
+### Provider credentials
+
+`ProviderCredentialStore` encrypts the API key with an AES-GCM key from the hardware-backed Android Keystore. Hand-rolled because `androidx.security:security-crypto` is deprecated and its replacement is not stable; the primitive needed here is one key and one value.
+
+The asymmetry is the design. TypeScript can **write** the key and ask whether one exists, but `getSettings` returns `hasApiKey` rather than the value, and the only reader is the provider client at request time. The TS provider takes `apiKey` as a **function**, so nothing in JS state ever owns a credential — it cannot reach a component tree, a devtools snapshot, or a crash report (ADR 0007).
+
+The base URL and model are stored in the clear. Encrypting them would imply they are secret, which invites treating the key as casually as the URL.
+
+`setUserAuthenticationRequired` is deliberately not set: it would demand a device unlock on every read, which for a background automation run means the run simply fails. The protection would cost the feature.
+
+### The app
+
+`AgentScreen` — type a goal, watch it happen, stop it. Three things it must get right, being the surface where a user hands control of their phone to a model:
+
+- **Stop is always reachable**, beside the goal field rather than below a scrolling log.
+- **Every step is narrated.** An agent acting silently is alarming; the log is the reassurance. `AgentEventRow` renders each of the nine event types in plain language, describing a tap by what was touched rather than by selector JSON.
+- **It refuses to start when it cannot work.** Accessibility off and no provider key are different problems with different fixes, and both are stated rather than surfacing later as a failed run.
+
+`HomeScreen` became a three-tab shell (Agent / Status / Provider) rather than pulling in react-navigation — a structural decision better made in Phase 6, where the canvas and its editors define what navigation has to support.
+
+`packages/native-automation/src/tools.ts` adds `invokeTool`, dispatching a tool name to a device function. Both the agent and Phase 10's MCP server need it; without it each would grow its own switch and the two would eventually disagree about what `swipe` means. A test asserts every name in `TOOL_NAMES` is wired, which is what would catch a tool added to the vocabulary and connected to nothing.
+
+**Verification**
+
+```
+pnpm turbo run typecheck lint test build     60/60 tasks, 782 TypeScript tests
+pnpm format:check                            clean
+pnpm install --frozen-lockfile               clean
+cd android && gradle ktlintCheck             clean across all modules
+npx react-native bundle --dev false          succeeds
+```
+
+The bundle check mattered here: `ai-agent`, `prompt-engine`, `tool-sdk`, and `shared-types` were switched to source entrypoints because the app now imports them, and pointing at `dist/` breaks the release bundle while the debug APK still passes — the exact regression that cost a CI round trip in Phase 3.
+
+CI runs `33137160631` (Android) and `33137160688` (TypeScript) are green, including both APKs and instrumentation on API 26 and 34.
+
+**The flagship scenario** runs `"Send Robert a WhatsApp message that I'll be late tomorrow"` against a simulated phone whose screen **only advances when the right action is taken**, and a model that reacts to the rendered tree rather than following a fixed script. That construction is what gives the test value: it fails if the loop ever stops putting the screen in context. It covers the happy path, recovery when the agent tries to send before typing, that taps are recorded as selectors rather than coordinates, and that an unvalidated call never reaches the device.
+
+**Files**
+
+```
+packages/tool-sdk/src/{names,arguments,definitions,validation}.ts
+packages/prompt-engine/src/{template,redaction,agent-context,node-config-context,generation-context,parser}.ts
+packages/ai-agent/src/{provider,memory,events,loop}.ts       + scenario.test.ts
+packages/native-automation/src/tools.ts                      invokeTool dispatch
+apps/mobile/src/features/agent/{AgentScreen,AgentEventRow,ProviderSettingsScreen}.tsx
+apps/mobile/src/features/agent/{useAgentRun,providerSettings}.ts
+apps/mobile/android/.../settings/{ProviderCredentialStore,ProviderSettingsModule}.kt
+```
+
+**Commit:** `578e36c`
+
+### Not yet verified on a real device
+
+The definition of done requires the WhatsApp scenario completing on hardware. Everything up to the tool call is proven against a simulated phone; the last hop needs a device, an enabled accessibility service, and a real provider key.
+
+### Deliberately deferred
+
+- **Streaming completions.** The loop needs a whole tool call before it can act, so streaming would only make the "thinking" text appear sooner. Worth adding when the UI has somewhere to stream into.
+- **Vision.** `takeScreenshot` is offered and the context carries a screenshot path, but no image is sent to the model. Doing so needs a vision-capable provider and a cost decision, and it is also what would complete the selector chain's seventh step at run time.
+- **The foreground service is not started for an agent run.** A run currently dies if the user leaves the app. The plumbing exists (`startAutomationService`); wiring it belongs with the run-persistence work in Phase 9.
+- **`execution-recorder` is still a scaffold.** The seam it will consume now exists and is tested, which was the point of building it here.
+
+---
+
 ## Remaining
 
-Order agreed with the user, deviating from the plan's numeric sequence (`ORION.md` records the rationale per phase). Next is **Phase 7 — AI agent engine**: the goal → plan → observe → choose tool → execute → replan loop, a Chat Completions client, memory, and structured tool-call output. It depends only on Phases 3 and 4, is pure TypeScript, and is testable offline with a mocked provider.
+Order agreed with the user, deviating from the plan's numeric sequence (`ORION.md` records the rationale per phase). Next is **Phase 6 — the workflow builder UI**: the Skia canvas, node editor, schema-driven config forms, debugger, and workflow persistence. It is the largest and most iterative phase, which is why it is kept alone.
 
-**Build the recorder seam into Phase 7 as it is written** — emit an event per tool execution — so Phase 9 does not have to reopen the agent loop.
+With Phase 7 already done, Phase 6 can wire the real **"Create by AI"** entry point rather than leaving a stub - `runAgent` and the plan context both exist.
 
-Then: 6 (canvas), 9 (recorder + generator + review), 8 (overlay), 10 (MCP + publishing).
+Then: 9 (recorder + generator + review), 8 (overlay), 10 (MCP + publishing).
 
 Carry-forward notes:
 
-- **`AutomationRuntime` is the contract to preserve.** Method names match `DeviceTool.toolName`, `@mobile-automation/tool-sdk`, and the TS wrapper, with parity tests on both sides. The agent must name tools from `TOOL_NAMES`, or it will be able to name a tool it cannot call.
-- **The bridge is the only crossing.** `packages/native-automation` is where TypeScript meets Kotlin. Nothing else should import `NativeModules`, and nothing in `packages/` may import from `apps/mobile` (enforced by ESLint).
-- **`ToolInvoker` is the shared seam.** Both engines reach the device through the SDK's abstract invoker, which is what lets the workflow engine be tested against a fake — and it is where the Phase 9 recorder hooks in, since every device action passes through it.
-- **Node config schemas are the AI's output contract.** Phase 8's overlay must return config validated against the node's own `configSchema`, never prose. The schemas exist and are strict; use them rather than re-describing shapes in a prompt.
+- **`AutomationRuntime` is the contract to preserve.** Method names match `DeviceTool.toolName`, `@mobile-automation/tool-sdk`, and the TS wrapper, with parity tests on both sides. Adding a tool means editing both sides in one commit.
+- **The bridge is the only crossing.** `packages/native-automation` is where TypeScript meets Kotlin. Nothing else should import `NativeModules`, and nothing in `packages/` may import from `apps/mobile` (enforced by ESLint). `invokeTool` in that package is the by-name dispatch both the agent and the MCP server use.
+- **`ToolInvoker` is the workflow engine's device seam; `toolExecuted` is the agent's.** The Phase 9 recorder consumes both, and each already carries the screen, the tree, and the resolved selector.
+- **Node config schemas are the AI's output contract.** Phase 8's overlay must return config validated against the node's own `configSchema`, never prose. `buildNodeConfigContext` and `parseStructured` already exist for exactly this, so that phase is UI work.
 - **The UI-tree JSON is versioned for a reason.** `UI_TREE_SCHEMA_VERSION` is at **2**; bump it whenever a key changes and update `UiNodeAttribute`, `UI_NODE_ATTRIBUTES`, and the `UiTree` type in `native-automation` together. `UiNodeAttributeParityTest` catches the Kotlin half; nothing yet catches a stale TS list, so keep them in the same commit.
-- **Vision needs a provider before it does anything.** `SelectorResolver` defaults to `UnavailableVisionMatcher`, so today the chain reports "vision was not attempted" and stops at coordinates. A real `VisionMatcher` needs a screenshot plus a model call — that is Phase 7 work, and wiring one in is the only remaining step to complete the selector chain at runtime.
+- **Vision is still not wired.** `SelectorResolver` defaults to `UnavailableVisionMatcher`, so the chain reports "vision was not attempted" and stops at coordinates. The agent now has a provider client and a screenshot path in context, so a real `VisionMatcher` is a small piece of work - it needs a vision-capable model and a cost decision, not new plumbing.
 - **Big payloads cross by reference.** Screenshots are file paths and the UI tree has a compact mode. Neither should become inline base64, and the compact tree is what belongs in a model context.
-- **Workspace packages the RN app imports must be source-entry.** Metro does not run Turborepo's build first, so a package pointing at `dist/` breaks the release bundle while the debug APK may still pass — a misleading signal that cost a CI round trip in Phase 3. Follow `packages/ui` and `packages/native-automation`: `private: true`, `main` at `./src/index.ts`, `build` emitting declarations only, and no `.js` extensions on relative imports.
-- **pnpm strictness.** When adding any React Native tool that Gradle or Metro invokes, declare it explicitly in `apps/mobile/package.json`; three Phase 1 CI failures were undeclared transitive dependencies.
+- **Workspace packages the RN app imports must be source-entry.** Metro does not run Turborepo's build first, so a package pointing at `dist/` breaks the release bundle while the debug APK may still pass. `ui`, `native-automation`, `shared-types`, `tool-sdk`, `prompt-engine`, and `ai-agent` are already converted; convert any other package the moment the app imports it.
+- **pnpm strictness.** When adding any React Native tool that Gradle or Metro invokes, declare it explicitly in `apps/mobile/package.json`; three Phase 1 CI failures were undeclared transitive dependencies. Phase 6 will hit this with Skia and Gesture Handler.
 - **Theme values are duplicated by necessity.** `packages/ui/src/theme/semantic.ts` and `apps/mobile/src/global.css` must change together; a parity test is worth adding in Phase 6.
+- **Navigation is an open decision.** The app is a three-tab switch, deliberately. Phase 6 should choose react-navigation or an alternative based on what the canvas and node editor actually need.
 - **`isEntirelyBlack` samples a 16×16 grid.** If a real app is ever misreported as secure, that is the tuning knob.
 - Local Gradle runs need `ANDROID_HOME` set (`%LOCALAPPDATA%\Android\Sdk` on this machine).
 - The Gradle wrapper JAR is deliberately not committed; CI provisions Gradle 8.11.1 via `gradle/actions/setup-gradle`.
@@ -545,15 +683,18 @@ Carry-forward notes:
 
 ### Outstanding device verification
 
-Three phases now have a definition of done that needs physical hardware, and none can be automated here — each requires a user to enable the accessibility service and grant screen capture, and no APK is built locally per ADR 0010.
+Four phases now have a definition of done that needs physical hardware, and none can be automated here — each requires a user to enable the accessibility service and grant screen capture, and no APK is built locally per ADR 0010.
 
 | Phase | What needs checking on a device                                                                       |
 | ----- | ----------------------------------------------------------------------------------------------------- |
 | 2     | the service reads a third-party app's tree; tap a resolved element, swipe, type, capture a screenshot |
 | 3     | `automation.getUiTree()` and `automation.click(selector)` from JS drive that same device              |
 | 5     | a workflow runs end to end: `RN → JSON → engine → registry → executor → tool runtime → device`        |
+| 7     | the agent completes the WhatsApp scenario with a real provider key                                    |
 
-**The `app-debug` artifact from run `33095669422` is the build to sideload.** Phase 5's check additionally needs an RN entry point that runs a workflow, which arrives with Phase 6 — but phases 2 and 3 can be cleared now, and clearing them first is what stops a later failure being ambiguous between three unverified layers.
+**The `app-debug` artifact from run `33137160631` is the build to sideload.** Phases 2, 3, and 7 can all be cleared with that single build - 7 is now testable because the agent screen and provider settings both exist in it. Phase 5's check additionally needs an RN entry point that runs a workflow, which arrives with Phase 6.
+
+Clearing these matters more with each phase: a failure on device is currently ambiguous between four unverified layers.
 
 ### Deliberately out of scope
 
@@ -575,3 +716,10 @@ _Phases 4+5:_
 - **RN wiring** — the engine is headless by design; the app gains a screen that runs a workflow in Phase 6.
 - **Workflow persistence** — SQLite storage belongs with Phase 6, where there is a UI to save from.
 - **Parallel branches** — execution is sequential because there is only one screen to drive. The loader permits a fan-out shape; the executor follows the first edge.
+
+_Phase 7:_
+
+- **Streaming completions** — the loop needs a whole tool call before it can act, so streaming would only make the "thinking" text appear sooner.
+- **Vision in the model context** — the screenshot path is carried but no image is sent. Needs a vision-capable provider and a cost decision.
+- **Foreground service during an agent run** — a run dies if the user leaves the app. `startAutomationService` exists; wiring it belongs with run persistence in Phase 9.
+- **Agent run history** — nothing is persisted yet. The recorder in Phase 9 is where a run becomes durable.
