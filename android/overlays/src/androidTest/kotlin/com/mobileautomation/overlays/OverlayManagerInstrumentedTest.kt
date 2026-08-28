@@ -4,6 +4,7 @@ import android.content.Context
 import android.view.View
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -39,19 +40,46 @@ class OverlayManagerInstrumentedTest {
     fun refusesToShowWithoutPermission() {
         val manager = manager()
 
-        val shown = manager.show(nodeId = "node-1")
+        val result = manager.show(nodeId = "node-1")
 
-        assertFalse("must not draw over other apps without consent", shown)
+        // The specific failure matters, not just that it failed: the UI offers a settings
+        // deep link for a denial and nothing for a window error.
+        assertEquals(
+            "must not draw over other apps without consent",
+            OverlayResult.Failed(OverlayFailure.PERMISSION_DENIED),
+            result,
+        )
         assertFalse(manager.isShowing)
         assertNull(manager.boundNodeId)
+    }
+
+    @Test
+    fun refusesAnUnboundOverlayEvenBeforeCheckingPermission() {
+        // An overlay with no node id would leave the AI guessing what it is configuring, so this
+        // is rejected as a programming error rather than reported as a permission problem.
+        assertEquals(
+            OverlayResult.Failed(OverlayFailure.NO_BOUND_NODE),
+            manager().show(nodeId = ""),
+        )
     }
 
     @Test
     fun layoutAndMoveAreNoOpsWhenNothingIsShowing() {
         val manager = manager()
 
-        assertFalse(manager.setLayout(OverlayLayout.EXPANDED))
-        assertFalse(manager.moveTo(100, 100))
+        assertEquals(
+            OverlayResult.Failed(OverlayFailure.NOT_SHOWING),
+            manager.setLayout(OverlayLayout.EXPANDED),
+        )
+        assertEquals(
+            OverlayResult.Failed(OverlayFailure.NOT_SHOWING),
+            manager.moveTo(100, 100),
+        )
+    }
+
+    @Test
+    fun reportsAHiddenStateSnapshotWhenNothingIsShowing() {
+        assertEquals(OverlayState.HIDDEN, manager().state)
     }
 
     @Test
