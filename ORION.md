@@ -19,7 +19,7 @@ Environment is Windows; the user works in PowerShell/cmd. Git remote: `https://g
 
 ## Current repository state
 
-Phases 0-7 are **complete** and CI is green on `main`. Milestone M3 (Workflows) is done. The repo holds a working pnpm + Turborepo monorepo (15 packages), the RN app with a Skia workflow builder and an agent screen, eight Kotlin Gradle modules under `android/`, a typed native bridge, the node system and workflow engine, and the AI agent. `tracking.md` is the living record - read it first to see exactly what exists and what was deliberately deferred.
+Phases 0-7 and 9 are **complete** and CI is green on `main`. Milestone M3 (Workflows) is done and M4 needs only Phase 8. The repo holds a working pnpm + Turborepo monorepo (15 packages), the RN app with a Skia workflow builder, an agent screen, and a trace review screen, eight Kotlin Gradle modules under `android/`, a typed native bridge, the node system and workflow engine, the AI agent, and the execution recorder. `tracking.md` is the living record - read it first to see exactly what exists and what was deliberately deferred.
 
 The commands below are real and current.
 
@@ -83,7 +83,7 @@ Full detail lives in `Development_Plan/architecture/`. The essentials that span 
 
 **Selectors, not coordinates.** Every recorded target keeps a priority chain: `resourceId → accessibility semantics → text/contentDescription → structural UI selector → relative position → coordinates → screenshot/vision fallback`. This is what makes replay robust; coordinates are a last resort.
 
-**Execution recording is first-class.** During an agent run the recorder captures per step: screenshot, UI hierarchy, package, activity, action, coordinates, nodeId, selected element, selector, timestamp, result. `ExecutionTrace = ExecutionStep[]` compiles into a reusable `Workflow`.
+**Execution recording is first-class.** During an agent run the recorder captures per step: screenshot path, UI hierarchy, package, activity, action, coordinates, nodeId, selected element, selector, timestamp, result. `ExecutionTrace = ExecutionStep[]` compiles into a reusable `Workflow` **deterministically** - no model involved, since the trace already says what happened. The generator's real work is choosing a more durable selector than the agent used, from the element the resolver matched.
 
 **Configure-with-AI overlay** is a native Kotlin overlay window hosting RN content, bound to a node ID. It sends the model node config + screen package/activity + UI tree + screenshot + available tools, and the model must return a **structured node configuration** validated by that node's Zod schema — never prose.
 
@@ -103,8 +103,11 @@ core-nodes / android-nodes → node-sdk, tool-sdk, shared-types
 android-nodes (runtime) → native-automation
 ai-agent → prompt-engine, tool-sdk, shared-types
 prompt-engine → tool-sdk, shared-types
+execution-recorder → workflow-schema, shared-types
 mcp-server → tool-sdk, shared-types
 ```
+
+`execution-recorder` deliberately does **not** depend on `ai-agent`. It takes a plain object shaped like `toolExecuted`, so it can be tested without the agent and the dependency does not run upward toward the loop.
 
 `android/storage` keeps Room behind `WorkflowStore`, its only public type. Reaching past it makes the app module need Room on its own classpath — which is how the Phase 6 CI failure happened.
 
@@ -130,15 +133,15 @@ Both are cross-language, so a parity test on each side restates the other's list
 
 Each file in `Development_Plan/phases/` has goals, deliverables, and a definition of done. Read the phase file before starting it, and honour its definition of done rather than declaring the phase finished when the code compiles.
 
-**Phases 0-7 are complete**, so Milestone M3 is closed. The remaining order below was agreed with the user and **deviates from the plan's strict numeric sequence**; the dependency graph in `01_Roadmap.md` permits it, since Phase 7 needs only 3 and 4, not 5 or 6.
+**Phases 0-7 and 9 are complete**, so Milestone M3 is closed and M4 needs only Phase 8. The remaining order below was agreed with the user and **deviates from the plan's strict numeric sequence**; the dependency graph in `01_Roadmap.md` permits it, since Phase 7 needs only 3 and 4, not 5 or 6.
 
 | Order | Phase | Scope | Why here |
 | --- | --- | --- | --- |
 | 1 | **4 + 5 together** ✅ | Node SDK & Zod schema, then the workflow engine | The executor contract and node config schemas have no consumer until the engine exists; building them apart means guessing the shape and reworking it |
 | 2 | **7** ✅ | AI agent engine | Needs only 3 and 4. Pure TS, testable offline with a mocked provider. **Recorder seam built in** - `toolExecuted` carries everything Phase 9 needs, so that phase never reopens the loop |
 | 3 | **6** ✅ | Workflow builder UI (Skia canvas, Zustand) | The largest, most iterative phase; kept alone. With 7 done it wired the real "Create by AI" entry point instead of a stub |
-| 4 | **9** | Execution recorder, generator, review UI | The review screen needs 6's canvas, so this follows it |
-| 5 | **8** | Configure-with-AI overlay | The hardest integration: needs 2's overlay, 6's node editor, and 7's agent all working |
+| 4 | **9** ✅ | Execution recorder, generator, review UI | The review screen needs 6's canvas, so this follows it |
+| 5 | **8** | Configure-with-AI overlay | The hardest integration: needs 2's overlay, 6's node editor, and 7's agent all working - all three now are |
 | 6 | **10** | MCP server, npm publishing | MCP is a small self-contained TS unit |
 
 **Hardening is continuous, not a phase.** Permission UX, error recovery, foreground-service reliability, and performance belong to whichever phase introduces the surface. Phase 10 keeps only MCP and distribution.
@@ -149,7 +152,7 @@ Cross-cutting from Phase 1 onward: testing, centralized theming, prompt engineer
 
 ### Outstanding device verification
 
-Phases 2, 3, 5, 6, and 7 all have definition-of-done items that need physical hardware and are **not yet done** - they are covered only by emulator instrumentation and by tests against fakes. The latest `app-debug` CI artifact can now clear all five in one session, since the canvas has a Run button and the agent screen has provider settings. See the table in `tracking.md`; do not let five unverified layers keep stacking up.
+Phases 2, 3, 5, 6, 7, and 9 all have definition-of-done items that need physical hardware and are **not yet done** - they are covered only by emulator instrumentation and by tests against fakes. One session can now clear all six, because they chain: run the agent (7), which records a trace (9), generate a workflow, run it from the canvas (5), which exercises the bridge (3) and the Kotlin core (2), judging canvas smoothness while doing it (6). See the table in `tracking.md`.
 
 ## Skills
 

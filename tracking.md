@@ -4,7 +4,7 @@ Living record of what has been implemented, which phase is complete, and what re
 
 Authoritative plan: `Development_Plan/`. Phase order was agreed with the user and **deviates from the plan's strict numeric sequence** for the remaining work - see `ORION.md`. The roadmap's own dependency graph permits it.
 
-Last updated: after Phase 6, with both CI workflows green on `main` (Android CI run `33143486251`, TypeScript CI run `33143486309`).
+Last updated: after Phase 9, with both CI workflows green on `main` (Android CI run `33148607526`, TypeScript CI run `33148607576`).
 
 ---
 
@@ -20,11 +20,11 @@ Last updated: after Phase 6, with both CI workflows green on `main` (Android CI 
 | 5     | Workflow engine (DAG, registry, executor)            | M3 Workflows      | **Complete** |
 | 7     | AI agent engine (loop, planner, memory)              | M4 Intelligence   | **Complete** |
 | 6     | Workflow builder UI (Skia canvas, Zustand)           | M3 Workflows      | **Complete** |
-| 9     | Execution recorder & workflow generation             | M4 Intelligence   | Next         |
-| 8     | Configure-with-AI floating overlay                   | M4 Intelligence   | Not started  |
+| 9     | Execution recorder & workflow generation             | M4 Intelligence   | **Complete** |
+| 8     | Configure-with-AI floating overlay                   | M4 Intelligence   | Next         |
 | 10    | MCP server, node distribution, polish                | M5 Platform       | Not started  |
 
-Rows below Phase 5 are listed in **execution order**, not numeric order. **Milestone M3 is complete**, and M4 needs only 9 and 8.
+Rows below Phase 5 are listed in **execution order**, not numeric order. **Milestone M3 is complete**, and M4 needs only Phase 8.
 
 ---
 
@@ -808,28 +808,161 @@ apps/mobile/android/.../storage/WorkflowStorageModule.kt
 
 ---
 
+## Phase 9 — Execution Recorder & Workflow Generation (complete)
+
+The agent run you just watched can now become a workflow you keep. Recording is a first-class subsystem rather than a logging afterthought: every tool call is captured richly enough that the trace compiles into something durable.
+
+### The recorder owns no capture logic
+
+`toolExecuted` was built in Phase 7 carrying everything an `ExecutionStep` needs — screen identity, the UI tree before the action, the resolved element and which strategy matched, the result or error, the screen after. So `packages/execution-recorder` **shapes and trims rather than collecting**. Two places deciding what a step is would be one too many, and the seam was designed for exactly this: Phase 9 never reopened the agent loop.
+
+Its one substantive job is trimming results. A `getUiTree` result is tens of thousands of characters, and the tree is already stored once per step as `uiTreeBefore` — keeping it again as a result would store the same screen twice. It is truncated rather than dropped, because a partial result still tells a reader what the step returned, and a step with no result looks like it did nothing.
+
+It ignores events when no trace is open rather than throwing. Crashing an agent that is driving someone's phone is worse than losing a recording.
+
+Screenshots are held as **paths, never bytes**. A twenty-step trace with inline images would be tens of megabytes in one database row.
+
+### `waitForElement` is not an observation
+
+The generator collapses screen reads, because a trace is dense with observations the agent needed in order to _decide_ and which a workflow does not need to repeat. Left in they triple the node count and make the canvas unreadable.
+
+`waitForElement` looks like an observation and is deliberately excluded from the list. It is load-bearing: removing it produces a workflow that works when replayed slowly and fails on a cold start, which is the worst kind of intermittent.
+
+### The generator is deterministic
+
+No model is involved. The trace already says exactly what happened, and asking a model to restate it would introduce a chance of it saying something else. Model-assisted generation from a _goal_ is the separate Create-by-AI path built in Phase 6.
+
+**`improveSelector` is where the durability comes from.** A trace is full of coordinates because that is where taps landed; a workflow built from those breaks on the next app update. So the generator walks the resolved element strongest-first — exactly as the runtime resolver does, so the generated selector is one the device will match by the strategy it claims (ADR 0009).
+
+| Available on the element | Generated strategy       | What the user is told                       |
+| ------------------------ | ------------------------ | ------------------------------------------- |
+| `resourceId`             | `resourceId`             | survives updates and translation            |
+| `contentDescription`     | `accessibilitySemantics` | stable across layout changes                |
+| `text`                   | `text`                   | may break if the app is translated          |
+| bounds only              | `relativePosition`       | consider replacing via the screen inspector |
+| nothing                  | recorded selector        | will break if the layout changes            |
+
+In the WhatsApp scenario this is not theoretical: step 3 taps by accessibility label, and the generated node carries `com.whatsapp:id/menuitem_search`.
+
+Bounds are kept **alongside** a strong selector as the fallback that keeps the chain resolvable when an app update removes the id. Every selector is scoped to the screen it was recorded on, because one package renders many screens and a "Send" selector from a conversation must not resolve against the chat list.
+
+Other decisions worth keeping:
+
+- **Every omission is reported with a reason.** A silent collapse from nine steps to six looks like data loss.
+- **Typed text becomes a named variable**, with the recorded value as the default. A workflow hardcoded to "I'll be late tomorrow" can be replayed but not reused, and reuse is the point of generating one. Names come from the field (`searchInput`, `entry`) rather than being numbered — the difference between a reusable workflow and a puzzle.
+- **A wait gets retries; a tap does not.** Retrying a tap could submit a form twice, and the recorded run only ever tapped once.
+- **`openApp` prefers the package name** even when the agent opened the app by label, since the recorder always knows the exact package.
+- **Failed steps are excluded but stay in the trace.** Replaying one would reproduce the failure rather than the outcome; keeping it explains why the next step looks like a repeat.
+- **The chain is straight.** Inventing branches from a linear recording would produce a workflow whose shape the user never demonstrated.
+
+### Replay checking is pre-flight, not simulation
+
+The definition of done asks that a generated workflow "reproduces the outcome". The honest answer is that only a device can confirm that, so `checkReplay` checks what is derivable from the two documents and does not pretend to more. **Claiming to have verified a replay without running it would be worse than not checking, because the user would trust the result.**
+
+Blocking problems are kept apart from warnings because they demand different things:
+
+- **Blocking** — a selector with nothing to locate by (the workflow would fail with "element not found", sending the user to look at their phone rather than at their workflow), or no actions at all.
+- **Warning** — a position-based selector, a screen change with no wait after it, a step that succeeded but did not become a node, a selector scoped to a screen the run never visited.
+
+The missing-wait check reads screen changes **from the trace** rather than guessing from node types, because whether a tap opens a new screen is a fact about the app, not about the tool.
+
+### Persistence
+
+`android/storage` gains a traces table, on the same reasoning as workflows: one JSON document column, because a trace's shape is owned by TypeScript.
+
+Screenshots stay files with paths inside the document (ADR 0005), and the **directory is stored on the row** so deleting a trace can delete its files — without that, removing a trace would leave orphaned images nothing ever cleans up. `TraceScreenshotStore` handles the rest of what that design allows: orphan cleanup for a crash between writing files and committing the row, and id sanitising so a path can never escape its root.
+
+The **1→2 migration is written by hand** rather than falling back to a destructive one. Someone upgrading has workflows they built and expect to still be there.
+
+Traces prune to the newest twenty on write. They accumulate with every agent run and each carries screenshots; unbounded growth would quietly consume a user's storage for recordings they will never open again. Pruning happens on write because that is the only moment the app is certainly running and the user is certainly not reading an older trace.
+
+### In the app
+
+**Recording is automatic, not opt-in.** The decision to keep a run as a workflow is made _after_ watching it succeed, so an opt-in would mean the interesting runs are the ones nobody recorded. Failed runs are saved too — often the more interesting recording, and the one a user wants to look at.
+
+The recorder is fed before the `mounted` check in `useAgentRun`, so a run that outlives its screen still produces a complete trace.
+
+`AgentScreen` offers "Build a workflow from this run" at the moment the user has just watched it work, rather than making them find the recording later.
+
+`TraceReviewScreen`'s job is not displaying a trace — it is letting the user **judge a workflow they did not write**. In order of importance it says: what was dropped and why, how durable each step is with a plain-language rationale, and what would stop it running at all, kept visually separate from what is merely worth checking. It also shows the full recorded trace, including the steps the workflow does not use.
+
+The generated workflow arrives on the canvas **unsaved**, with execution state cleared: a generated workflow showing the previous run's green and red marks would be claiming things about steps that never ran.
+
+`RecordedRunsScreen` lists past runs and states what recordings cost in storage. A feature that quietly consumes space is one a user will resent later.
+
+**Verification**
+
+```
+pnpm turbo run typecheck lint test build     60/60 tasks, 1002 TypeScript tests
+                                             (902 in packages, 100 in the app)
+pnpm format:check                            clean
+pnpm install --frozen-lockfile               clean
+cd android && gradle ktlintCheck testDebugUnitTest   483 tests, 8 modules, clean
+npx react-native bundle --dev false          succeeds
+```
+
+CI runs `33148607526` (Android) and `33148607576` (TypeScript) are green, including both APKs and instrumentation on API 26 and 34.
+
+**The scenario test records the nine-step WhatsApp run exactly as `ai-agent` emits it**, then generates and checks. That construction is what gives it value: if `toolExecuted` ever loses a field, the test fails rather than the recorder silently producing a poorer trace. It proves nine steps collapse to six, the label-tapped step generates a `resourceId`, both typed values become named variables, and **no coordinates appear anywhere in the output**.
+
+Also added `apps/mobile/src/test/renderWithTheme.tsx`, needed because `useTheme` throws outside `ThemeProvider` by design — a component silently falling back to default colours would be worse than a loud failure.
+
+**Files**
+
+```
+packages/execution-recorder/src/{schema,recorder,generator,replay}.ts
+packages/execution-recorder/src/scenario.test.ts        the WhatsApp run end to end
+apps/mobile/src/features/recorder/{traceStorage,useTraceWorkflow}.ts
+apps/mobile/src/features/recorder/{TraceReviewScreen,RecordedRunsScreen}.tsx
+apps/mobile/src/features/agent/useAgentRun.ts           records every run
+android/storage/src/main/kotlin/.../{TraceEntity,TraceDao,TraceScreenshotStore}.kt
+android/storage/src/main/kotlin/.../AutomationDatabase.kt   migration 1→2
+```
+
+**Commit:** `b10c4a3`
+
+### Not yet verified on a real device
+
+- **Replaying a generated workflow**, which is the half of the definition of done that hardware owns. Everything up to the tool call is proven against a recorded trace.
+- **Screenshots are not yet captured per step.** The path field, the directory, and the cleanup all exist; wiring `takeScreenshot` into the recording loop needs MediaProjection consent and a decision about how often to capture, since a screenshot per step at full resolution is a real storage cost.
+
+### Deliberately deferred
+
+- **No screenshot per step yet** — see above. The trace carries `uiTreeBefore`, which is what generation actually needs; screenshots are for the user's benefit when reviewing.
+- **No trace-to-trace diffing.** Comparing two runs of the same goal would be a good way to find the fragile step, but it needs several recordings of the same task to be useful.
+- **The generator produces a straight chain.** A trace where the agent recovered from a failure contains the information for a condition node, but inferring one would be guessing at intent the user never expressed.
+- **Vision fallback still not wired.** Unchanged from Phase 7: the plumbing exists, and it needs a vision-capable model plus a cost decision.
+
+---
+
 ## Remaining
 
-Order agreed with the user, deviating from the plan's numeric sequence (`ORION.md` records the rationale per phase). **Milestone M3 is complete.** Next is **Phase 9 — the execution recorder, workflow generator, and review UI**: capture what the agent does, compile a trace into a workflow, and let the user review it before saving.
+Order agreed with the user, deviating from the plan's numeric sequence (`ORION.md` records the rationale per phase). **Milestone M3 is complete, and M4 needs only Phase 8.** Next is **Phase 8 — the Configure-with-AI overlay**: a native Kotlin overlay window hosting RN content, bound to a node id, that returns a structured node configuration validated by that node's own Zod schema.
 
-Phase 9 is deliberately positioned after 6 because the review screen needs the canvas, which now exists. The two seams it consumes are already built and tested — `toolExecuted` from the agent and `ToolInvoker` from the engine — so it should not need to reopen either engine.
+Phase 8 is last of the intelligence work because it is the hardest integration - it needs Phase 2's overlay manager, Phase 6's node editor, and Phase 7's agent all working. All three now are. The pieces it should reuse rather than rebuild:
 
-Then: 8 (overlay), 10 (MCP + publishing).
+- **`buildNodeConfigContext`** already assembles the payload (node config + screen identity + UI tree + screenshot + available tools) that `Data_Models.md` specifies.
+- **`parseStructured`** already validates model output against a schema and phrases failures as corrections.
+- **`describeSchema`** already renders a form for any node type, including one the UI has never seen. The overlay should render config through that same path rather than building a second one.
+- **`OverlayManager`** in `android/overlays` already handles the `SYSTEM_ALERT_WINDOW` gate and the COMPACT/EXPANDED states.
+
+So Phase 8 is the native overlay window hosting RN content, plus the UI inside it. The model contract already exists and is tested.
+
+Then: 10 (MCP + publishing).
 
 Carry-forward notes:
 
 - **`AutomationRuntime` is the contract to preserve.** Method names match `DeviceTool.toolName`, `@mobile-automation/tool-sdk`, and the TS wrapper, with parity tests on both sides. Adding a tool means editing both sides in one commit.
 - **The bridge is the only crossing.** `packages/native-automation` is where TypeScript meets Kotlin. Nothing else should import `NativeModules`, and nothing in `packages/` may import from `apps/mobile` (enforced by ESLint). `invokeTool` in that package is the by-name dispatch the agent, the workflow engine, and the MCP server all use.
-- **`toolExecuted` already carries everything an `ExecutionStep` needs** — screen identity, the UI tree before, the resolved element and which strategy matched, the result or error, and the screen after — for failures as richly as successes. Phase 9's recorder should consume it rather than adding capture points.
-- **Reuse `buildGenerationContext`.** Create-by-AI already calls it with an empty `steps` array; Phase 9 passes a real trace to the same builder. The prompt already tells the model to collapse observation steps, keep waits, and prefer recorded selectors over coordinates.
-- **Node config schemas are the AI's output contract.** Phase 8's overlay must return config validated against the node's own `configSchema`, never prose. `buildNodeConfigContext`, `describeSchema`, and `parseStructured` all exist, so that phase is UI plus the native overlay window.
-- **`describeSchema` is how any node becomes editable.** A node type the UI has never seen still gets a form. Phase 8's overlay should render config through the same path rather than building a second one.
+- **The overlay must never render a credential.** It shows model output; the API key stays in the Keystore and is read only by the provider client at request time (ADR 0007).
+- **A generated or AI-supplied config is validated before it is applied.** The recorder's generator and Create-by-AI both do this already; the overlay is the third case and the most exposed, since the user is watching another app rather than the workflow.
 - **The UI-tree JSON is versioned for a reason.** `UI_TREE_SCHEMA_VERSION` is at **2**; bump it whenever a key changes and update `UiNodeAttribute`, `UI_NODE_ATTRIBUTES`, and the `UiTree` type in `native-automation` together. `UiNodeAttributeParityTest` catches the Kotlin half; nothing yet catches a stale TS list, so keep them in the same commit.
-- **Vision is still not wired.** `SelectorResolver` defaults to `UnavailableVisionMatcher`, so the chain reports "vision was not attempted" and stops at coordinates. The plumbing is all present — a provider client and a screenshot path in context — so this needs a vision-capable model and a cost decision, not new code paths.
-- **Big payloads cross by reference.** Screenshots are file paths and the UI tree has a compact mode. Neither should become inline base64. Phase 9 will store screenshots on the filesystem with DB references (ADR 0005), and orphaned files need a cleanup story.
+- **Vision is still not wired.** `SelectorResolver` defaults to `UnavailableVisionMatcher`, so the chain reports "vision was not attempted" and stops at coordinates. The plumbing is all present — a provider client, a screenshot path in context, and now a trace that records one per step — so this needs a vision-capable model and a cost decision, not new code paths.
+- **Big payloads cross by reference.** Screenshots are file paths and the UI tree has a compact mode. Neither should become inline base64. Trace screenshots live on the filesystem with the directory recorded on the row, and `TraceScreenshotStore.deleteOrphans` is the cleanup for a crash between writing files and committing the row.
 - **Packages the RN app imports need a source entrypoint.** Metro does not run Turborepo's build first, so a `dist` entry breaks the release bundle while the debug APK may still pass. Every workspace package now has either a source `main` or a `react-native` field; add one to any new package the app imports.
 - **pnpm strictness.** When adding any React Native tool that Gradle or Metro invokes, declare it explicitly in `apps/mobile/package.json`. Skia and Gesture Handler both autolinked cleanly, but three Phase 1 CI failures were undeclared transitive dependencies.
 - **Only an assemble compiles the app module.** ktlint and unit tests do not, so a broken dependency between the app and an `android/` module passes locally and fails in CI — which is exactly what happened with `:storage`. Run `gradle :<module>:assembleDebug` when changing a module's public surface.
+- **A component using a themed primitive needs `renderWithTheme`** in tests. `useTheme` throws outside `ThemeProvider` by design.
 - **Theme values are duplicated by necessity.** `packages/ui/src/theme/semantic.ts` and `apps/mobile/src/global.css` must change together; a parity test is still worth adding.
 - **Navigation is still an open decision.** The shell is a tab switch plus one modal route. Phase 8's overlay is the point at which real routing has to be chosen.
 - **`isEntirelyBlack` samples a 16×16 grid.** If a real app is ever misreported as secure, that is the tuning knob.
@@ -839,7 +972,7 @@ Carry-forward notes:
 
 ### Outstanding device verification
 
-Five phases now have a definition of done that needs physical hardware, and none can be automated here — each requires a user to enable the accessibility service and grant screen capture, and no APK is built locally per ADR 0010.
+Six phases now have a definition of done that needs physical hardware, and none can be automated here — each requires a user to enable the accessibility service and grant screen capture, and no APK is built locally per ADR 0010.
 
 | Phase | What needs checking on a device                                                                       |
 | ----- | ----------------------------------------------------------------------------------------------------- |
@@ -848,10 +981,11 @@ Five phases now have a definition of done that needs physical hardware, and none
 | 5     | a workflow runs end to end: `RN → JSON → engine → registry → executor → tool runtime → device`        |
 | 6     | the canvas holds 60fps with dozens of nodes, and a workflow survives a restart                        |
 | 7     | the agent completes the WhatsApp scenario with a real provider key                                    |
+| 9     | replaying a generated workflow reproduces the recorded outcome                                        |
 
-**The `app-debug` artifact from run `33143486251` is the build to sideload, and it can now clear all five.** Phase 5's check became reachable with this phase: the canvas has a Run button, so building a two-step workflow and running it exercises the whole path.
+**The `app-debug` artifact from run `33148607526` is the build to sideload, and one session can now clear all six** — they chain naturally: run the agent (7), which records a trace (9), generate a workflow, run it from the canvas (5), which exercises the bridge (3) and the Kotlin core (2), on a canvas whose smoothness is judged while doing it (6).
 
-This is the point at which the backlog is worth clearing rather than growing. A failure on device is currently ambiguous between five unverified layers, and the app is now complete enough that a single session with a phone would settle all of them.
+That chaining is the argument for doing it now rather than later. Six unverified layers means a failure anywhere is ambiguous between all of them; run in this order, a failure localises itself.
 
 ### Deliberately out of scope
 
@@ -885,5 +1019,11 @@ _Phase 7:_
 
 - **Streaming completions** — the loop needs a whole tool call before it can act, so streaming would only make the "thinking" text appear sooner.
 - **Vision in the model context** — the screenshot path is carried but no image is sent. Needs a vision-capable provider and a cost decision.
-- **Foreground service during an agent run** — a run dies if the user leaves the app. `startAutomationService` exists; wiring it belongs with run persistence in Phase 9.
-- **Agent run history** — nothing is persisted yet. The recorder in Phase 9 is where a run becomes durable.
+- **Foreground service during an agent run** — a run dies if the user leaves the app. `startAutomationService` exists; this is now the most valuable remaining reliability fix, because a run that dies also loses its recording.
+
+_Phase 9:_
+
+- **No screenshot captured per step** — the path field, the directory, and the cleanup all exist. Wiring `takeScreenshot` into the recording loop needs MediaProjection consent and a decision about capture frequency, since a full-resolution image per step is a real storage cost. Generation does not need them; they are for the user reviewing a trace.
+- **No trace-to-trace diffing** — comparing two runs of the same goal would be a good way to find the fragile step, but it needs several recordings of the same task to be useful.
+- **The generator produces a straight chain** — a trace where the agent recovered contains the information for a condition node, but inferring one would be guessing at intent the user never expressed.
+- **No replay-on-device validation** — `checkReplay` is a pre-flight check by design. Actually running the generated workflow and comparing outcomes is the device-verification item.
