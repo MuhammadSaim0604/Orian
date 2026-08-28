@@ -98,5 +98,8 @@ dependencies {
     // so this single line brings in the whole native runtime.
     implementation(project(":bridge"))
 
+    // Phase 6: Room-backed workflow persistence (ADR 0005).
+    implementation(project(":storage"))
+
     testImplementation("junit:junit:4.13.2")
 }

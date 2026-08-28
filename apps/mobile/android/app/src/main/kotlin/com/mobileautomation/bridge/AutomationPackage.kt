@@ -5,6 +5,7 @@ import com.facebook.react.bridge.NativeModule
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.uimanager.ViewManager
 import com.mobileautomation.settings.ProviderSettingsModule
+import com.mobileautomation.storage.WorkflowStorageModule
 
 /**
  * Registers the app's native modules with React Native.
@@ -20,6 +21,8 @@ class AutomationPackage : ReactPackage {
             // Phase 7: the AI provider credential, held in the Android Keystore rather
             // than anywhere JavaScript can read it casually (ADR 0007).
             ProviderSettingsModule(reactContext),
+            // Phase 6: Room-backed workflow storage (ADR 0005).
+            WorkflowStorageModule(reactContext),
         )
 
     override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> = emptyList()

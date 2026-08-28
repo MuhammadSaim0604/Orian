@@ -6,6 +6,10 @@ buildscript {
     dependencies {
         classpath("com.android.tools.build:gradle:8.7.3")
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.0.21")
+        // KSP, for Room's code generation in the :storage module. Declared here rather
+        // than in the module because a Gradle plugin used by an included project must be
+        // on the root buildscript classpath.
+        classpath("com.google.devtools.ksp:com.google.devtools.ksp.gradle.plugin:2.0.21-1.0.28")
         // Versionless on purpose: substituted by the `includeBuild` of
         // node_modules/@react-native/gradle-plugin in settings.gradle.kts.
         classpath("com.facebook.react:react-native-gradle-plugin")

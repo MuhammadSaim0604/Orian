@@ -1,23 +1,17 @@
 {
   "name": "@mobile-automation/execution-recorder",
   "version": "0.1.0",
-  "description": "Captures rich execution traces and compiles them into reusable workflows",
+  "description": "Captures AI execution traces and compiles them into reusable workflows",
   "license": "MIT",
   "private": true,
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    }
+    ".": "./src/index.ts"
   },
-  "files": [
-    "dist"
-  ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json --emitDeclarationOnly",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src",
     "test": "vitest run --passWithNoTests",
@@ -25,6 +19,7 @@
   },
   "dependencies": {
     "@mobile-automation/shared-types": "workspace:*",
-    "@mobile-automation/workflow-schema": "workspace:*"
+    "@mobile-automation/workflow-schema": "workspace:*",
+    "zod": "3.24.1"
   }
 }

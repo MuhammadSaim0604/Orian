@@ -84,3 +84,14 @@ export {
   executeNode,
   unavailableToolInvoker,
 } from './authoring';
+
+export {
+  FIELD_KINDS,
+  type FieldDescriptor,
+  type FieldKind,
+  clearPath,
+  describeSchema,
+  fieldPaths,
+  readPath,
+  writePath,
+} from './introspection';

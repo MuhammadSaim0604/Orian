@@ -48,7 +48,16 @@ dependencyResolutionManagement {
 }
 
 val nativeModules =
-    listOf("accessibility", "gestures", "screen", "overlays", "tools", "automation", "bridge")
+    listOf(
+        "accessibility",
+        "gestures",
+        "screen",
+        "overlays",
+        "tools",
+        "automation",
+        "bridge",
+        "storage",
+    )
 
 for (module in nativeModules) {
     include(":$module")

@@ -27,3 +27,8 @@ include(":tools")
 // Kept separate from :automation so the runtime stays free of wire-format concerns
 // and the conversion layer can be unit-tested on its own.
 include(":bridge")
+
+// Phase 6: Room-backed persistence for workflows (ADR 0005). Separate from :bridge
+// because storage is not an automation concern, and keeping it apart means the
+// automation modules do not pull in Room's annotation processor.
+include(":storage")
