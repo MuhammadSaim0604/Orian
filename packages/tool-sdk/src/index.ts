@@ -1,49 +1,50 @@
 /**
  * `@mobile-automation/tool-sdk`
  *
- * The single source of truth for the device tool surface. Both the AI agent
- * and the MCP server register tools from these definitions, so a tool is
- * described exactly once (ADR 0008).
+ * The single source of truth for the device tool surface. Both the AI agent and the
+ * MCP server register tools from these definitions, so a tool is described exactly
+ * once (ADR 0008).
  *
- * Phase 1 scaffold - the argument schemas and implementations arrive with the
- * native bridge in Phase 3 and the agent in Phase 7.
+ * The tool *names* are duplicated on purpose in Kotlin's `DeviceTool`, with a parity
+ * test on each side restating the other's list. If they drift, the AI can name a tool
+ * the runtime cannot call - so both sides change in one commit.
  */
 
 export const PACKAGE_NAME = '@mobile-automation/tool-sdk' as const;
 
-/**
- * Names of the device tools the Android Tool Runtime will expose. Kept as a
- * plain list in Phase 1 so the agent, MCP server, and node packages can agree
- * on vocabulary before the implementations exist.
- */
-export const TOOL_NAMES = [
-  'click',
-  'longPress',
-  'swipe',
-  'typeText',
-  'findElement',
-  'waitForElement',
-  'getUiTree',
-  'takeScreenshot',
-  'pressBack',
-  'pressHome',
-  'openApp',
-  'openAppByName',
-  'listApps',
-  'getCurrentScreen',
-  'getContacts',
-  'findContacts',
-  'createAlarm',
-  'readClipboard',
-  'writeClipboard',
-  'sendNotification',
-  'launchIntent',
-  'getSystemSetting',
-  'controlMedia',
-  'adjustVolume',
-] as const;
+export { TOOL_NAMES, type ToolName, isToolName } from './names';
 
-export type ToolName = (typeof TOOL_NAMES)[number];
+export {
+  BoundsArgSchema,
+  MEDIA_COMMANDS,
+  PointArgSchema,
+  SWIPE_DIRECTIONS,
+  SelectorArgSchema,
+  TOOL_ARGUMENT_SCHEMAS,
+  VOLUME_DIRECTIONS,
+  type SelectorArg,
+  type ToolArgumentSchemas,
+} from './arguments';
 
-export const isToolName = (value: string): value is ToolName =>
-  (TOOL_NAMES as readonly string[]).includes(value);
+export {
+  TOOL_DEFINITIONS,
+  TOOL_IMPACTS,
+  type ToolDefinition,
+  type ToolImpact,
+  allToolDefinitions,
+  isRetryableTool,
+  readOnlyTools,
+  toolDefinition,
+} from './definitions';
+
+export {
+  TOOL_CALL_REJECTIONS,
+  type RawToolCall,
+  type ToolCallRejection,
+  type ToolCallRejectionReason,
+  type ToolCallValidation,
+  type ValidatedToolCall,
+  toolCallJsonSchema,
+  toolsForRequest,
+  validateToolCall,
+} from './validation';

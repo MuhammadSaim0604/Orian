@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { AGENT_PHASES, MAX_AGENT_STEPS, PACKAGE_NAME, shouldStop } from './index.js';
+import { AGENT_PHASES, MAX_AGENT_STEPS, PACKAGE_NAME, shouldStop } from './index';
 
 describe('ai-agent', () => {
   it('exposes its package name', () => {

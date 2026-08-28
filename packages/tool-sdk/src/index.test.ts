@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { PACKAGE_NAME, TOOL_NAMES, isToolName } from './index.js';
+import { PACKAGE_NAME, TOOL_NAMES, isToolName } from './index';
 
 describe('tool-sdk', () => {
   it('exposes its package name', () => {

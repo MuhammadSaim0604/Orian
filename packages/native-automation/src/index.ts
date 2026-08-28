@@ -53,6 +53,8 @@ export {
   writeClipboard,
 } from './automation';
 
+export { invokeTool, tapCoordinate } from './tools';
+
 export {
   AUTOMATION_ERROR_CODES,
   AutomationError,

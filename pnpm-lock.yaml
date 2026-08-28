@@ -65,12 +65,18 @@ importers:
       '@mobile-automation/native-automation':
         specifier: workspace:*
         version: link:../../packages/native-automation
+      '@mobile-automation/prompt-engine':
+        specifier: workspace:*
+        version: link:../../packages/prompt-engine
       '@mobile-automation/screen-inspector':
         specifier: workspace:*
         version: link:../../packages/screen-inspector
       '@mobile-automation/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
+      '@mobile-automation/tool-sdk':
+        specifier: workspace:*
+        version: link:../../packages/tool-sdk
       '@mobile-automation/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -265,6 +271,9 @@ importers:
       '@mobile-automation/shared-types':
         specifier: workspace:*
         version: link:../shared-types
+      '@mobile-automation/tool-sdk':
+        specifier: workspace:*
+        version: link:../tool-sdk
       zod:
         specifier: 3.24.1
         version: 3.24.1
