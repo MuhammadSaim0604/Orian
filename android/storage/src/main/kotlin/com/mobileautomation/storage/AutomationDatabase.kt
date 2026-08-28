@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 /**
  * The local database (ADR 0005).
@@ -13,12 +15,14 @@ import androidx.room.RoomDatabase
  * are **never** here - they belong in the Keystore.
  */
 @Database(
-    entities = [WorkflowEntity::class],
-    version = 1,
+    entities = [WorkflowEntity::class, TraceEntity::class],
+    version = 2,
     exportSchema = false,
 )
 abstract class AutomationDatabase : RoomDatabase() {
     abstract fun workflows(): WorkflowDao
+
+    abstract fun traces(): TraceDao
 
     companion object {
         private const val DATABASE_NAME = "mobile_automation.db"
@@ -44,10 +48,42 @@ abstract class AutomationDatabase : RoomDatabase() {
                     context.applicationContext,
                     AutomationDatabase::class.java,
                     DATABASE_NAME,
-                )
+                ).addMigrations(MIGRATION_1_2)
                 // No destructive fallback. Losing a user's saved workflows on a schema change
-                // is not an acceptable upgrade path, so every future version must ship a real
+                // is not an acceptable upgrade path, so every version must ship a real
                 // migration and a missing one should fail loudly in development.
                 .build()
+
+        /**
+         * Adds the traces table.
+         *
+         * Written by hand rather than falling back to a destructive migration, because someone
+         * upgrading has workflows they built and expect to still be there.
+         */
+        private val MIGRATION_1_2 =
+            object : Migration(1, 2) {
+                override fun migrate(connection: SupportSQLiteDatabase) {
+                    connection.execSQL(
+                        """
+                        CREATE TABLE IF NOT EXISTS `traces` (
+                            `id` TEXT NOT NULL,
+                            `run_id` TEXT NOT NULL,
+                            `goal` TEXT NOT NULL,
+                            `outcome` TEXT NOT NULL,
+                            `step_count` INTEGER NOT NULL,
+                            `document` TEXT NOT NULL,
+                            `screenshot_dir` TEXT,
+                            `recorded_at` INTEGER NOT NULL,
+                            PRIMARY KEY(`id`)
+                        )
+                        """.trimIndent(),
+                    )
+                    // Indexed because the list screen orders by it, and a full scan on every
+                    // open would get slower with every run the user records.
+                    connection.execSQL(
+                        "CREATE INDEX IF NOT EXISTS `index_traces_recorded_at` ON `traces` (`recorded_at`)",
+                    )
+                }
+            }
     }
 }

@@ -122,6 +122,115 @@ class WorkflowStorageModule(
         }
     }
 
+    // --- traces (Phase 9) --------------------------------------------------
+
+    /** Recorded runs, newest first. Never reads the documents. */
+    @ReactMethod
+    fun listTraces(promise: Promise) {
+        scope.launch {
+            try {
+                val array = WritableNativeArray()
+
+                for (summary in store.listTraces()) {
+                    val map = WritableNativeMap()
+                    map.putString("id", summary.id)
+                    map.putString("goal", summary.goal)
+                    map.putString("outcome", summary.outcome)
+                    map.putInt("stepCount", summary.stepCount)
+                    map.putDouble("recordedAtEpochMs", summary.recordedAtEpochMs.toDouble())
+                    array.pushMap(map)
+                }
+
+                promise.resolve(array)
+            } catch (error: Exception) {
+                promise.reject("storage_read_failed", error.message, error)
+            }
+        }
+    }
+
+    @ReactMethod
+    fun loadTrace(
+        id: String,
+        promise: Promise,
+    ) {
+        scope.launch {
+            try {
+                promise.resolve(store.loadTrace(id))
+            } catch (error: Exception) {
+                promise.reject("storage_read_failed", error.message, error)
+            }
+        }
+    }
+
+    /**
+     * Saves a recorded run.
+     *
+     * The queryable columns are passed alongside the document rather than parsed out of it. A
+     * trace's shape is more elaborate than a workflow's, and a second hand-rolled parser here
+     * would be a second thing to keep in step with the TypeScript schema.
+     */
+    @ReactMethod
+    fun saveTrace(
+        id: String,
+        runId: String,
+        goal: String,
+        outcome: String,
+        stepCount: Int,
+        document: String,
+        promise: Promise,
+    ) {
+        scope.launch {
+            try {
+                store.saveTrace(id, runId, goal, outcome, stepCount, document)
+                promise.resolve(null)
+            } catch (error: Exception) {
+                promise.reject("storage_write_failed", error.message, error)
+            }
+        }
+    }
+
+    @ReactMethod
+    fun removeTrace(
+        id: String,
+        promise: Promise,
+    ) {
+        scope.launch {
+            try {
+                store.removeTrace(id)
+                promise.resolve(null)
+            } catch (error: Exception) {
+                promise.reject("storage_write_failed", error.message, error)
+            }
+        }
+    }
+
+    /** Where this trace's screenshots belong, for the recorder to write into. */
+    @ReactMethod
+    fun traceScreenshotDirectory(
+        id: String,
+        promise: Promise,
+    ) {
+        scope.launch {
+            try {
+                promise.resolve(store.screenshotDirectoryFor(id))
+            } catch (error: Exception) {
+                promise.reject("storage_read_failed", error.message, error)
+            }
+        }
+    }
+
+    /** Bytes held by trace screenshots, so the UI can say what recordings cost. */
+    @ReactMethod
+    fun traceStorageUsed(promise: Promise) {
+        scope.launch {
+            try {
+                promise.resolve(store.screenshotBytesUsed().toDouble())
+            } catch (error: Exception) {
+                promise.reject("storage_read_failed", error.message, error)
+            }
+        }
+    }
+
     companion object {
         const val NAME = "WorkflowStorage"
     }

@@ -1,3 +1,4 @@
+import { type ExecutionTrace } from '@mobile-automation/execution-recorder';
 import { useTheme } from '@mobile-automation/ui';
 import { useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
@@ -21,10 +22,20 @@ import { useAgentRun } from './useAgentRun';
  *   different problems with different fixes, and both are stated plainly rather than
  *   surfacing later as a failed run.
  */
-export const AgentScreen = () => {
+export interface AgentScreenProps {
+  /**
+   * Offers the finished run for compilation into a workflow.
+   *
+   * Passed in rather than navigated to from here, because the shell owns routing and this
+   * screen should not know that a builder exists.
+   */
+  readonly onBuildWorkflow?: (trace: ExecutionTrace) => void;
+}
+
+export const AgentScreen = ({ onBuildWorkflow }: AgentScreenProps = {}) => {
   const { theme } = useTheme();
   const { status } = useAutomationStatus();
-  const { runState, events, result, configError, start, stop, reset } = useAgentRun();
+  const { runState, events, result, configError, trace, start, stop, reset } = useAgentRun();
 
   const [goal, setGoal] = useState('');
 
@@ -121,6 +132,21 @@ export const AgentScreen = () => {
             {result.stepsTaken === 1 ? '' : 's'}
           </Text>
           <Text className="mt-1 text-xs text-text-secondary">{result.summary}</Text>
+
+          {/* Offered here, at the moment the user has just watched it work. Asking them to
+              find the recording later would be asking them to remember it exists. */}
+          {trace != null && trace.steps.length > 0 && onBuildWorkflow != null && (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Build a reusable workflow from this run"
+              onPress={() => onBuildWorkflow(trace)}
+              className="mt-3 items-center rounded-md border border-primary px-3 py-2"
+            >
+              <Text className="text-xs font-semibold text-primary">
+                Build a workflow from this run
+              </Text>
+            </Pressable>
+          )}
         </View>
       )}
 

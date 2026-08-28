@@ -4,16 +4,19 @@ import {
   createChatCompletionsProvider,
   runAgent,
 } from '@mobile-automation/ai-agent';
+import { ExecutionRecorder, type ExecutionTrace } from '@mobile-automation/execution-recorder';
 import { invokeTool } from '@mobile-automation/native-automation';
 import { type Observation } from '@mobile-automation/prompt-engine';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { saveTrace } from '../recorder/traceStorage';
+
 import { loadProviderSettings, readApiKey } from './providerSettings';
 
 /**
- * Drives an agent run from the UI.
+ * Drives an agent run from the UI, and records it.
  *
- * Two things this hook exists to get right.
+ * Three things this hook exists to get right.
  *
  * **The key is read per request, not held.** `createChatCompletionsProvider` takes a
  * function, and that function goes straight to the Keystore - so the credential never
@@ -24,6 +27,10 @@ import { loadProviderSettings, readApiKey } from './providerSettings';
  * stop it, and stopping has to take effect between steps rather than after the agent
  * finishes whatever it planned. The `AbortController` is threaded through the loop, and
  * the loop checks it before every step.
+ *
+ * **Recording is automatic.** Every run is recorded, because the decision to keep a run as a
+ * workflow is one the user makes *after* watching it succeed - asking them to opt in
+ * beforehand would mean the interesting runs are the ones that were not recorded.
  */
 
 export type AgentRunState = 'idle' | 'running' | 'finished';
@@ -34,6 +41,8 @@ export type AgentActivity = {
   readonly result: AgentRunResult | null;
   /** A configuration problem, distinct from a failed run. */
   readonly configError: string | null;
+  /** The recording of the finished run, ready to compile into a workflow. */
+  readonly trace: ExecutionTrace | null;
   start: (goal: string) => void;
   stop: () => void;
   reset: () => void;
@@ -69,9 +78,14 @@ export const useAgentRun = (): AgentActivity => {
   const [events, setEvents] = useState<readonly AgentEvent[]>([]);
   const [result, setResult] = useState<AgentRunResult | null>(null);
   const [configError, setConfigError] = useState<string | null>(null);
+  const [trace, setTrace] = useState<ExecutionTrace | null>(null);
 
   const controllerRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(true);
+
+  // One recorder for the hook's lifetime. It holds no state between runs - `start` clears it -
+  // and keeping it in a ref means an event arriving during a re-render still lands.
+  const recorderRef = useRef(new ExecutionRecorder());
 
   useEffect(
     () => () => {
@@ -93,6 +107,8 @@ export const useAgentRun = (): AgentActivity => {
     setEvents([]);
     setResult(null);
     setConfigError(null);
+    setTrace(null);
+    recorderRef.current.reset();
 
     void (async () => {
       try {
@@ -124,6 +140,10 @@ export const useAgentRun = (): AgentActivity => {
             goal: goal.trim(),
             signal: controller.signal,
             onEvent: (event) => {
+              // The recorder is fed first and unconditionally: it must see every step even
+              // if the screen has gone, or the trace would be missing the tail of the run.
+              feedRecorder(recorderRef.current, event, settings.model);
+
               if (!mountedRef.current) return;
 
               setEvents((current) =>
@@ -135,9 +155,18 @@ export const useAgentRun = (): AgentActivity => {
           },
         );
 
+        const recorded = recorderRef.current.result;
+
+        // Persisted regardless of outcome. A failed run is often the more interesting
+        // recording, and it is also the one a user wants to look at.
+        if (recorded !== null && recorded.steps.length > 0) {
+          await saveTrace(recorded).catch(() => false);
+        }
+
         if (!mountedRef.current) return;
 
         setResult(runResult);
+        setTrace(recorded);
         setRunState('finished');
       } catch (error) {
         if (!mountedRef.current) return;
@@ -156,11 +185,48 @@ export const useAgentRun = (): AgentActivity => {
 
   const reset = useCallback(() => {
     controllerRef.current?.abort();
+    recorderRef.current.reset();
     setRunState('idle');
     setEvents([]);
     setResult(null);
     setConfigError(null);
+    setTrace(null);
   }, []);
 
-  return { runState, events, result, configError, start, stop, reset };
+  return { runState, events, result, configError, trace, start, stop, reset };
+};
+
+/**
+ * Routes an agent event into the recorder.
+ *
+ * Three of the nine event types matter to a recording; the rest are UI narration. Kept as a
+ * function here rather than inside the recorder so the recorder stays independent of the
+ * agent's event union - which is what lets it be tested against a plain object.
+ */
+const feedRecorder = (recorder: ExecutionRecorder, event: AgentEvent, model: string): void => {
+  switch (event.type) {
+    case 'runStarted':
+      recorder.start({
+        runId: event.runId,
+        goal: event.goal,
+        model,
+        timestampEpochMs: event.timestampEpochMs,
+      });
+      return;
+
+    case 'toolExecuted':
+      recorder.record(event);
+      return;
+
+    case 'runFinished':
+      recorder.finish({
+        outcome: event.outcome,
+        summary: event.summary,
+        timestampEpochMs: event.timestampEpochMs,
+      });
+      return;
+
+    default:
+      return;
+  }
 };

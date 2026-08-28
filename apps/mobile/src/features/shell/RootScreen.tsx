@@ -1,4 +1,6 @@
+import { type ExecutionTrace } from '@mobile-automation/execution-recorder';
 import { Button, useTheme } from '@mobile-automation/ui';
+import { type Workflow } from '@mobile-automation/workflow-schema';
 import { useCallback, useState } from 'react';
 import { Pressable, ScrollView, StatusBar, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -7,8 +9,12 @@ import { AgentScreen } from '../agent/AgentScreen';
 import { ProviderSettingsScreen } from '../agent/ProviderSettingsScreen';
 import { CanvasScreen } from '../canvas/CanvasScreen';
 import { useCanvasStore } from '../canvas/canvasStore';
+import { useExecutionStore } from '../canvas/executionStore';
+import { useSelectionStore } from '../canvas/selectionStore';
 import { StatusScreen } from '../home/StatusScreen';
 import { ScreenInspectorScreen } from '../inspector/ScreenInspectorScreen';
+import { RecordedRunsScreen } from '../recorder/RecordedRunsScreen';
+import { TraceReviewScreen } from '../recorder/TraceReviewScreen';
 import { CreateWithAiScreen } from '../workflows/CreateWithAiScreen';
 import { saveWorkflow } from '../workflows/storage';
 import { WorkflowListScreen } from '../workflows/WorkflowListScreen';
@@ -16,27 +22,29 @@ import { WorkflowListScreen } from '../workflows/WorkflowListScreen';
 /**
  * The app shell.
  *
- * A tab switch plus one modal route, rather than react-navigation. The app has five
+ * A tab switch plus three modal routes, rather than react-navigation. The app has six
  * destinations and one of them is a full-bleed canvas; a navigator would add a dependency, a
  * native stack, and a set of transition decisions to solve a problem this does not have yet.
  * Worth revisiting when the overlay work in Phase 8 needs real routing.
  */
 
-type Tab = 'workflows' | 'agent' | 'inspector' | 'status' | 'settings';
+type Tab = 'workflows' | 'agent' | 'runs' | 'inspector' | 'status' | 'settings';
 
 const TABS: readonly { readonly id: Tab; readonly label: string }[] = [
   { id: 'workflows', label: 'Workflows' },
   { id: 'agent', label: 'Agent' },
+  { id: 'runs', label: 'Runs' },
   { id: 'inspector', label: 'Screen' },
   { id: 'status', label: 'Status' },
   { id: 'settings', label: 'Provider' },
 ];
 
-/** Where the canvas is open over the tabs, since it needs the whole screen. */
+/** Routes that take the whole screen, over the tabs. */
 type Route =
   | { readonly kind: 'tabs' }
   | { readonly kind: 'canvas' }
-  | { readonly kind: 'createWithAi' };
+  | { readonly kind: 'createWithAi' }
+  | { readonly kind: 'reviewTrace'; readonly trace: ExecutionTrace };
 
 export const RootScreen = () => {
   const { theme, scheme } = useTheme();
@@ -47,6 +55,9 @@ export const RootScreen = () => {
 
   const dirty = useCanvasStore((state) => state.dirty);
   const markSaved = useCanvasStore((state) => state.markSaved);
+  const load = useCanvasStore((state) => state.load);
+  const clearExecution = useExecutionStore((state) => state.clear);
+  const clearSelection = useSelectionStore((state) => state.clearSelection);
 
   const [saveError, setSaveError] = useState<readonly string[]>([]);
 
@@ -65,6 +76,23 @@ export const RootScreen = () => {
       setSaveError(result.issues);
     });
   }, [markSaved]);
+
+  /**
+   * Puts a workflow on the canvas.
+   *
+   * Clears the execution state as well as loading the graph. A generated workflow showing the
+   * previous run's green and red marks would be claiming things about steps that never ran.
+   */
+  const openOnCanvas = useCallback(
+    (workflow: Workflow) => {
+      clearExecution();
+      clearSelection();
+      load(workflow);
+      setSaveError([]);
+      setRoute({ kind: 'canvas' });
+    },
+    [clearExecution, clearSelection, load],
+  );
 
   const statusBar = (
     <StatusBar
@@ -120,7 +148,7 @@ export const RootScreen = () => {
     );
   }
 
-  if (route.kind === 'createWithAi') {
+  if (route.kind === 'createWithAi' || route.kind === 'reviewTrace') {
     return (
       <View className="flex-1 bg-background">
         {statusBar}
@@ -131,10 +159,18 @@ export const RootScreen = () => {
             paddingHorizontal: theme.spacing[5],
           }}
         >
-          <CreateWithAiScreen
-            onCreated={() => setRoute({ kind: 'canvas' })}
-            onCancel={() => setRoute({ kind: 'tabs' })}
-          />
+          {route.kind === 'createWithAi' ? (
+            <CreateWithAiScreen
+              onCreated={() => setRoute({ kind: 'canvas' })}
+              onCancel={() => setRoute({ kind: 'tabs' })}
+            />
+          ) : (
+            <TraceReviewScreen
+              trace={route.trace}
+              onOpenInBuilder={openOnCanvas}
+              onCancel={() => setRoute({ kind: 'tabs' })}
+            />
+          )}
         </ScrollView>
       </View>
     );
@@ -144,9 +180,16 @@ export const RootScreen = () => {
     <View className="flex-1 bg-background">
       {statusBar}
 
-      <View
-        className="flex-row gap-2 border-b border-border px-4 pb-3"
-        style={{ paddingTop: insets.top + theme.spacing[3] }}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        className="border-b border-border"
+        contentContainerStyle={{
+          paddingTop: insets.top + theme.spacing[3],
+          paddingBottom: theme.spacing[3],
+          paddingHorizontal: theme.spacing[4],
+          gap: theme.spacing[2],
+        }}
         accessibilityRole="tablist"
       >
         {TABS.map((entry) => (
@@ -169,7 +212,7 @@ export const RootScreen = () => {
             </Text>
           </Pressable>
         ))}
-      </View>
+      </ScrollView>
 
       {/* The agent screen owns its scrolling, because its log must stay pinned while the goal
           field and stop button remain reachable. */}
@@ -178,7 +221,7 @@ export const RootScreen = () => {
           className="flex-1 px-5 pt-4"
           style={{ paddingBottom: insets.bottom + theme.spacing[4] }}
         >
-          <AgentScreen />
+          <AgentScreen onBuildWorkflow={(trace) => setRoute({ kind: 'reviewTrace', trace })} />
         </View>
       ) : (
         <ScrollView
@@ -194,6 +237,9 @@ export const RootScreen = () => {
               onOpen={() => setRoute({ kind: 'canvas' })}
               onCreateWithAi={() => setRoute({ kind: 'createWithAi' })}
             />
+          )}
+          {tab === 'runs' && (
+            <RecordedRunsScreen onReview={(trace) => setRoute({ kind: 'reviewTrace', trace })} />
           )}
           {tab === 'inspector' && <ScreenInspectorScreen />}
           {tab === 'settings' && <ProviderSettingsScreen />}

@@ -1,6 +1,7 @@
 package com.mobileautomation.storage
 
 import android.content.Context
+import java.io.File
 
 /**
  * The storage module's public surface.
@@ -13,7 +14,10 @@ import android.content.Context
  * needs no knowledge of how workflows are stored.
  */
 class WorkflowStore(context: Context) {
-    private val dao = AutomationDatabase.get(context).workflows()
+    private val database = AutomationDatabase.get(context)
+    private val dao = database.workflows()
+    private val traceDao = database.traces()
+    private val screenshots = TraceScreenshotStore(File(context.filesDir, "trace-screenshots"))
 
     /** Summaries for a list screen. Never reads the documents. */
     suspend fun list(): List<StoredWorkflowSummary> =
@@ -61,6 +65,91 @@ class WorkflowStore(context: Context) {
     suspend fun remove(id: String) = dao.deleteById(id)
 
     suspend fun count(): Int = dao.count()
+
+    // --- traces (Phase 9) --------------------------------------------------
+
+    /** Recorded runs, newest first. Never reads the documents. */
+    suspend fun listTraces(): List<StoredTraceSummary> =
+        traceDao.listSummaries().map {
+            StoredTraceSummary(
+                id = it.id,
+                goal = it.goal,
+                outcome = it.outcome,
+                stepCount = it.stepCount,
+                recordedAtEpochMs = it.recordedAtEpochMs,
+            )
+        }
+
+    suspend fun loadTrace(id: String): String? = traceDao.findById(id)?.document
+
+    /**
+     * Saves a trace, then prunes old ones.
+     *
+     * Pruning happens on write rather than on a schedule, because that is the only moment the
+     * app is certainly running and the user is certainly not reading an older trace. Traces
+     * accumulate with every agent run and each carries screenshots, so unbounded growth would
+     * quietly consume a user's storage for recordings they will never open again.
+     */
+    suspend fun saveTrace(
+        id: String,
+        runId: String,
+        goal: String,
+        outcome: String,
+        stepCount: Int,
+        document: String,
+    ) {
+        traceDao.upsert(
+            TraceEntity(
+                id = id,
+                runId = runId,
+                goal = goal,
+                outcome = outcome,
+                stepCount = stepCount,
+                document = document,
+                screenshotDir = screenshots.directoryFor(id).absolutePath,
+                recordedAtEpochMs = System.currentTimeMillis(),
+            ),
+        )
+
+        pruneTraces()
+    }
+
+    /**
+     * Removes a trace and its screenshots.
+     *
+     * Files first, then the row: if it failed the other way round, the row would be gone and
+     * nothing would ever know which files to delete.
+     */
+    suspend fun removeTrace(id: String) {
+        screenshots.deleteFor(id)
+        traceDao.deleteById(id)
+    }
+
+    /** Directory this trace's screenshots belong in, for the recorder to write into. */
+    suspend fun screenshotDirectoryFor(id: String): String =
+        traceDao.screenshotDirFor(id) ?: screenshots.directoryFor(id).absolutePath
+
+    suspend fun traceCount(): Int = traceDao.count()
+
+    /** Bytes held by trace screenshots, so the UI can say what recordings cost. */
+    fun screenshotBytesUsed(): Long = screenshots.bytesUsed()
+
+    private suspend fun pruneTraces() {
+        for (id in traceDao.idsBeyondNewest(MAX_RETAINED_TRACES)) {
+            screenshots.deleteFor(id)
+            traceDao.deleteById(id)
+        }
+    }
+
+    companion object {
+        /**
+         * How many recorded runs to keep.
+         *
+         * Twenty is well past what anyone reviews and small enough that the screenshots stay a
+         * few tens of megabytes rather than growing without limit.
+         */
+        const val MAX_RETAINED_TRACES = 20
+    }
 }
 
 /**
@@ -75,4 +164,13 @@ data class StoredWorkflowSummary(
     val description: String?,
     val nodeCount: Int,
     val updatedAtEpochMs: Long,
+)
+
+/** A recorded run as a list screen sees it. Room-free, for the same reason. */
+data class StoredTraceSummary(
+    val id: String,
+    val goal: String,
+    val outcome: String,
+    val stepCount: Int,
+    val recordedAtEpochMs: Long,
 )
