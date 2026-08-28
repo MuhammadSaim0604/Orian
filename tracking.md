@@ -1,14 +1,16 @@
 # Tracking
 
-Living record of what has been implemented, which phase is complete, and what remains. Updated after every phase (per `IMPORTANT_RULES.txt` rule 6).
+Living record of what has been implemented, what is complete, and what remains. Updated after every phase and, from Step 1 onward, after every step (per `IMPORTANT_RULES.txt` rule 6). **History is never rewritten — only appended.**
 
-Authoritative plan: `Development_Plan/`. Phase order was agreed with the user and **deviates from the plan's strict numeric sequence** for the remaining work - see `ORION.md`. The roadmap's own dependency graph permits it.
+Authoritative plan: `Development_Plan/`. It was restructured from **phases** to **steps** after device testing (commit `b0c1c60`); phases 0–9 are complete and everything since is a numbered step. See `Development_Plan/03_Issue_Register.md` for the defect IDs each step closes.
 
-Last updated: after Phase 8, with both CI workflows green on `main` (Android CI run `33158531604`, TypeScript CI run `33158531545`).
+Last updated: after Step 1, with both CI workflows green on `main` (Android CI run `33193684749`, TypeScript CI run `33193684753`).
 
 ---
 
 ## Status
+
+### Phases 0–9 — the engines (all complete)
 
 | Phase | Scope                                                | Milestone         | Status       |
 | ----- | ---------------------------------------------------- | ----------------- | ------------ |
@@ -22,9 +24,26 @@ Last updated: after Phase 8, with both CI workflows green on `main` (Android CI 
 | 6     | Workflow builder UI (Skia canvas, Zustand)           | M3 Workflows      | **Complete** |
 | 9     | Execution recorder & workflow generation             | M4 Intelligence   | **Complete** |
 | 8     | Configure-with-AI floating overlay                   | M4 Intelligence   | **Complete** |
-| 10    | MCP server, node distribution, polish                | M5 Platform       | Next         |
 
-Rows below Phase 5 are listed in **execution order**, not numeric order. **Milestones M3 and M4 are both complete**; only Phase 10 remains.
+Rows below Phase 5 are in **execution order**, not numeric order. Phase 10's scope moved to Step 12.
+
+### Steps 1–13 — the product rebuild
+
+| Step | Scope                                   | Milestone        | Closes         | Status       |
+| ---- | --------------------------------------- | ---------------- | -------------- | ------------ |
+| 1    | App shell & onboarding                  | M6 A real app    | A1–A5          | **Complete** |
+| 2    | Permission engine                       | M6 A real app    | E1–E4          | Next         |
+| 3    | Background execution & agent overlay    | M6 A real app    | B1, B2         | Not started  |
+| 4    | Agent Mode                              | M7 Agent Mode    | B3, B4, B6     | Not started  |
+| 5    | OCR & perception chain                  | M7 Agent Mode    | F1, F2, G7     | Not started  |
+| 6    | Workflow Mode shell                     | M8 Workflow Mode | A6             | Not started  |
+| 7    | Canvas rebuild                          | M8 Workflow Mode | C1–C3, G2      | Not started  |
+| 8    | Node editor & palette                   | M8 Workflow Mode | C4             | Not started  |
+| 9    | Node toolset overlay                    | M8 Workflow Mode | C5, C6         | Not started  |
+| 10   | Workflow builder agent                  | M9 Intelligence  | D1–D3          | Not started  |
+| 11   | Generation & recorder quality           | M9 Intelligence  | G4, G8         | Not started  |
+| 12   | MCP server & clients, node distribution | M10 Platform     | B5             | Not started  |
+| 13   | Device verification & hardening         | M10 Platform     | G1, G3, G5, G6 | Not started  |
 
 ---
 
@@ -1049,19 +1068,123 @@ Also unverified on device: whether the compact overlay is genuinely usable one-h
 
 ---
 
+# The plan changed here
+
+Everything above was built under the **phase** plan, and phases 0–9 all shipped green. Device testing then established that **the engines largely work and the product around them does not**: the UI had been built as a six-tab home screen when the product is two separate modes, the agent stopped the moment the user left the app, the overlay crashed on open, and the canvas drew nodes as blank rectangles with a drag that fought its own selection.
+
+So `Development_Plan/` was restructured (commit `b0c1c60`). `phases/` is gone; `steps/` holds **13 numbered steps** that rebuild the product surface on top of the engines, fix what device testing found, and add what the original plan did not anticipate — the mode-based shell, permission onboarding, background execution, OCR, and per-node screen tooling. `03_Issue_Register.md` records every confirmed defect with a stable ID, and each step names the IDs it closes.
+
+Four ADRs came out of that testing: **0011** two modes not tabs, **0012** the agent loop stays in JS kept alive by a foreground service, **0013** perception as a fallback chain, **0014** one loop engine several agents.
+
+**Nothing above this line is edited.** The record of what was built stands; the sections below record the rebuild.
+
+---
+
+## Step 1 — App Shell & Onboarding (complete)
+
+A first launch now shows a welcome screen, then permission setup, then a mode switcher — never the canvas. **Closes A1, A2, A3, A4, A5.**
+
+### Why the tab bar had to go
+
+The old shell was a six-tab switch: Workflows, Agent, Runs, Screen inspector, Status, Provider. Tabs imply the destinations are peers within one interface, but this product is two things that share a device runtime and share nothing else: different navigation, different settings, different sessions, different memory. **Under tabs, "switch modes" has no meaning** and the per-mode settings screens have nowhere to live (ADR 0011).
+
+Two tabs are gone entirely. **Status** exposed internal phase state to the user. **Screen inspector** was worse than useless — run from inside the app it reads _our own_ screen, because the app in the foreground when you press its button is this one. Screen inspection only means anything from an overlay, which is why Step 9 rebuilds it there. `features/inspector/inspectScreen.ts` was kept: its element flattening and selector scoring is exactly what that overlay needs, and `ConfigureOverlay` already imports `strategyDescription` from it.
+
+### A typed route store, not react-navigation (ADR 0015)
+
+This decision had been deferred twice — Phase 6 judged five destinations not worth a navigator, and Phase 8 turned out not to need one either because the overlay became a second React root rather than a route. The shell is now deep enough that it had to be settled.
+
+**The decisive argument is ADR 0011.** The two modes must share no navigation. With one navigator, keeping two parallel stacks honest is a discipline problem; with a discriminated union per mode, an Agent Mode route in Workflow Mode is a **type error**. The rule enforces itself rather than relying on care.
+
+It is also readable from the overlay windows, which are separate React roots and cannot see a navigator's internal tree — and it keeps routing testable without rendering, which is where 27 of the new tests live.
+
+The costs are real and recorded in the ADR: transitions and the Android back button are now ours to build, and there is no deep linking. `back()` is explicit per route and returns whether it consumed the press, **defaulting to letting the system handle it** rather than trapping the user. That is the part most likely to be got wrong, so every branch has a test.
+
+### Preferences in SharedPreferences, not Room
+
+Three scalars decide the first screen: onboarding done, last mode, theme choice. Room would mean a schema migration per preference and a query on the critical path of the first paint. AsyncStorage would be a new dependency for three booleans.
+
+So a new `AppPreferences` / `AppPreferencesModule` pair. `readPreferencesSync` is **the one blocking native call in the app**, and it is justified: the alternative is rendering a placeholder and correcting it, which for the very first screen means briefly showing the welcome screen to someone who finished onboarding weeks ago. The TypeScript side narrows the stored strings so a corrupt value cannot become an invalid mode, and falls back to defaults — meaning onboarding — when the module is absent.
+
+### The rules worth stating
+
+- **Entering a mode always lands on that mode's home, and leaving resets it.** Reopening into a canvas whose workflow may have changed on disk is a bug waiting to happen. `lastMode` is a hint for highlighting the switcher, not a route to restore.
+- **The mode switcher is a destination, not a splash screen.** It is where the user returns from either mode, so the two modes are its content and settings is a corner action. The last-used mode is marked so a returning user sees continuity without being routed automatically.
+- **The transition animation is informational.** A whole-screen movement — fade plus a 24px rise, decelerating over 260ms, on Reanimated shared values, keyed on the mode so switching replays it. Choosing a mode replaces the entire interface, and without a transition that is indistinguishable from a tab switch, which is precisely the impression ADR 0011 exists to avoid.
+- **The trace review route carries an id, not a trace.** "Build a workflow from this run" now crosses from Agent Mode into Workflow Mode, since turning a run into a workflow is that mode's job. Passing the object would push a large payload through shell state, and a trace deleted in between would render as stale content instead of "no longer exists".
+- **Neither mode shares a header component.** A shared header is the first thing that quietly re-couples two interfaces meant to be able to diverge.
+- **The provider stays root-level.** Both modes' settings link to it rather than embedding it, so it cannot be configured twice and drift.
+- **Data management shows what is stored before offering to delete it.** A clear-data button with no indication of what it removes is one nobody can press with confidence. Deletion confirms first.
+
+### Three test-infrastructure fixes, each a real trap
+
+- **`jest.setup.js` now requires gesture-handler's and Skia's own `jestSetup`.** Both install native modules at _import_ time, so any test reaching the canvas — which now includes the shell — died on import rather than on a render.
+- **`transformIgnorePatterns` gained `@shopify`**, which ships untranspiled ESM.
+- **`renderWithTheme` wraps `SafeAreaProvider` with explicit `initialMetrics`.** Without a frame it renders nothing under Jest, so every query fails against an empty tree — which presents as a broken component rather than a missing measurement.
+
+The `act()` warnings that appeared were **fixed rather than silenced**. The shell subscribes to the store, so a render left mounted between tests gets updated by the next test's `setRoute`; the fix is `cleanup()` in `afterEach` plus an explicit unmount in the one test that switches modes mid-test.
+
+**Verification**
+
+```
+pnpm turbo run typecheck lint test build     60/60 tasks, 198 app Jest tests (11 suites)
+pnpm format:check                            clean
+pnpm install --frozen-lockfile               clean
+cd android && gradle ktlintCheck testDebugUnitTest   498 tests, 8 modules, clean
+cd apps/mobile/android && gradle :app:compileDebugKotlin   clean
+npx react-native bundle --dev false          succeeds
+```
+
+`:app:compileDebugKotlin` is what actually verifies the new `AppPreferencesModule` is wired into `AutomationPackage`, since ktlint and unit tests do not compile the app module.
+
+CI runs `33193684749` (Android) and `33193684753` (TypeScript) are green, both APKs and instrumentation on API 26 and 34 included.
+
+**RootScreen is now 82 lines doing three things** — render the route, play the transition, own the Android back button — against 251 lines of tab switch before.
+
+**Files**
+
+```
+Development_Plan/decisions/0015-typed-route-store-not-react-navigation.md
+apps/mobile/android/app/.../preferences/{AppPreferences,AppPreferencesModule}.kt
+apps/mobile/src/features/shell/{shellStore,preferences,modes}.ts
+apps/mobile/src/features/shell/{RootScreen,ModeSwitcherScreen,ModeTransition}.tsx
+apps/mobile/src/features/shell/{RootSettingsScreen,ModeSettingsFooter}.tsx
+apps/mobile/src/features/onboarding/{OnboardingFlow,WelcomeScreen,PermissionSetupScreen}.tsx
+apps/mobile/src/features/agent-mode/AgentModeShell.tsx
+apps/mobile/src/features/workflow-mode/WorkflowModeShell.tsx
+deleted: features/home/*, features/inspector/ScreenInspectorScreen.tsx
+```
+
+**Commit:** `aae4af7`
+
+### Deliberately partial, and saying so
+
+- **`PermissionSetupScreen` does not yet block on the required tier.** It lists the five required capabilities with their rationale and embeds the live capability panel, but four of the five have no runtime prompt and the settings round trip is Step 2's work. The screen says as much rather than implying the list is complete.
+- **Agent Mode's sessions and tools routes exist in the store but fall through to the chat.** Step 4 adds screens rather than reshaping navigation. Same for Workflow Mode's `loading` route, which Step 6 fills in.
+- **The theme choice persists but the system option is the default.** Light and dark work; there is no per-mode theme, and there should not be.
+
+### Not yet verified on a device
+
+- **The blocking preferences read.** `getAllSync` is fast in principle — `SharedPreferences` is in memory after first access — but the cost on a cold start with a slow disk is unmeasured.
+- **The transition animation's feel.** 260ms and 24px were chosen by judgement, not by watching it on hardware.
+- **The back button through every route.** Every branch has a store test, but `BackHandler` integration itself is only exercised on a device.
+
+---
+
 ## Remaining
 
-**Milestones M3 and M4 are complete. Only Phase 10 remains** — the MCP server and npm distribution, which is the whole of M5.
+**Step 1 is done; Steps 2–13 remain.** The plan is now `Development_Plan/steps/`, and `03_Issue_Register.md` is the checklist — a step is not finished while one of its issue IDs survives.
 
-Phase 10 is a small, self-contained TypeScript unit by comparison with everything before it, because the boundary it exposes already exists. `External AI → MCP → Agent Tool Gateway → Android Tool Runtime → Device`, where every layer to the right of MCP is built and tested:
+**Next is Step 2 — the permission engine.** One capability registry that knows every permission, its tier, its rationale, how to request it, and how to read its state. Two things make it more than plumbing:
 
-- **`tool-sdk` is the single source of tool definitions.** Name, description, args schema, returns, impact. The MCP tool list should be generated from `allToolDefinitions()` rather than restated, or the two will drift and an external agent will call something that does not exist.
-- **`invokeTool` in `native-automation` is the dispatch.** The agent, the workflow engine, and now the overlay all go through it; MCP becomes the fourth caller rather than a new path to the device.
-- **`validateToolCall` already rejects bad arguments** before anything reaches the device. External input is the case that most needs it.
+- **E1 is a real bug with an unknown cause.** Granting screen capture still reports the capability as disabled. The candidates are that the consent `Intent` result is not retained past the activity result, that the projection token is not held by anything longer-lived than the request, or that the status read asks whether a capture is _currently active_ rather than whether consent exists. **Diagnose before fixing** — a guess-fix here will recur, and OCR and vision both depend on it.
+- **Four of the five required capabilities have no runtime prompt.** Accessibility, overlay, assistant role, and usage access can only be granted in system settings, so the UI has to be designed around a settings round trip and a re-check on resume rather than a dialog.
 
-What Phase 10 must decide rather than inherit: **local-only and authenticated by default** (the plan is explicit), how a token is issued and stored, and what happens when an external agent asks for a destructive tool. The `impact` field on every definition exists for that question.
+Then Step 3 (background execution, which closes the most serious defect in the product), Step 4 (Agent Mode), Step 5 (OCR), and on through the sequence in `01_Roadmap.md`.
 
-Distribution is the other half: `node-sdk`, `workflow-schema`, `core-nodes`, and `android-nodes` are already shaped for publishing (`main` at `dist`, a `react-native` field for Metro), and `node-sdk/AUTHORING.md` documents third-party node authoring. What remains is the npm mechanics and a real end-to-end test with a mock published package.
+**Phase 10's work is now Step 12**, and what it inherits is unchanged and worth repeating: `tool-sdk` is the single source of tool definitions and the MCP tool list must be **generated** from `allToolDefinitions()` rather than restated; `invokeTool` is the one dispatch, so MCP becomes its fourth caller rather than a new path to the device; `validateToolCall` already rejects bad arguments, which matters most for external input. What Step 12 must decide rather than inherit: local-only and authenticated by default, how a token is issued and stored, and what happens when an external caller asks for a destructive tool — the `impact` field on every definition exists for that question. Step 12 also adds the **MCP client** direction, which the original plan never covered (B5).
+
+Distribution is the other half of Step 12: `node-sdk`, `workflow-schema`, `core-nodes`, and `android-nodes` are already shaped for publishing (`main` at `dist`, a `react-native` field for Metro), and `node-sdk/AUTHORING.md` documents third-party node authoring. What remains is the npm mechanics and a real end-to-end test with a mock published package.
 
 Carry-forward notes:
 
@@ -1075,9 +1198,10 @@ Carry-forward notes:
 - **Packages the RN app imports need a source entrypoint.** Metro does not run Turborepo's build first, so a `dist` entry breaks the release bundle while the debug APK may still pass. Every workspace package now has either a source `main` or a `react-native` field.
 - **pnpm strictness.** When adding any React Native tool that Gradle or Metro invokes, declare it explicitly in `apps/mobile/package.json`.
 - **Only an assemble compiles what ktlint and unit tests skip.** This has now bitten twice: the app module in Phase 6 (`:storage` and Room) and the `androidTest` source set in Phase 8 (`OverlayResult`). Run `gradle :<module>:assembleDebug` when changing a module's public surface, and `gradle assembleDebugAndroidTest` when changing anything an instrumentation test touches.
-- **A component using a themed primitive needs `renderWithTheme`** in tests. `useTheme` throws outside `ThemeProvider` by design.
+- **A component using a themed primitive needs `renderWithTheme`** in tests, and from Step 1 that helper also supplies `SafeAreaProvider` with explicit `initialMetrics` — without a frame it renders nothing under Jest and every query fails against an empty tree.
+- **Anything installing a native module at import time needs its Jest setup registered.** Gesture Handler and Skia both do, so `jest.setup.js` requires each one's own `jestSetup`; without them any test that reaches the canvas dies on import rather than on a render. `transformIgnorePatterns` must also list the scope — `@shopify` ships untranspiled ESM.
 - **Theme values are duplicated by necessity.** `packages/ui/src/theme/semantic.ts` and `apps/mobile/src/global.css` must change together; a parity test is still worth adding.
-- **Navigation was decided by not deciding.** The shell is a tab switch plus modal routes, and the overlay turned out to need a separate React root rather than a route — so react-navigation was never required. Worth revisiting only if a genuine deep-linking need appears.
+- **Navigation is a typed route store, not a navigator** (ADR 0015, Step 1). The two modes each own a route union, which makes an Agent Mode route in Workflow Mode a type error rather than a discipline problem. The costs are ours: transitions, the Android back button, and no deep linking.
 - **`isEntirelyBlack` samples a 16×16 grid.** If a real app is ever misreported as secure, that is the tuning knob.
 - Local Gradle runs need `ANDROID_HOME` set (`%LOCALAPPDATA%\Android\Sdk` on this machine).
 - The Gradle wrapper JAR is deliberately not committed; CI provisions Gradle 8.11.1 via `gradle/actions/setup-gradle`.
@@ -1085,21 +1209,22 @@ Carry-forward notes:
 
 ### Outstanding device verification
 
-Seven phases now have a definition of done that needs physical hardware, and none can be automated here — each requires a user to enable the accessibility service, grant screen capture, or allow display over other apps, and no APK is built locally per ADR 0010.
+Every engine layer needs physical hardware, and none can be automated here — each requires a user to enable the accessibility service, grant screen capture, or allow display over other apps, and no APK is built locally per ADR 0010.
 
-| Phase | What needs checking on a device                                                                       |
-| ----- | ----------------------------------------------------------------------------------------------------- |
-| 2     | the service reads a third-party app's tree; tap a resolved element, swipe, type, capture a screenshot |
-| 3     | `automation.getUiTree()` and `automation.click(selector)` from JS drive that same device              |
-| 5     | a workflow runs end to end: `RN → JSON → engine → registry → executor → tool runtime → device`        |
-| 6     | the canvas holds 60fps with dozens of nodes, and a workflow survives a restart                        |
-| 7     | the agent completes the WhatsApp scenario with a real provider key                                    |
-| 8     | the overlay stays on top in WhatsApp and returns a valid condition config                             |
-| 9     | replaying a generated workflow reproduces the recorded outcome                                        |
+| From            | What needs checking on a device                                                                       |
+| --------------- | ----------------------------------------------------------------------------------------------------- |
+| Kotlin core     | the service reads a third-party app's tree; tap a resolved element, swipe, type, capture a screenshot |
+| Bridge          | `automation.getUiTree()` and `automation.click(selector)` from JS drive that same device              |
+| Workflow engine | a workflow runs end to end: `RN → JSON → engine → registry → executor → tool runtime → device`        |
+| Canvas          | node text renders, drag behaves, 60fps with dozens of nodes, a workflow survives a restart            |
+| Agent           | the WhatsApp scenario with a real provider key, **continuing while another app is in front**          |
+| Overlay         | the toolset stays on top in WhatsApp and returns a valid condition config                             |
+| Recorder        | replaying a generated workflow reproduces the recorded outcome                                        |
+| Shell (Step 1)  | onboarding on a fresh install, the back button through every route, the transition's feel             |
 
-**The `app-debug` artifact from run `33158531604` is the build to sideload, and one session can now clear all seven** — they chain naturally: run the agent (7), which records a trace (9), generate a workflow, run it from the canvas (5), which exercises the bridge (3) and the Kotlin core (2), on a canvas whose smoothness is judged while doing it (6); then open the overlay on one of its steps and configure it against a real app (8).
+**Step 13 runs this as one session, in an order where each stage feeds the next so a failure localises itself:** onboarding → the agent outside the app → OCR on a tree-less screen → the recorded trace → generation → running the workflow from the canvas → the node toolset overlay → a force-stop persistence check.
 
-This is now the single largest gap in the project. Every layer is built and tested against fakes; none has been proven against hardware, and a failure anywhere is currently ambiguous between seven candidates. Run in the order above, a failure localises itself.
+The `app-debug` artifact from the latest green Android CI run is the build to sideload. This remains the single largest gap in the project: every layer is built and tested against fakes, and the device testing that _has_ happened is precisely what produced the issue register — which is the argument for doing the rest deliberately rather than incidentally.
 
 ### Deliberately out of scope
 
