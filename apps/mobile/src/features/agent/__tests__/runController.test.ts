@@ -34,6 +34,8 @@ const mockStartService = jest.fn(async (_label: string) => undefined);
 const mockStopService = jest.fn(async () => undefined);
 const mockShowOverlay = jest.fn(async (_runId: string) => true);
 const mockHideOverlay = jest.fn(async () => undefined);
+const mockHoldTimers = jest.fn(async () => true);
+const mockReleaseTimers = jest.fn(async () => undefined);
 
 let mockRunAgent: (
   deps: unknown,
@@ -51,6 +53,11 @@ jest.mock('../agentOverlay', () => ({
   showAgentOverlay: (runId: string) => mockShowOverlay(runId),
   hideAgentOverlay: () => mockHideOverlay(),
   onStopRequestedFromNotification: () => ({ remove: () => undefined }),
+}));
+
+jest.mock('../runKeepAlive', () => ({
+  holdTimersAwake: () => mockHoldTimers(),
+  releaseTimers: () => mockReleaseTimers(),
 }));
 
 jest.mock('../providerSettings', () => ({
@@ -156,6 +163,38 @@ describe('starting a run', () => {
 
     expect(mockShowOverlay).toHaveBeenCalledWith(readRun().runId);
   });
+
+  it('holds JS timers awake', async () => {
+    // The fix for the freeze. The headless task has to be running while the activity is still resumed,
+    // because React Native clears the timer callback on pause and refuses to start a
+    // foreground-disallowed task from a resumed activity.
+    mockRunAgent = neverFinishes;
+    startRun('send a message');
+    await settle();
+
+    expect(mockHoldTimers).toHaveBeenCalled();
+  });
+
+  it('records that timers are protected', async () => {
+    mockRunAgent = neverFinishes;
+    startRun('send a message');
+    await settle();
+
+    expect(readRun().timersHeld).toBe(true);
+  });
+
+  it('records an unprotected run rather than refusing to run', async () => {
+    // A run without protected timers still works while the app is in front. Abandoning it would be the
+    // worse outcome; the overlay warns instead.
+    mockHoldTimers.mockResolvedValueOnce(false);
+    mockRunAgent = neverFinishes;
+
+    startRun('send a message');
+    await settle();
+
+    expect(readRun().runState).toBe('running');
+    expect(readRun().timersHeld).toBe(false);
+  });
 });
 
 describe('the run outliving its subscribers', () => {
@@ -222,6 +261,15 @@ describe('finishing', () => {
     expect(mockHideOverlay).toHaveBeenCalled();
   });
 
+  it('releases the keep-alive task', async () => {
+    // An unreleased headless task keeps React Native's timer callback posted for the life of the
+    // process, which would also make the next run look protected whether or not it is.
+    startRun('send a message');
+    await settle();
+
+    expect(mockReleaseTimers).toHaveBeenCalled();
+  });
+
   it('stops the service even when the provider is misconfigured', async () => {
     // The early-return path. Forgetting it here is exactly how a notification gets orphaned.
     mockRunAgent = async () => {
@@ -234,6 +282,7 @@ describe('finishing', () => {
     expect(readRun().configError).toBe('bad base url');
     expect(mockStopService).toHaveBeenCalled();
     expect(mockHideOverlay).toHaveBeenCalled();
+    expect(mockReleaseTimers).toHaveBeenCalled();
   });
 
   it('returns to idle after a configuration failure, not to finished', async () => {

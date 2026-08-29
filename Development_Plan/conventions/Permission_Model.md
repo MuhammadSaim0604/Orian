@@ -110,7 +110,19 @@ Required for the agent to keep running while the user is in another app. Without
 
 ### The assumption underneath
 
-All of this rests on JavaScript continuing to execute under a foreground service while the app is backgrounded. It is expected to hold — RN runs JS on its own thread, and a foreground service keeps the process out of the states where Doze applies — but **expectation is not verification**, and manufacturer skins vary. The app therefore measures it: `backgroundProbe` records the worst wall-clock gap during a run, and Agent Mode settings reports what was observed. If a device suspends the process, the app says so rather than the user concluding the agent is unreliable.
+All of this rests on JavaScript continuing to execute while the app is backgrounded. **The foreground service alone does not achieve that**, which device testing proved: RN's `JavaTimerManager` clears the timer choreographer callback in `onHostPause`, so `setTimeout` stops firing entirely and the loop stalls with the service running. A `HeadlessJsTask` held open for the run keeps the callback posted — see the correction in ADR 0012.
+
+The app still measures it rather than assuming the fix works everywhere: `backgroundProbe` records the worst wall-clock gap during a run, Agent Mode settings reports it, and `timersHeld` on the run snapshot lets the overlay warn that a run may pause before the user walks away.
+
+## Screen capture
+
+A MediaProjection session, granted **per session and never persisted** — the user re-grants after every restart, and the app does not try to work around that.
+
+**From API 34 a `mediaProjection` foreground service must already be running before `getMediaProjection` is called**, or it throws. That is a separate service from the automation one, because a service declares a single foreground type and the two are different claims: *an automation is driving the phone* versus *the screen is being recorded*. Getting this wrong is not a subtle failure — the user grants recording in the system dialog, the call throws, and the app reports the capability as off with nothing to indicate their grant was accepted and then discarded.
+
+The service is started before the projection and stopped with the session. A notification saying the screen can be read must not outlive the ability to read it.
+
+**Status reads distinguish "off" from "unknown".** They are different claims: off means the user has not granted this and Settings is where to go; unknown means the app could not tell. Reporting a failed read as three revoked permissions sends the user to fix something that was never broken, which is what happened when a capture failure made the accessibility and overlay rows flip off with it.
 
 ## MCP server and clients
 

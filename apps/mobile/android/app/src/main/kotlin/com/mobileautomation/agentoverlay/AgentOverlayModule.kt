@@ -11,12 +11,14 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.UiThreadUtil
 import com.facebook.react.bridge.WritableMap
 import com.facebook.react.bridge.WritableNativeMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.mobileautomation.automation.service.AutomationForegroundService
 import com.mobileautomation.overlays.AgentOverlayGeometry
 import com.mobileautomation.overlays.AgentStatusOverlayManager
+import com.mobileautomation.overlays.Density
 import com.mobileautomation.overlays.OverlayExclusivity
 import com.mobileautomation.overlays.OverlayFailure
 import com.mobileautomation.overlays.OverlayLayout
@@ -52,6 +54,11 @@ class AgentOverlayModule(
                 OverlayExclusivity.release(OverlayExclusivity.Kind.AGENT_STATUS)
                 emit(EVENT_DISMISSED, WritableNativeMap().apply { putString("runId", runId) })
             },
+            // Every WindowManager call has to be on the UI thread: addView binds the resulting
+            // ViewRootImpl to the calling thread, and a @ReactMethod runs on the native modules thread -
+            // which is what crashed the overlay with CalledFromWrongThreadException. runOnUiThread runs
+            // inline when already there, so this costs nothing on the paths that were already correct.
+            runOnUiThread = { block -> UiThreadUtil.runOnUiThread(block) },
         ).also { created ->
             // Registered so the node toolset can evict this window rather than appearing on top of it.
             OverlayExclusivity.registerEvictor(OverlayExclusivity.Kind.AGENT_STATUS) { created.hide() }
@@ -227,6 +234,9 @@ class AgentOverlayModule(
         return AgentOverlayGeometry(
             screenWidthPx = metrics.widthPixels,
             screenHeightPx = metrics.heightPixels,
+            // Without this every dp constant would be read as a raw pixel, which on a 3x screen made the
+            // strip a third of its intended size with a stop button too small to press.
+            density = Density(metrics.density),
             statusBarHeightPx = dimensionOf(resources, "status_bar_height", DEFAULT_STATUS_BAR_PX),
             navigationBarHeightPx = dimensionOf(resources, "navigation_bar_height", DEFAULT_NAV_BAR_PX),
         )

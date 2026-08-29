@@ -9,8 +9,10 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.UiThreadUtil
 import com.facebook.react.bridge.WritableNativeMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
+import com.mobileautomation.overlays.Density
 import com.mobileautomation.overlays.OverlayExclusivity
 import com.mobileautomation.overlays.OverlayFailure
 import com.mobileautomation.overlays.OverlayGeometry
@@ -48,13 +50,16 @@ class OverlayModule(
                 OverlayExclusivity.release(OverlayExclusivity.Kind.NODE_TOOLSET)
                 emit(EVENT_DISMISSED, WritableNativeMap().apply { putString("nodeId", nodeId) })
             },
+            // Every WindowManager call has to be on the UI thread: addView binds the resulting
+            // ViewRootImpl to the calling thread, and a @ReactMethod runs on the native modules thread -
+            // which is what made this overlay unresponsive and then crashed it (issue C5).
+            runOnUiThread = { block -> UiThreadUtil.runOnUiThread(block) },
         ).also { created ->
             // Registered so the agent status overlay can evict this window rather than stacking on it
             // (Step 3). The two belong to different modes and must never both be visible.
             OverlayExclusivity.registerEvictor(OverlayExclusivity.Kind.NODE_TOOLSET) { created.hide() }
         }
     }
-
     override fun getName(): String = NAME
 
     override fun invalidate() {
@@ -215,6 +220,9 @@ class OverlayModule(
         return OverlayGeometry(
             screenWidthPx = metrics.widthPixels,
             screenHeightPx = metrics.heightPixels,
+            // Without this the dp margins and minimum sizes would be read as raw pixels, shrinking the
+            // panel as screen density rises.
+            density = Density(metrics.density),
             statusBarHeightPx = statusBar,
             navigationBarHeightPx = navigationBar,
         )

@@ -5,6 +5,7 @@ import com.facebook.react.bridge.NativeModule
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.uimanager.ViewManager
 import com.mobileautomation.agentoverlay.AgentOverlayModule
+import com.mobileautomation.keepalive.RunKeepAliveModule
 import com.mobileautomation.overlay.OverlayModule
 import com.mobileautomation.permissions.PermissionsModule
 import com.mobileautomation.preferences.AppPreferencesModule
@@ -41,6 +42,10 @@ class AutomationPackage : ReactPackage {
             // stop action reaches the run controller. A separate window from the node
             // toolset because the two belong to different modes and must never coexist.
             AgentOverlayModule(reactContext),
+            // Step 3 fix: holds a headless task for the duration of a run, because
+            // JavaTimerManager clears the timer choreographer callback on activity pause -
+            // so setTimeout stops firing and the loop freezes, foreground service or not.
+            RunKeepAliveModule(reactContext),
         )
 
     override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> = emptyList()

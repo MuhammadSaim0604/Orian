@@ -27,6 +27,17 @@ AppRegistry.registerComponent('ConfigureWithAiOverlay', () => OverlayRoot);
 // `AgentOverlayReactHost.COMPONENT_NAME`.
 AppRegistry.registerComponent('AgentStatusOverlay', () => AgentOverlayRoot);
 
+// A headless task that does nothing, on purpose.
+//
+// React Native's JavaTimerManager removes the timer choreographer callback in `onHostPause`, so
+// setTimeout and setInterval stop firing entirely while the app is backgrounded - which froze the agent
+// mid-run. `clearFrameCallback` skips the removal while any headless task is active, so the native
+// RunKeepAlive module holds one open for the duration of a run and this is the JS half it needs.
+//
+// It must never resolve: resolving notifies native that the task finished, the callback is cleared, and
+// the freeze returns. The native side ends it by task id when the run stops.
+AppRegistry.registerHeadlessTask('AgentRunKeepAlive', () => () => new Promise(() => undefined));
+
 // Wired here rather than in a component, deliberately: the notification's stop button is most useful
 // when no screen is mounted, so the listener has to exist before any React tree does and outlive all
 // of them. Registering it at the entry point is what makes stop work from the shade during a run the

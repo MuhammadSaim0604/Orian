@@ -12,7 +12,13 @@ package com.mobileautomation.overlays
  * a more permissive fake.
  */
 class FakeOverlayManager(
-    private val geometry: OverlayGeometry = OverlayGeometry(1_080, 2_400, 72, 48),
+    private val geometry: OverlayGeometry =
+        OverlayGeometry(
+            screenWidthPx = 1_080,
+            screenHeightPx = 2_400,
+            statusBarHeightPx = 72,
+            navigationBarHeightPx = 48,
+        ),
     /** Set false to simulate the user not having granted "display over other apps". */
     var permissionGranted: Boolean = true,
     /** Set true to simulate WindowManager rejecting the window. */

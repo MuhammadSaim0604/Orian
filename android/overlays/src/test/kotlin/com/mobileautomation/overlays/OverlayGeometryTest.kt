@@ -50,15 +50,15 @@ class OverlayGeometryTest {
         val spec = geometry.specFor(OverlayLayout.COMPACT)
 
         // Bottom edge sits just above the navigation bar.
-        assertEquals(geometry.usableBottom - OverlayGeometry.BOTTOM_MARGIN_PX, spec.bottom)
+        assertEquals(geometry.usableBottom - OverlayGeometry.BOTTOM_MARGIN_DP, spec.bottom)
     }
 
     @Test
     fun `overlay keeps a margin from the side edges`() {
         val spec = geometry.specFor(OverlayLayout.COMPACT)
 
-        assertEquals(OverlayGeometry.HORIZONTAL_MARGIN_PX, spec.left)
-        assertEquals(1080 - OverlayGeometry.HORIZONTAL_MARGIN_PX, spec.right)
+        assertEquals(OverlayGeometry.HORIZONTAL_MARGIN_DP, spec.left)
+        assertEquals(1080 - OverlayGeometry.HORIZONTAL_MARGIN_DP, spec.right)
     }
 
     @Test
@@ -142,15 +142,20 @@ class OverlayGeometryTest {
 
         val height = tiny.heightFor(OverlayLayout.COMPACT)
 
-        assertTrue(height >= OverlayGeometry.MIN_HEIGHT_PX)
+        assertTrue(height >= OverlayGeometry.MIN_HEIGHT_DP)
         assertTrue(height <= tiny.usableHeight)
     }
 
     @Test
     fun `enforces a minimum width on a narrow screen`() {
+        // 100px is narrower than the 120dp minimum, so the minimum is capped by the screen rather than
+        // producing a window wider than the display. The rule being pinned is that the width never
+        // collapses to the margins alone.
         val narrow = OverlayGeometry(screenWidthPx = 100, screenHeightPx = 800)
+        val width = narrow.specFor(OverlayLayout.COMPACT).size.widthPx
 
-        assertTrue(narrow.specFor(OverlayLayout.COMPACT).size.widthPx >= OverlayGeometry.MIN_WIDTH_PX)
+        assertTrue("expected a usable width, got $width", width >= 100 - (2 * 16))
+        assertTrue("expected to fit the screen, got $width", width <= 100)
     }
 
     @Test

@@ -10,6 +10,8 @@ const UNAVAILABLE: AutomationStatus = {
   isReady: false,
   canCaptureScreen: false,
   canDrawOverlay: false,
+  // Not a claim that the user revoked anything - there is simply no module to ask.
+  statusKnown: false,
 };
 
 /**
@@ -44,6 +46,8 @@ export const useAutomationStatus = (): {
         isReady: event.isReady,
         canCaptureScreen: event.canCaptureScreen,
         canDrawOverlay: event.canDrawOverlay,
+        // A delivered event is a real reading by definition.
+        statusKnown: true,
       });
     });
 

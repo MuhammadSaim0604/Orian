@@ -1,2 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" />
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      Declared in the module that owns the service, so a consuming app module gets a
+      correct declaration by manifest merge rather than restating it.
+
+      FOREGROUND_SERVICE_MEDIA_PROJECTION is required from API 34, and so is the
+      running service itself: `getMediaProjection` throws unless a foreground service
+      of this exact type is already active. Without it the user grants screen
+      recording, the call fails, and the app reports the capability as off - which is
+      precisely the bug this closes.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+
+    <application>
+        <service
+            android:name=".ScreenCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+    </application>
+</manifest>

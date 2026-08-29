@@ -4,19 +4,23 @@ import { useAutomationStatus } from './useAutomationStatus';
 import { useScreenCaptureConsent } from './useScreenCaptureConsent';
 
 /**
- * Shows what the native bridge can currently do, and lets the user grant screen
- * capture.
+ * Shows what the native bridge can currently do, and lets the user grant screen capture.
  *
- * The Phase 3 proof that the bridge is wired end to end: the status comes straight
- * from Kotlin, and the capture button exercises the consent round trip the Phase 2
- * pipeline was waiting for.
+ * Every capability is reported honestly, **including the difference between "off" and "unknown"**. Those
+ * are not the same claim: off sends the user to Settings, unknown means the app could not tell. Device
+ * testing found the cost of conflating them — granting screen capture made the other two rows flip to
+ * off, because a failed status read was rendered as three revoked permissions.
  *
- * Every capability is reported honestly, including the reason it is unavailable.
- * A user who does not know the accessibility service is off cannot turn it on.
+ * The three capabilities are independent. Accessibility is a service, capture is a per-session
+ * MediaProjection grant, overlay is a settings toggle. None of them implies another, and the rows must
+ * never move together.
  */
 export const AutomationStatusPanel = () => {
   const { status, bridgeAvailable } = useAutomationStatus();
   const consent = useScreenCaptureConsent();
+
+  // Absent means known: only an explicit false says the read failed.
+  const statusKnown = status.statusKnown !== false;
 
   return (
     <View className="rounded-lg border border-border bg-surface p-4">
@@ -28,20 +32,30 @@ export const AutomationStatusPanel = () => {
         </Text>
       ) : (
         <View className="mt-3" style={{ gap: 8 }}>
+          {!statusKnown && (
+            <Text className="text-xs text-warning">
+              Could not read the current state. These may be out of date — reopen the app to
+              refresh.
+            </Text>
+          )}
+
           <CapabilityRow
             label="Accessibility service"
             granted={status.isReady}
+            known={statusKnown}
             hint="Enable in Settings → Accessibility to read the screen and tap for you."
           />
           <CapabilityRow
             label="Screen capture"
             granted={status.canCaptureScreen}
+            known={statusKnown}
             hint="Granted per session, so it is requested again after a restart."
           />
           <CapabilityRow
             label="Display over other apps"
             granted={status.canDrawOverlay}
-            hint="Needed for the Configure-with-AI floating toolset."
+            known={statusKnown}
+            hint="Needed for the agent status strip and the node toolset."
           />
 
           <Pressable
@@ -57,7 +71,7 @@ export const AutomationStatusPanel = () => {
             }}
             className="mt-2 rounded-md bg-primary px-4 py-3"
           >
-            <Text className="text-center text-sm font-semibold text-text-inverse">
+            <Text className="text-center text-sm font-semibold text-text-on-primary">
               {consent.state === 'requesting'
                 ? 'Asking…'
                 : status.canCaptureScreen
@@ -76,6 +90,17 @@ export const AutomationStatusPanel = () => {
           {consent.state === 'failed' && consent.errorMessage != null && (
             <Text className="text-sm text-danger">{consent.errorMessage}</Text>
           )}
+
+          {/* The specific failure worth naming, because the user did nothing wrong and the fix is not
+              in Settings. Android requires a mediaProjection foreground service to exist before the
+              projection can be created, and if that start is refused the grant is accepted and then
+              discarded - which reads as "I allowed it and nothing happened". */}
+          {consent.state === 'granted' && !status.canCaptureScreen && (
+            <Text className="text-sm text-warning">
+              Screen recording was allowed but could not start. Check that notifications are enabled
+              for this app, then try again.
+            </Text>
+          )}
         </View>
       )}
     </View>
@@ -85,21 +110,32 @@ export const AutomationStatusPanel = () => {
 const CapabilityRow = ({
   label,
   granted,
+  known,
   hint,
 }: {
   readonly label: string;
   readonly granted: boolean;
+  readonly known: boolean;
   readonly hint: string;
-}) => (
-  <View accessible accessibilityLabel={`${label}: ${granted ? 'granted' : 'not granted'}. ${hint}`}>
-    <View className="flex-row items-center justify-between">
-      <Text className="flex-1 pr-3 text-sm text-text-primary">{label}</Text>
-      <Text
-        className={`text-xs font-medium uppercase ${granted ? 'text-success' : 'text-text-muted'}`}
-      >
-        {granted ? 'Granted' : 'Off'}
-      </Text>
+}) => {
+  const state = known ? (granted ? 'Granted' : 'Off') : 'Unknown';
+
+  return (
+    <View accessible accessibilityLabel={`${label}: ${state.toLowerCase()}. ${hint}`}>
+      <View className="flex-row items-center justify-between">
+        <Text className="flex-1 pr-3 text-sm text-text-primary">{label}</Text>
+        <Text
+          className={`text-xs font-medium uppercase ${
+            !known ? 'text-warning' : granted ? 'text-success' : 'text-text-muted'
+          }`}
+        >
+          {state}
+        </Text>
+      </View>
+
+      {/* The hint explains how to grant something. Suppressed when the state is unknown, because
+          telling a user to enable what may already be enabled is worse than saying nothing. */}
+      {known && !granted && <Text className="mt-1 text-xs text-text-muted">{hint}</Text>}
     </View>
-    {!granted && <Text className="mt-1 text-xs text-text-muted">{hint}</Text>}
-  </View>
-);
+  );
+};

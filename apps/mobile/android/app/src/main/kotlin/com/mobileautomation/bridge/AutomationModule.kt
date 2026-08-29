@@ -214,7 +214,10 @@ class AutomationModule(
 
     @ReactMethod
     fun releaseScreenCapture(promise: Promise) {
-        AutomationRuntimeProvider.releaseScreenCapture()
+        // The context goes through so the mediaProjection foreground service is stopped with the
+        // session - a notification saying the screen can be read must not outlive the ability to read it.
+        AutomationRuntimeProvider.releaseScreenCapture(reactContext)
+        emitStatusChanged()
         promise.resolve(null)
     }
 

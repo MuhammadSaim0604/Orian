@@ -88,16 +88,40 @@ export const isAvailable = (): boolean => NativeAutomation != null;
  * the module is missing instead of throwing, because a status check is exactly
  * the call a caller makes to find out whether the bridge works.
  */
+/**
+ * What the native layer can currently do.
+ *
+ * **Each capability is independent**, and the fallbacks here reflect that. An earlier version of the
+ * Kotlin side reported all three as false whenever the accessibility service was disconnected, which
+ * told users their screen-recording grant had failed when it had not (issue E1). The same trap exists on
+ * this side: a parse failure must not be reported as "everything is off", because the caller renders that
+ * as three revoked permissions rather than as a broken status read.
+ *
+ * So an unreadable status is `null` per capability, not `false`. `false` is a fact — the user has not
+ * granted this. `null` is an admission — we could not tell.
+ */
 export const getStatus = (): AutomationStatus => {
-  if (NativeAutomation == null) {
-    return { isReady: false, canCaptureScreen: false, canDrawOverlay: false };
-  }
+  if (NativeAutomation == null) return UNKNOWN_STATUS;
 
   try {
     return parse<AutomationStatus>(NativeAutomation.getStatus(), 'status');
   } catch {
-    return { isReady: false, canCaptureScreen: false, canDrawOverlay: false };
+    return UNKNOWN_STATUS;
   }
+};
+
+/**
+ * The status when it could not be read at all.
+ *
+ * Marked `statusKnown: false` so the UI can say so rather than showing every capability as revoked. A
+ * screen that reports three permissions off because one JSON parse failed sends the user to Settings to
+ * fix something that was never broken.
+ */
+const UNKNOWN_STATUS: AutomationStatus = {
+  isReady: false,
+  canCaptureScreen: false,
+  canDrawOverlay: false,
+  statusKnown: false,
 };
 
 // --- screen reading -----------------------------------------------------

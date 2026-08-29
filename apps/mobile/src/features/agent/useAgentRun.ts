@@ -41,6 +41,8 @@ export type AgentActivity = {
   readonly trace: ExecutionTrace | null;
   /** An instruction waiting to run as the next goal, or null. */
   readonly queuedFollowUp: string | null;
+  /** False when the run will pause if the app is backgrounded. Worth telling the user before they leave. */
+  readonly timersHeld: boolean;
   start: (goal: string) => void;
   stop: () => void;
   reset: () => void;
@@ -76,6 +78,7 @@ export const useAgentRun = (): AgentActivity => {
     configError: snapshot.configError,
     trace: snapshot.trace,
     queuedFollowUp: snapshot.queuedFollowUp,
+    timersHeld: snapshot.timersHeld,
     start,
     stop: stopRun,
     reset: resetRun,

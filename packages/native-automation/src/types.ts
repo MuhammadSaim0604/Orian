@@ -196,7 +196,14 @@ export type IntentRequest = {
   requireChooser?: boolean;
 };
 
-/** Whether the accessibility service and its dependencies are usable right now. */
+/**
+ * Whether the accessibility service and its dependencies are usable right now.
+ *
+ * **The three capabilities are independent.** Screen capture is a MediaProjection session, overlay is a
+ * settings grant, and readiness is the accessibility service — none implies another. Reporting them
+ * through one gate caused issue E1: with accessibility off, capture was reported off too, so a user who
+ * had just granted screen recording was told it had failed.
+ */
 export type AutomationStatus = {
   /** The accessibility service is connected and automation is possible. */
   isReady: boolean;
@@ -204,4 +211,13 @@ export type AutomationStatus = {
   canCaptureScreen: boolean;
   /** "Display over other apps" has been granted. */
   canDrawOverlay: boolean;
+  /**
+   * Whether these values were actually read.
+   *
+   * False when the native module is absent or its status could not be parsed. The flags above are then
+   * `false` because the type demands a boolean, **not** because the user revoked anything — so a caller
+   * must check this before telling someone their permissions are off. Optional so existing readers keep
+   * working; absent means known.
+   */
+  statusKnown?: boolean;
 };

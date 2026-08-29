@@ -28,7 +28,7 @@ class AgentOverlayGeometryTest {
         // what the user is reading.
         val spec = phone.specFor(OverlayLayout.COMPACT)
 
-        assertEquals(1080 - AgentOverlayGeometry.EDGE_MARGIN_PX, spec.right)
+        assertEquals(1080 - AgentOverlayGeometry.EDGE_MARGIN_DP, spec.right)
     }
 
     @Test
@@ -57,7 +57,7 @@ class AgentOverlayGeometryTest {
     fun `collapsed is a narrow strip`() {
         // A status line and a stop button. Scaling it with the screen would make it a slab on a tablet.
         assertEquals(
-            AgentOverlayGeometry.COLLAPSED_WIDTH_PX,
+            AgentOverlayGeometry.COLLAPSED_WIDTH_DP,
             phone.widthFor(OverlayLayout.COMPACT),
         )
     }
@@ -116,7 +116,7 @@ class AgentOverlayGeometryTest {
         val collapsed = phone.specFor(OverlayLayout.COMPACT)
         val expanded = phone.applyLayout(collapsed, OverlayLayout.EXPANDED)
 
-        assertEquals(1080 - AgentOverlayGeometry.EDGE_MARGIN_PX, expanded.right)
+        assertEquals(1080 - AgentOverlayGeometry.EDGE_MARGIN_DP, expanded.right)
         assertTrue(phone.isFullyOnScreen(expanded))
     }
 
@@ -138,7 +138,7 @@ class AgentOverlayGeometryTest {
         val expanded = phone.applyLayout(spec, OverlayLayout.EXPANDED)
         val collapsed = phone.applyLayout(expanded, OverlayLayout.COMPACT)
 
-        assertEquals(AgentOverlayGeometry.COLLAPSED_WIDTH_PX, collapsed.size.widthPx)
+        assertEquals(AgentOverlayGeometry.COLLAPSED_WIDTH_DP, collapsed.size.widthPx)
         assertTrue(phone.isFullyOnScreen(collapsed))
     }
 

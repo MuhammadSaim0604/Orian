@@ -8,14 +8,20 @@ package com.mobileautomation.overlays
  * covers the thing the user is trying to configure, or drifts off screen where it
  * cannot be dismissed - and neither is recoverable without killing the app.
  *
- * @param screenWidthPx display width in pixels.
- * @param screenHeightPx display height in pixels.
- * @param statusBarHeightPx inset at the top the overlay must not cover.
+ * Margins and minimum sizes are **dp**, converted here for `WindowManager`, which wants physical
+ * pixels. The two are interchangeable only on a 160dpi screen, so declaring them as pixels produces a
+ * panel that shrinks as screen density rises - which is exactly what happened to the agent status strip.
+ *
+ * @param screenWidthPx display width in physical pixels.
+ * @param screenHeightPx display height in physical pixels.
+ * @param density physical pixels per dp, from `DisplayMetrics.density`.
+ * @param statusBarHeightPx inset at the top the overlay must not cover, in physical pixels.
  * @param navigationBarHeightPx inset at the bottom, likewise.
  */
 class OverlayGeometry(
     private val screenWidthPx: Int,
     private val screenHeightPx: Int,
+    private val density: Density = Density.REFERENCE,
     private val statusBarHeightPx: Int = 0,
     private val navigationBarHeightPx: Int = 0,
 ) {
@@ -39,20 +45,26 @@ class OverlayGeometry(
 
     val usableHeight: Int get() = usableBottom - usableTop
 
+    private val horizontalMarginPx: Int get() = density.toPx(HORIZONTAL_MARGIN_DP)
+
+    private val bottomMarginPx: Int get() = density.toPx(BOTTOM_MARGIN_DP)
+
     /**
      * Builds a spec for [layout], anchored near the bottom of the screen where a
      * thumb can reach it, sized to that layout's height budget.
      */
     fun specFor(layout: OverlayLayout): OverlayWindowSpec {
         val height = heightFor(layout)
-        val width = (screenWidthPx - (2 * HORIZONTAL_MARGIN_PX)).coerceAtLeast(MIN_WIDTH_PX)
+        val width =
+            (screenWidthPx - (2 * horizontalMarginPx))
+                .coerceAtLeast(density.toPx(MIN_WIDTH_DP).coerceAtMost(screenWidthPx))
 
         // Anchored above the navigation bar: the toolset is operated by thumb, and
         // content the user is inspecting is usually higher up the screen.
-        val top = (usableBottom - height - BOTTOM_MARGIN_PX).coerceAtLeast(usableTop)
+        val top = (usableBottom - height - bottomMarginPx).coerceAtLeast(usableTop)
 
         return OverlayWindowSpec(
-            position = OverlayPoint(x = HORIZONTAL_MARGIN_PX, y = top),
+            position = OverlayPoint(x = horizontalMarginPx, y = top),
             size = OverlaySize(widthPx = width, heightPx = height),
             layout = layout,
         )
@@ -64,7 +76,8 @@ class OverlayGeometry(
      */
     fun heightFor(layout: OverlayLayout): Int {
         val requested = (usableHeight * layout.maxScreenHeightFraction).toInt()
-        return requested.coerceIn(MIN_HEIGHT_PX, usableHeight)
+        val minimum = density.toPx(MIN_HEIGHT_DP).coerceAtMost(usableHeight)
+        return requested.coerceIn(minimum, usableHeight)
     }
 
     /**
@@ -124,14 +137,14 @@ class OverlayGeometry(
 
     companion object {
         /** Keeps the toolset clear of the screen edges and rounded corners. */
-        const val HORIZONTAL_MARGIN_PX: Int = 16
+        const val HORIZONTAL_MARGIN_DP: Int = 16
 
         /** Gap above the navigation bar so the overlay is not flush against it. */
-        const val BOTTOM_MARGIN_PX: Int = 24
+        const val BOTTOM_MARGIN_DP: Int = 24
 
         /** Below this an overlay cannot show a usable control. */
-        const val MIN_WIDTH_PX: Int = 120
-        const val MIN_HEIGHT_PX: Int = 96
+        const val MIN_WIDTH_DP: Int = 120
+        const val MIN_HEIGHT_DP: Int = 96
 
         /** Rounding slack when comparing computed height against its budget. */
         const val FRACTION_TOLERANCE: Double = 0.01

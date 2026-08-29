@@ -17,6 +17,7 @@ import {
 } from './agentOverlay';
 import { startProbe, stopProbe } from './backgroundProbe';
 import { loadProviderSettings, readApiKey } from './providerSettings';
+import { holdTimersAwake, releaseTimers } from './runKeepAlive';
 import { startRunService, stopRunService } from './runService';
 
 /**
@@ -66,6 +67,14 @@ export type RunSnapshot = {
    * current run ends. The UI says so rather than implying the agent heard it immediately.
    */
   readonly queuedFollowUp: string | null;
+  /**
+   * Whether JS timers are protected for this run.
+   *
+   * False means the run will freeze the moment the app is backgrounded, because React Native stops
+   * firing timers on activity pause. Surfaced rather than hidden: a user whose run stalls deserves to be
+   * told why, and it is the difference between a bug and a device limitation.
+   */
+  readonly timersHeld: boolean;
 };
 
 type Listener = (snapshot: RunSnapshot) => void;
@@ -84,6 +93,7 @@ const IDLE: RunSnapshot = {
   trace: null,
   startedAtEpochMs: null,
   queuedFollowUp: null,
+  timersHeld: false,
 };
 
 let snapshot: RunSnapshot = IDLE;
@@ -257,6 +267,7 @@ export const startRun = (goal: string): StartOutcome => {
     trace: null,
     startedAtEpochMs: Date.now(),
     queuedFollowUp: null,
+    timersHeld: false,
   });
 
   // Fire and forget: the run owns its own lifetime from here, which is the entire point of this
@@ -271,6 +282,14 @@ const execute = async (goal: string, active: AbortController, runId: string): Pr
   // Started before the provider is read: if the key is missing this stops immediately, and a
   // notification that appeared for a second is better than a run that silently had no service.
   await startRunService('Starting…');
+
+  // **Before the loop begins, and the order matters.** The headless task has to start while the activity
+  // is still resumed: one started after the user has already left would race the callback removal it
+  // exists to prevent, and React Native refuses to start a foreground-disallowed task from a resumed
+  // activity at all.
+  const timersHeld = await holdTimersAwake();
+  publish({ timersHeld });
+
   startProbe();
 
   // Shown without awaiting the result. An overlay that could not be drawn - permission revoked,
@@ -400,6 +419,11 @@ const finish = async (next: Partial<RunSnapshot>): Promise<void> => {
   // Both, always, and in this order: the overlay is what the user is looking at, so it goes first.
   await hideAgentOverlay();
   await stopRunService();
+
+  // Released last. An unreleased headless task keeps React Native's timer callback posted for the life
+  // of the process - battery for nothing, and it would make the next run appear protected whether or
+  // not the mechanism works.
+  await releaseTimers();
 };
 
 /**
@@ -426,6 +450,7 @@ export const resetRun = (): void => {
   publish(IDLE);
   void hideAgentOverlay();
   void stopRunService();
+  void releaseTimers();
 };
 
 /**
