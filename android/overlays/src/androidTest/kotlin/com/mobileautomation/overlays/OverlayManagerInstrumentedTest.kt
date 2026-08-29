@@ -29,6 +29,11 @@ class OverlayManagerInstrumentedTest {
             context = context,
             geometry = OverlayGeometry(screenWidthPx = 1080, screenHeightPx = 2400),
             viewFactory = { View(context) },
+            // Inline rather than posting to the main looper. Every assertion here is about refusing to
+            // show a window, which happens before any WindowManager call, and an instrumentation test
+            // body does not run on the UI thread - so posting would make the result arrive after the
+            // assertion.
+            runOnUiThread = { block -> block() },
         )
 
     @Test
