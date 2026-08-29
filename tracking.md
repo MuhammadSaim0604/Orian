@@ -4,7 +4,7 @@ Living record of what has been implemented, what is complete, and what remains. 
 
 Authoritative plan: `Development_Plan/`. It was restructured from **phases** to **steps** after device testing (commit `b0c1c60`); phases 0–9 are complete and everything since is a numbered step. See `Development_Plan/03_Issue_Register.md` for the defect IDs each step closes.
 
-Last updated: after Step 1, with both CI workflows green on `main` (Android CI run `33193684749`, TypeScript CI run `33193684753`).
+Last updated: after Step 2, with both CI workflows green on `main` (Android CI run `33233728079`, TypeScript CI run `33233728231`).
 
 ---
 
@@ -32,8 +32,8 @@ Rows below Phase 5 are in **execution order**, not numeric order. Phase 10's sco
 | Step | Scope                                   | Milestone        | Closes         | Status       |
 | ---- | --------------------------------------- | ---------------- | -------------- | ------------ |
 | 1    | App shell & onboarding                  | M6 A real app    | A1–A5          | **Complete** |
-| 2    | Permission engine                       | M6 A real app    | E1–E4          | Next         |
-| 3    | Background execution & agent overlay    | M6 A real app    | B1, B2         | Not started  |
+| 2    | Permission engine                       | M6 A real app    | E1–E4          | **Complete** |
+| 3    | Background execution & agent overlay    | M6 A real app    | B1, B2         | Next         |
 | 4    | Agent Mode                              | M7 Agent Mode    | B3, B4, B6     | Not started  |
 | 5    | OCR & perception chain                  | M7 Agent Mode    | F1, F2, G7     | Not started  |
 | 6    | Workflow Mode shell                     | M8 Workflow Mode | A6             | Not started  |
@@ -1171,18 +1171,146 @@ deleted: features/home/*, features/inspector/ScreenInspectorScreen.tsx
 
 ---
 
+## Startup crash after Step 1 (fixed)
+
+The Step 1 build **would not open**. Worth its own section because the failure mode is one this project will meet again.
+
+```
+Unable to parse @ReactMethod annotation from native module method:
+AppPreferences.getAllSync(). Details: Unable to parse JNI signature.
+Detected unsupported return class: com.facebook.react.bridge.WritableNativeMap
+```
+
+`getAllSync` returned `WritableNativeMap`, the concrete class. React Native's `TurboModuleInteropUtils.convertReturnClassToJniType` validates return types with an **exact class comparison** — `returnClass == WritableMap.class` — so a subclass of a supported type is rejected even though it is assignable to it. Declaring the interface fixes it.
+
+**Why it was fatal rather than a failed call.** Under the new architecture `NativeModules.X` is not a property read: it is a host-object getter that validates the module's whole method table on **first access**. That access happened while `preferences.ts` was being evaluated, during `shellStore`'s module initialisation, before any React error boundary existed. One bad signature therefore killed the app at startup.
+
+**Why nothing caught it.** It compiles cleanly, ktlint does not inspect types, and no test touched the annotation. `:app:compileDebugKotlin` — which Step 1 did run — proves a module compiles and links, **not** that React Native can parse it. Those are different checks.
+
+`ReactMethodSignatureTest` now reproduces RN's validation by reflection, with no React runtime: every `@ReactMethod` on every registered module is checked for a parseable return type, parseable parameter types, `void` when a Promise is present, and a Promise in final position, using the same exact-class sets RN uses. It was verified to fail against the old signature before the fix. This is the app module's first unit test; CI already ran `testDebugUnitTest` there, so no workflow change was needed.
+
+The TypeScript wrapper now looks the module up inside a `try`, so a future signature mistake degrades to "no stored preferences" — which routes the user through onboarding — rather than an app that will not open.
+
+**Commit:** `040a27d`
+
+---
+
+## Step 2 — Permission Engine (complete)
+
+One registry that knows every capability, its tier, its rationale, how to read its state, and how to request it. **Closes E1, E2, E3, E4** and the permission half of B4.
+
+### E1: the cause was none of the three candidates
+
+The step file guessed at a lost activity result, an unheld projection token, or a status read asking whether capture was _currently active_. All three were wrong, and the real cause is more instructive.
+
+`AutomationModule.notReadyStatusJson()` hardcoded `canCaptureScreen = false`, and `getStatus()` falls through to that stub whenever the accessibility service is off. **The consent flow worked correctly the whole time.** The status object simply reported screen capture as unavailable because a _different_ permission was missing — so a user who granted screen recording with accessibility still off was told it had not worked.
+
+Fixed by reading each capability independently: `hasScreenCaptureSession()` is public on the runtime provider and the stub calls it. The lesson generalises: **a status object that lies about one capability because another is absent is worse than no status object at all.**
+
+`AutomationRuntimeProvider` also gained `permissionGate(context)`, because capability state has to be readable when accessibility is **off** — which is exactly when the user is being asked to turn it on.
+
+### Two new required capabilities, and two state reads that lie
+
+**Default assistant role** for more precise screen reading, **usage access** for reliable foreground-app detection. Both are settings-granted, and both have a read that is not what it looks like. Both fail toward a **false positive** — the app believing it holds a permission it does not, which is the worst direction for a permission check to fail in.
+
+- **Usage access is an appop, not a permission.** `PACKAGE_USAGE_STATS` must be declared in the manifest, and once it is, `checkSelfPermission` returns _granted_ whether or not the user ever allowed it. Only `AppOpsManager.unsafeCheckOpNoThrow(OPSTR_GET_USAGE_STATS, …)` reflects reality. `MODE_DEFAULT` means "fall back to the permission check", so it is confirmed rather than assumed either way. Had this been missed, the capability would have read as permanently granted and the feature would have failed at runtime with nothing to explain why.
+- **The assistant role has no public API.** Read from the non-public `assistant` secure setting, which holds a `package/ServiceClass` string. The check is a **prefix match on the package**, not the whole component, so renaming our own service cannot silently revoke the capability.
+
+### Tiers and grant mechanisms, replacing one boolean
+
+`requiresSystemSettingsScreen` conflated four genuinely different flows. Now explicit, because the mechanism decides how the UI must behave:
+
+| Mechanism         | Resolves with a result? | What the UI must do                                       |
+| ----------------- | ----------------------- | --------------------------------------------------------- |
+| `runtime_prompt`  | yes, via callback       | dialog, await, button says "Allow"                        |
+| `settings_screen` | **no, none at all**     | deep-link, re-read on resume, button says "Open settings" |
+| `session_consent` | only for this session   | request per session; granted is never permanent           |
+| `install_time`    | n/a                     | nothing to request                                        |
+
+The second row shapes the code. **Four of the five required capabilities are settings-granted**, so nothing can await them: `requestCapability` resolves with `settings_opened` rather than a boolean, and the app carries an `AppState` resume listener. Without that listener the user grants accessibility, returns, and the app still says it is off — the single most likely way this feature would appear broken.
+
+### The registry and its boundary
+
+`CapabilityRegistry` pairs each capability with its live state and its request mechanism. It holds **no Android types**, so it is unit-testable off-device, and it **describes** a request as a `CapabilityRequest` rather than performing one — launching an intent needs an Activity, which belongs to the React Native layer.
+
+All rationale copy stays in Kotlin next to the capability, via an exhaustive `when` that will not compile if a capability has none. A screen writing its own explanation could describe a permission differently from the rationale the permission model requires, and the two would drift.
+
+### Onboarding is now a real gate
+
+Continue is disabled until every required capability is granted, and it **names what is still missing** — a greyed-out button with no explanation is the most frustrating thing an onboarding flow can do. Optional capabilities are listed and skippable: making someone grant contacts to reach the app they downloaded is precisely what the permission model exists to prevent.
+
+`CapabilityRow` words its button from the grant mechanism. "Open settings" rather than "Allow", because pressing it allows nothing.
+
+`PermissionsOverview` replaces the panel Step 1 left in root settings, which reported **three capabilities out of nine** — so the app could tell a user everything was fine while a permission it needed was missing.
+
+### Just-in-time
+
+The node palette requests a capability **after** adding the node, not before: asking first would mean a user who declines never gets the step they asked for, and they may be granting it in Settings at that moment. Nodes whose permission is missing are marked in the palette, so it is visible before a workflow is built around them rather than when the run stops.
+
+`nodeCapabilities.ts` maps node type to capability in the **app** layer, not on the node definitions — a publishable node package should not carry Android permission ids.
+
+### A zustand v5 trap
+
+A selector returning `state.capabilities.filter(...)` creates a new array on every call, and v5 compares snapshots with `Object.is`. Subscribing to one re-renders forever, which presents as the app or the test runner **simply hanging, with no error**. Fixed by `useCapabilityViews.ts`: subscribe to the stable array, derive with `useMemo`. The plain selectors remain for tests and non-React callers, where calling them once is safe.
+
+**Verification**
+
+```
+pnpm turbo run typecheck lint test build     60/60 tasks, 225 app Jest tests (13 suites)
+pnpm format:check                            clean
+pnpm install --frozen-lockfile               clean
+cd android && gradle ktlintCheck testDebugUnitTest   537 tests, 9 modules, clean
+cd apps/mobile/android && gradle :app:testDebugUnitTest   clean
+npx react-native bundle --dev false          succeeds
+```
+
+CI runs `33233728079` (Android) and `33233728231` (TypeScript) green, all five Android jobs included.
+
+**Files**
+
+```
+android/tools/.../SensitiveCapability.kt        tiers + grant mechanisms + ASSISTANT, USAGE_ACCESS
+android/tools/.../AndroidPermissionGate.kt      appop and secure-setting reads
+android/tools/.../CapabilityRegistry.kt         state + CapabilityRequest, no Android types
+android/tools/.../PermissionRationale.kt        copy for the two new capabilities
+apps/mobile/android/.../permissions/PermissionsModule.kt
+apps/mobile/android/.../bridge/AutomationRuntimeProvider.kt   E1 fix + permissionGate()
+apps/mobile/android/.../bridge/AutomationModule.kt            E1 fix in the status stub
+apps/mobile/src/features/permissions/*          typed view, store, hooks, CapabilityRow, overview
+apps/mobile/src/features/onboarding/PermissionSetupScreen.tsx  now a real gate
+```
+
+**Commit:** `27d04ec`
+
+### Deliberately left
+
+- **Screen capture keeps its own consent path.** `requestCapability` reports `session_consent` rather than duplicating the MediaProjection flow, which needs the activity-result plumbing `AutomationModule` already owns. One consent path is worth more than a uniform API here.
+- **Tools management is mechanism-only.** Step 4 builds the page; the `useCapability` hook it needs exists and is tested.
+- **`AutomationStatusPanel` still exists** and is still used by both modes' settings. It is narrower than the overview but it is the thing that reports the accessibility service and offers capture consent, so removing it belongs with Step 3's work on the service.
+
+### Not yet verified on a device
+
+- **The settings round trip, for each of the four settings-granted capabilities.** The deep links are correct by the docs; whether each lands on the right page across manufacturer skins is unknown.
+- **The appop read for usage access**, which cannot be exercised off-device.
+- **The assistant-role secure setting**, which varies by OEM and may be absent entirely on some devices.
+- **Whether the resume listener fires reliably** after a settings visit that killed the activity.
+
+---
+
 ## Remaining
 
-**Step 1 is done; Steps 2–13 remain.** The plan is now `Development_Plan/steps/`, and `03_Issue_Register.md` is the checklist — a step is not finished while one of its issue IDs survives.
+**Steps 1 and 2 are done; Steps 3–13 remain.** The plan is `Development_Plan/steps/`, and `03_Issue_Register.md` is the checklist — a step is not finished while one of its issue IDs survives.
 
-**Next is Step 2 — the permission engine.** One capability registry that knows every permission, its tier, its rationale, how to request it, and how to read its state. Two things make it more than plumbing:
+**Next is Step 3 — background execution.** This closes **B1, the most serious defect in the product**: the agent stops the moment the user leaves the app, which makes an automation tool that cannot automate. Two parts:
 
-- **E1 is a real bug with an unknown cause.** Granting screen capture still reports the capability as disabled. The candidates are that the consent `Intent` result is not retained past the activity result, that the projection token is not held by anything longer-lived than the request, or that the status read asks whether a capture is _currently active_ rather than whether consent exists. **Diagnose before fixing** — a guess-fix here will recur, and OCR and vision both depend on it.
-- **Four of the five required capabilities have no runtime prompt.** Accessibility, overlay, assistant role, and usage access can only be granted in system settings, so the UI has to be designed around a settings round trip and a re-check on resume rather than a dialog.
+- **A foreground service that owns the run** (ADR 0012). The loop stays in JavaScript; the service keeps the process alive and does not become the agent. Run state moves out of the React component into a module-level controller, so no unmount can abort a run.
+- **The agent status overlay** — a right-edge container showing the current task with a stop button, expanding into a compact chat wired to the same session.
 
-Then Step 3 (background execution, which closes the most serious defect in the product), Step 4 (Agent Mode), Step 5 (OCR), and on through the sequence in `01_Roadmap.md`.
+The step rests on an assumption that must be verified early rather than late: **that JS execution genuinely continues under a foreground service while backgrounded.** If timers throttle harder than expected, ADR 0012 needs revisiting, so Step 3 checks it explicitly and records what was observed.
 
-**Phase 10's work is now Step 12**, and what it inherits is unchanged and worth repeating: `tool-sdk` is the single source of tool definitions and the MCP tool list must be **generated** from `allToolDefinitions()` rather than restated; `invokeTool` is the one dispatch, so MCP becomes its fourth caller rather than a new path to the device; `validateToolCall` already rejects bad arguments, which matters most for external input. What Step 12 must decide rather than inherit: local-only and authenticated by default, how a token is issued and stored, and what happens when an external caller asks for a destructive tool — the `impact` field on every definition exists for that question. Step 12 also adds the **MCP client** direction, which the original plan never covered (B5).
+Then Step 4 (Agent Mode), Step 5 (OCR), and on through `01_Roadmap.md`.
+
+**Phase 10's work is now Step 12**, and what it inherits is unchanged: `tool-sdk` is the single source of tool definitions and the MCP tool list must be **generated** from `allToolDefinitions()` rather than restated; `invokeTool` is the one dispatch, so MCP becomes its fourth caller rather than a new path to the device; `validateToolCall` already rejects bad arguments, which matters most for external input. What Step 12 must decide rather than inherit: local-only and authenticated by default, how a token is issued and stored, and what happens when an external caller asks for a destructive tool — the `impact` field on every definition exists for that question. Step 12 also adds the **MCP client** direction, which the original plan never covered (B5).
 
 Distribution is the other half of Step 12: `node-sdk`, `workflow-schema`, `core-nodes`, and `android-nodes` are already shaped for publishing (`main` at `dist`, a `react-native` field for Metro), and `node-sdk/AUTHORING.md` documents third-party node authoring. What remains is the npm mechanics and a real end-to-end test with a mock published package.
 
@@ -1202,6 +1330,10 @@ Carry-forward notes:
 - **Anything installing a native module at import time needs its Jest setup registered.** Gesture Handler and Skia both do, so `jest.setup.js` requires each one's own `jestSetup`; without them any test that reaches the canvas dies on import rather than on a render. `transformIgnorePatterns` must also list the scope — `@shopify` ships untranspiled ESM.
 - **Theme values are duplicated by necessity.** `packages/ui/src/theme/semantic.ts` and `apps/mobile/src/global.css` must change together; a parity test is still worth adding.
 - **Navigation is a typed route store, not a navigator** (ADR 0015, Step 1). The two modes each own a route union, which makes an Agent Mode route in Workflow Mode a type error rather than a discipline problem. The costs are ours: transitions, the Android back button, and no deep linking.
+- **A `@ReactMethod` return type must be an exact match for one RN supports** (Step 2's predecessor crash). `WritableMap`, not `WritableNativeMap`; the check is `==`, not assignability, and it runs on first access to the module, which makes a mistake a startup crash rather than a failed call. `ReactMethodSignatureTest` in the app module now catches it.
+- **Zustand v5 selectors must return a stable reference.** A selector doing `.filter(...)` creates a new array each call, `Object.is` never matches, and the component re-renders forever — presenting as a hang with no error. Subscribe to the array and derive with `useMemo`; see `apps/mobile/src/features/permissions/useCapabilityViews.ts`.
+- **`fireEvent.press` is required to trigger a `Pressable` under RNTL.** Reaching for `.props.onPress()` on the found node does nothing, and the test fails claiming the handler was never called.
+- **Permission state is never cached** (Step 2). Every read goes to the platform, because the grant flow sends the user to system settings and back — the common case is a permission that changed while the app was in the background.
 - **`isEntirelyBlack` samples a 16×16 grid.** If a real app is ever misreported as secure, that is the tuning knob.
 - Local Gradle runs need `ANDROID_HOME` set (`%LOCALAPPDATA%\Android\Sdk` on this machine).
 - The Gradle wrapper JAR is deliberately not committed; CI provisions Gradle 8.11.1 via `gradle/actions/setup-gradle`.
@@ -1211,16 +1343,17 @@ Carry-forward notes:
 
 Every engine layer needs physical hardware, and none can be automated here — each requires a user to enable the accessibility service, grant screen capture, or allow display over other apps, and no APK is built locally per ADR 0010.
 
-| From            | What needs checking on a device                                                                       |
-| --------------- | ----------------------------------------------------------------------------------------------------- |
-| Kotlin core     | the service reads a third-party app's tree; tap a resolved element, swipe, type, capture a screenshot |
-| Bridge          | `automation.getUiTree()` and `automation.click(selector)` from JS drive that same device              |
-| Workflow engine | a workflow runs end to end: `RN → JSON → engine → registry → executor → tool runtime → device`        |
-| Canvas          | node text renders, drag behaves, 60fps with dozens of nodes, a workflow survives a restart            |
-| Agent           | the WhatsApp scenario with a real provider key, **continuing while another app is in front**          |
-| Overlay         | the toolset stays on top in WhatsApp and returns a valid condition config                             |
-| Recorder        | replaying a generated workflow reproduces the recorded outcome                                        |
-| Shell (Step 1)  | onboarding on a fresh install, the back button through every route, the transition's feel             |
+| From                 | What needs checking on a device                                                                                                                                                                                 |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Kotlin core          | the service reads a third-party app's tree; tap a resolved element, swipe, type, capture a screenshot                                                                                                           |
+| Bridge               | `automation.getUiTree()` and `automation.click(selector)` from JS drive that same device                                                                                                                        |
+| Workflow engine      | a workflow runs end to end: `RN → JSON → engine → registry → executor → tool runtime → device`                                                                                                                  |
+| Canvas               | node text renders, drag behaves, 60fps with dozens of nodes, a workflow survives a restart                                                                                                                      |
+| Agent                | the WhatsApp scenario with a real provider key, **continuing while another app is in front**                                                                                                                    |
+| Overlay              | the toolset stays on top in WhatsApp and returns a valid condition config                                                                                                                                       |
+| Recorder             | replaying a generated workflow reproduces the recorded outcome                                                                                                                                                  |
+| Shell (Step 1)       | onboarding on a fresh install, the back button through every route, the transition's feel                                                                                                                       |
+| Permissions (Step 2) | the settings round trip for all four settings-granted capabilities across OEM skins; the usage-access appop read; the assistant secure setting; whether resume fires after a settings visit killed the activity |
 
 **Step 13 runs this as one session, in an order where each stage feeds the next so a failure localises itself:** onboarding → the agent outside the app → OCR on a tree-less screen → the recorded trace → generation → running the workflow from the canvas → the node toolset overlay → a force-stop persistence check.
 
