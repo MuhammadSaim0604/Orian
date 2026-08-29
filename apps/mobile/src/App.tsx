@@ -1,4 +1,6 @@
 import { ThemeProvider } from '@mobile-automation/ui';
+import { colorScheme } from 'nativewind';
+import { type ReactNode, useEffect } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
@@ -16,21 +18,46 @@ import { useShellStore } from './features/shell/shellStore';
  * maths rather than a missing style.
  */
 export default function App() {
-  // Read here rather than inside the provider so the whole tree re-renders on a theme change.
-  // `null` means follow the system setting, which is what `ThemeProvider` calls 'system'.
-  const themePreference = useShellStore((state) => state.themePreference);
-
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
-        <ThemeProvider preference={themePreference ?? 'system'}>
+        <Themed>
           <CapabilityWatcher />
           <RootScreen />
-        </ThemeProvider>
+        </Themed>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );
 }
+
+/**
+ * Applies the user's theme choice to **both** styling systems.
+ *
+ * There are two, and they are genuinely independent:
+ *
+ * - `useTheme()` returns the TypeScript theme object, for Skia and other imperative APIs that
+ *   cannot use classNames. `ThemeProvider` resolves it from the `preference` prop.
+ * - `className` styling resolves through NativeWind, which chooses between the light and dark
+ *   CSS-variable blocks in `global.css` by evaluating `@media (prefers-color-scheme: dark)` against
+ *   **its own** `colorScheme` observable — not against the prop above.
+ *
+ * That observable follows the OS until something calls `colorScheme.set`, so setting only the prop
+ * left every `bg-background` and `text-text-primary` on the system scheme. Since nearly all visible
+ * colour comes from classNames, the theme buttons appeared to do nothing whatsoever.
+ *
+ * Both are set here, from one value, so they cannot disagree.
+ */
+const Themed = ({ children }: { readonly children: ReactNode }) => {
+  // `null` means follow the system setting, which both systems spell 'system'.
+  const themePreference = useShellStore((state) => state.themePreference);
+  const preference = themePreference ?? 'system';
+
+  useEffect(() => {
+    colorScheme.set(preference);
+  }, [preference]);
+
+  return <ThemeProvider preference={preference}>{children}</ThemeProvider>;
+};
 
 /**
  * Keeps capability state current for the whole app.

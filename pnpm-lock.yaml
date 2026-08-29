@@ -171,6 +171,9 @@ importers:
       babel-jest:
         specifier: 29.7.0
         version: 29.7.0(@babel/core@7.26.0)
+      identity-obj-proxy:
+        specifier: 3.0.0
+        version: 3.0.0
       jest:
         specifier: 29.7.0
         version: 29.7.0(@types/node@22.10.7)
@@ -2847,6 +2850,9 @@ packages:
   graphemer@1.4.0:
     resolution: {integrity: sha512-EtKwoO6kxCL9WO5xipiHTZlSzBm7WLT627TqC/uVRd0HKmq8NXyebnNYxDoBi7wt8eTWrUrKXCOVaFq9x1kgag==}
 
+  harmony-reflect@1.6.2:
+    resolution: {integrity: sha512-HIp/n38R9kQjDEziXyDTuW3vvoxxyxjxFzXLrBr18uB47GnSt+G9D29fqrpM5ZkspMcPICud3XsBJQ4Y2URg8g==}
+
   has-bigints@1.1.0:
     resolution: {integrity: sha512-R3pbpkcIqv2Pm3dUwgjclDRVmWpTJW2DcMzcIhEXEx1oh/CEMObMm3KLmRJOdvhM7o4uQBnwr8pzRK2sJWIqfg==}
     engines: {node: '>= 0.4'}
@@ -2908,6 +2914,10 @@ packages:
     resolution: {integrity: sha512-5gs5ytaNjBrh5Ow3zrvdUUY+0VxIuWVL4i9irt6friV+BqdCfmV11CQTWMiBYWHbXhco+J1kHfTOUkePhCDvMA==}
     engines: {node: '>=18'}
     hasBin: true
+
+  identity-obj-proxy@3.0.0:
+    resolution: {integrity: sha512-00n6YnVHKrinT9t0d9+5yZC6UBNJANpYEQvL2LlX6Ab9lnmxzIRcEmTPuyGScvl1+jKuCICX1Z0Ab1pPKKdikA==}
+    engines: {node: '>=4'}
 
   ieee754@1.2.1:
     resolution: {integrity: sha512-dcyqhDvX1C46lXZcVqCpK+FtMRQVdIMN6/Df5js2zouUsqG7I6sFxitIC+7KYK29KdXOLHdu9zL4sFnoVQnqaA==}
@@ -7971,6 +7981,8 @@ snapshots:
 
   graphemer@1.4.0: {}
 
+  harmony-reflect@1.6.2: {}
+
   has-bigints@1.1.0: {}
 
   has-flag@4.0.0: {}
@@ -8024,6 +8036,10 @@ snapshots:
   human-signals@5.0.0: {}
 
   husky@9.1.7: {}
+
+  identity-obj-proxy@3.0.0:
+    dependencies:
+      harmony-reflect: 1.6.2
 
   ieee754@1.2.1: {}
 
