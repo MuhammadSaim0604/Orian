@@ -4,6 +4,7 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.WritableMap
 import com.facebook.react.bridge.WritableNativeMap
 
 /**
@@ -30,9 +31,15 @@ class AppPreferencesModule(
      * Blocking is justified here and nowhere else: the alternative is rendering a placeholder and
      * then replacing it, which for the very first screen reads as a flicker or, worse, as the
      * wrong screen appearing briefly.
+     *
+     * The return type must be declared as `WritableMap`, the **interface**, even though the value
+     * is a `WritableNativeMap`. React Native's `TurboModuleInteropUtils` validates the signature
+     * with an exact class comparison (`returnClass == WritableMap.class`), so a subclass fails to
+     * parse - and because that parse happens when JavaScript first touches the module, the failure
+     * is a fatal exception at startup rather than a compile error.
      */
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun getAllSync(): WritableNativeMap =
+    fun getAllSync(): WritableMap =
         WritableNativeMap().apply {
             putBoolean("onboardingComplete", preferences.onboardingComplete)
             putString("lastMode", preferences.lastMode)

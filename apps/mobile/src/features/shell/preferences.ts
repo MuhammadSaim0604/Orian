@@ -39,7 +39,26 @@ type PreferencesNative = {
   clear: () => Promise<void>;
 };
 
-const native = (NativeModules as { AppPreferences?: PreferencesNative }).AppPreferences;
+/**
+ * The native module, looked up defensively.
+ *
+ * `NativeModules.X` is not a plain property read under the new architecture — it is a host-object
+ * getter that **validates the module's method signatures on first access** and throws if any are
+ * unparseable. That throw happens at module-evaluation time here, before any React error boundary
+ * exists, so it takes the whole app down at startup with a JavaScript exception rather than
+ * surfacing as a failed call.
+ *
+ * That is exactly what a `WritableNativeMap` return type did (fixed by declaring `WritableMap`).
+ * Catching it means a future signature mistake degrades to "no stored preferences" — which routes
+ * the user through onboarding — instead of an app that cannot open at all.
+ */
+const native = ((): PreferencesNative | undefined => {
+  try {
+    return (NativeModules as { AppPreferences?: PreferencesNative }).AppPreferences;
+  } catch {
+    return undefined;
+  }
+})();
 
 export const arePreferencesAvailable = (): boolean => native !== undefined;
 
