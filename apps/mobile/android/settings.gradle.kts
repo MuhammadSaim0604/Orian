@@ -50,6 +50,7 @@ dependencyResolutionManagement {
 val nativeModules =
     listOf(
         "accessibility",
+        "assistant",
         "gestures",
         "screen",
         "overlays",

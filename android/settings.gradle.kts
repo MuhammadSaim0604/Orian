@@ -32,3 +32,9 @@ include(":bridge")
 // because storage is not an automation concern, and keeping it apart means the
 // automation modules do not pull in Room's annotation processor.
 include(":storage")
+
+// Step 2: the voice-interaction services that make the app eligible for the
+// assistant role. Its own module because it is a declaration-only capability -
+// Android builds the assistant picker from installed voice-interaction services,
+// so without these the app can never be chosen no matter how it asks.
+include(":assistant")

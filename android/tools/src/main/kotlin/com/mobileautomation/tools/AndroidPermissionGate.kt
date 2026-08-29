@@ -1,6 +1,7 @@
 package com.mobileautomation.tools
 
 import android.app.AppOpsManager
+import android.app.role.RoleManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
@@ -101,12 +102,32 @@ class AndroidPermissionGate(
     /**
      * Whether this app holds the assistant role.
      *
-     * Read from the `assistant` secure setting, which holds a `package/ServiceClass` string. There
-     * is no public API for it and `RoleManager.isRoleHeld(ROLE_ASSISTANT)` is not available, so the
-     * setting is the only source - and it may be absent entirely on a device with no assistant, in
-     * which case nobody holds the role.
+     * Two reads, because neither is sufficient alone:
+     *
+     * - **`RoleManager.isRoleHeld(ROLE_ASSISTANT)`** from API 29. Public API, and the authoritative
+     *   answer where it exists.
+     * - **The `assistant` secure setting** below that, which holds a `package/ServiceClass` string.
+     *   There is no public API on those versions, so the setting is the only source.
+     *
+     * The setting is compared by **package prefix**, not the whole component: the part after the
+     * slash is our own service name, which we are free to rename, and comparing it would mean a
+     * refactor silently reporting the role as lost.
      */
     private fun isDefaultAssistant(): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val roleManager = context.getSystemService(Context.ROLE_SERVICE) as? RoleManager
+
+            if (roleManager != null) {
+                val held =
+                    runCatching {
+                        roleManager.isRoleAvailable(RoleManager.ROLE_ASSISTANT) &&
+                            roleManager.isRoleHeld(RoleManager.ROLE_ASSISTANT)
+                    }.getOrNull()
+
+                if (held != null) return held
+            }
+        }
+
         val assistant =
             runCatching {
                 Settings.Secure.getString(context.contentResolver, SETTING_ASSISTANT)
@@ -114,8 +135,6 @@ class AndroidPermissionGate(
 
         if (assistant.isNullOrBlank()) return false
 
-        // Prefix match on the package: the component after the slash is the app's own service name,
-        // which it is free to change, so comparing the whole string would break on our own rename.
         return assistant.startsWith("${context.packageName}/")
     }
 

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Voice interaction service configuration.
+
+  `supportsAssist` is the attribute that matters: without it the system treats
+  this as a voice service only, and it does not appear in the digital assistant
+  picker.
+
+  `recognitionService` is required by `VoiceInteractionServiceInfo` even though
+  this app does no speech recognition - a missing value makes the whole service
+  fail to parse, and the app silently vanishes from the picker with no error.
+
+  `supportsLaunchVoiceAssistFromKeyguard` is deliberately absent: an automation
+  tool has no business acting from a locked screen.
+-->
+<voice-interaction-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:sessionService="com.mobileautomation.assistant.AutomationVoiceInteractionSessionService"
+    android:recognitionService="com.mobileautomation.assistant.AutomationRecognitionService"
+    android:supportsAssist="true" />

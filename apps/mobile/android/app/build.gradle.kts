@@ -107,5 +107,11 @@ dependencies {
     // consumer of the runtime depend on the overlay layer.
     implementation(project(":overlays"))
 
+    // Step 2: the voice-interaction services that put the app in Android's digital
+    // assistant picker. Declared here rather than through `:automation` because it
+    // contributes only a manifest and three services - nothing in the runtime calls
+    // into it, and the runtime should not depend on a declaration-only module.
+    implementation(project(":assistant"))
+
     testImplementation("junit:junit:4.13.2")
 }

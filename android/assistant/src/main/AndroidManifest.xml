@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      The assistant role.
+
+      Declared in the library that owns it, so the app module gets a correct
+      declaration by manifest merge rather than restating it.
+
+      **This is what makes the app appear in Settings > Default digital assistant
+      app.** Android builds that list from installed voice-interaction services;
+      an app that merely asks for the role without declaring one can never be
+      chosen, which is why the capability was previously unreachable.
+
+      Three services are needed, and all three are required by the platform:
+
+        - the voice interaction service, which the system binds;
+        - a session service, which produces a session per invocation;
+        - a recognition service, which `VoiceInteractionServiceInfo` insists on
+          even for an assistant that does no speech recognition.
+
+      BIND_VOICE_INTERACTION is a signature-level permission held by the system,
+      so only the OS can bind these.
+    -->
+    <application>
+        <service
+            android:name=".AutomationVoiceInteractionService"
+            android:exported="true"
+            android:label="@string/assistant_service_label"
+            android:permission="android.permission.BIND_VOICE_INTERACTION">
+            <intent-filter>
+                <action android:name="android.service.voice.VoiceInteractionService" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.voice_interaction"
+                android:resource="@xml/automation_voice_interaction_service" />
+        </service>
+
+        <service
+            android:name=".AutomationVoiceInteractionSessionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_VOICE_INTERACTION" />
+
+        <!--
+          A stub. This app reads the screen rather than listening, but the
+          platform refuses to parse a voice-interaction service whose metadata
+          does not name a recognition service in the same package.
+        -->
+        <service
+            android:name=".AutomationRecognitionService"
+            android:exported="true"
+            android:label="@string/assistant_service_label">
+            <intent-filter>
+                <action android:name="android.speech.RecognitionService" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>

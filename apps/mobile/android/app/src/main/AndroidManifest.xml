@@ -45,6 +45,14 @@
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
 
+    <!--
+      Lets the app be offered as the device assistant. The voice-interaction
+      services themselves live in android/assistant and arrive by manifest merge;
+      without them the app never appears in the assistant picker at all.
+    -->
+    <uses-permission android:name="android.permission.BIND_VOICE_INTERACTION"
+        tools:ignore="ProtectedPermissions" />
+
 
     <!-- Time-based triggers and the createAlarm tool. -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />

@@ -32,7 +32,7 @@ Four of the five have **no runtime prompt** — they can only be granted in syst
 Both cost real time to get right, and both fail in the direction of a false positive — the app believing it has a permission it does not.
 
 - **Usage access is an appop, not a permission.** `PACKAGE_USAGE_STATS` must be declared in the manifest, but `checkSelfPermission` then returns *granted* purely because of that declaration, whether or not the user ever allowed it. The only honest read is `AppOpsManager.unsafeCheckOpNoThrow(OPSTR_GET_USAGE_STATS, …)`; `MODE_DEFAULT` means "fall back to the permission check", so it is confirmed rather than assumed either way.
-- **The assistant role has no public API.** It is read from the non-public `assistant` secure setting, which holds a `package/ServiceClass` string. The check is a **prefix match on the package**, not the whole component, so renaming our own service cannot silently revoke the capability.
+- **The assistant role needs services, not just a permission.** Android builds the "Default digital assistant app" list from **installed voice-interaction services**, so an app that requests the role without declaring one never appears in the picker at all — the deep link works, the list is correct, and the app is simply absent. `android/assistant` declares the three services the platform requires: a `VoiceInteractionService`, a session service, and a recognition service (required by `VoiceInteractionServiceInfo` even for an assistant that does no speech recognition — a missing one makes the whole service fail to parse, silently). The state is read via `RoleManager.isRoleHeld(ROLE_ASSISTANT)` from API 29, falling back to the non-public `assistant` secure setting, compared by **package prefix** so renaming our own service cannot report the role as lost.
 
 ## The four grant mechanisms
 
@@ -121,6 +121,7 @@ One registry, so a new capability appears everywhere at once rather than being a
 | `android/tools/SensitiveCapability.kt` | the capability list, with tier and grant mechanism |
 | `android/tools/PermissionRationale.kt` | title, explanation, consequence, settings action — exhaustive `when`, so a capability with no rationale does not compile |
 | `android/tools/AndroidPermissionGate.kt` | the live state read for each one |
+| `android/assistant/` | the voice-interaction services that put the app in the assistant picker — declaration only, no runtime caller |
 | `android/tools/CapabilityRegistry.kt` | pairs state with a `CapabilityRequest`; holds no Android types, so it is unit-testable |
 | `apps/mobile/android/…/permissions/PermissionsModule.kt` | the bridge: launches prompts and settings intents, emits `capabilitiesChanged` |
 | `apps/mobile/src/features/permissions/` | the typed view, the store, `useCapability`, and the shared `CapabilityRow` |

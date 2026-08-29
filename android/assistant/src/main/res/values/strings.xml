@@ -1,0 +1,4 @@
+<resources>
+    <!-- Shown in system Settings as the name of the assistant. -->
+    <string name="assistant_service_label">Mobile Automation</string>
+</resources>
