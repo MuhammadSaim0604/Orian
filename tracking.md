@@ -4,7 +4,7 @@ Living record of what has been implemented, what is complete, and what remains. 
 
 Authoritative plan: `Development_Plan/`. It was restructured from **phases** to **steps** after device testing (commit `b0c1c60`); phases 0–9 are complete and everything since is a numbered step. See `Development_Plan/03_Issue_Register.md` for the defect IDs each step closes.
 
-Last updated: after Step 2, with both CI workflows green on `main` (Android CI run `33233728079`, TypeScript CI run `33233728231`).
+Last updated: after Step 3, with both CI workflows green on `main` (Android CI run `33243497410`, TypeScript CI run `33243497411`).
 
 ---
 
@@ -33,8 +33,8 @@ Rows below Phase 5 are in **execution order**, not numeric order. Phase 10's sco
 | ---- | --------------------------------------- | ---------------- | -------------- | ------------ |
 | 1    | App shell & onboarding                  | M6 A real app    | A1–A5          | **Complete** |
 | 2    | Permission engine                       | M6 A real app    | E1–E4          | **Complete** |
-| 3    | Background execution & agent overlay    | M6 A real app    | B1, B2         | Next         |
-| 4    | Agent Mode                              | M7 Agent Mode    | B3, B4, B6     | Not started  |
+| 3    | Background execution & agent overlay    | M6 A real app    | B1, B2         | **Complete** |
+| 4    | Agent Mode                              | M7 Agent Mode    | B3, B4, B6     | Next         |
 | 5    | OCR & perception chain                  | M7 Agent Mode    | F1, F2, G7     | Not started  |
 | 6    | Workflow Mode shell                     | M8 Workflow Mode | A6             | Not started  |
 | 7    | Canvas rebuild                          | M8 Workflow Mode | C1–C3, G2      | Not started  |
@@ -1297,18 +1297,178 @@ apps/mobile/src/features/onboarding/PermissionSetupScreen.tsx  now a real gate
 
 ---
 
+## Device-testing pass after Step 2
+
+The Step 2 build was installed and walked through. **Tests 1 and 3–8 passed** — first launch, the mode switcher, the back button through every route, both modes' settings, revocation being noticed without a restart, and the just-in-time permission on adding a node. Two defects came out of it, both now fixed.
+
+### The app was missing from the assistant picker
+
+Tapping **Open settings** on the default-assistant capability landed on the right Settings page, the list was correct, and **our app was not in it**.
+
+Android builds "Default digital assistant app" from **installed voice-interaction services**, not from apps holding or requesting `BIND_VOICE_INTERACTION`. An app with no such service can never be chosen, and nothing reports the omission — so the capability was unreachable by construction. Step 2 wired the request and the state read correctly and neither could ever have succeeded.
+
+`android/assistant` now declares the three services the platform requires, and all three are required:
+
+- `AutomationVoiceInteractionService` — what the system binds, and what puts the app in the picker.
+- a **session service** — a voice-interaction service whose metadata names none fails to parse.
+- a **recognition service** — `VoiceInteractionServiceInfo` insists on one in the same package **even for an assistant that does no speech recognition**. A missing one makes the whole service fail to parse and the app vanish from the picker with nothing logged.
+
+`supportsAssist="true"` is the attribute that actually matters; without it the system treats it as a voice service only and still does not list it.
+
+The services do **almost nothing**, deliberately. The role is held for one reason: as the active assistant the app can be shown structured screen context the system does not otherwise expose. Automation still runs through the accessibility service. So the session **closes itself immediately** rather than presenting a UI — an assistant UI would hijack the assist gesture, and long-pressing home should keep doing whatever the user expects. No hotword, no microphone, no audio permission.
+
+The state read also improved: `RoleManager.isRoleHeld(ROLE_ASSISTANT)` from API 29, falling back to the secure setting below that.
+
+**Commit:** `5edb6de`
+
+### The theme buttons did nothing
+
+Light and dark worked, but only when the OS changed. **There are two styling systems and the preference reached one of them.**
+
+`ThemeProvider` feeds `useTheme()`, for Skia and other imperative APIs that cannot use classNames — that was correct. But `className` colours resolve through NativeWind, which chooses between the light and dark CSS-variable blocks in `global.css` by evaluating `@media (prefers-color-scheme: dark)` against **its own** `colorScheme` observable. That observable follows the OS until something calls `colorScheme.set`, and nothing did.
+
+Since essentially every visible colour comes from a className, setting only the prop changed almost nothing. The store was right and the UI ignored it.
+
+Both are now set from one value. `OverlayRoot` had the same bug in a worse form — it hardcoded `<ThemeProvider>` with no preference at all, so the overlay would have followed the OS while the app followed the user, most visibly when floating over another app.
+
+The test asserts `colorScheme.set` was called. Asserting the store updated would have passed while the bug was live.
+
+**Commit:** `52d45ff`
+
+### Also fixed: the debug APK would not open
+
+Not a defect — a debug build fetches its JS from Metro at runtime, and the release APK has the bundle baked in. Recorded because it will come up again: use the release artifact for device testing, or `adb reverse tcp:8081 tcp:8081` with Metro running.
+
+---
+
+## Step 3 — Background Execution & Agent Status Overlay (complete)
+
+**Closes B1 and B2.** B1 was the most serious defect in the product: the agent read the screen, planned, started executing, opened the target app — and stopped, because our app went to background. An automation tool that cannot act while another app is in front is not an automation tool.
+
+### The cause was ownership, not the loop
+
+`useAgentRun` held the run in `useState`/`useRef` and unmounted with `controllerRef.current?.abort()`.
+
+Defensible in isolation — a run whose screen is gone has nothing left to narrate — but it makes **the run's lifetime the screen's lifetime**, and the agent exists to work while the user is elsewhere. The loop was never the problem; it was owned by the wrong thing.
+
+Run state moved out of React entirely into `runController.ts`, a module (**ADR 0016**, refining 0012). `useAgentRun` is now ~70 lines that subscribe and nothing else: no ownership, and deliberately **no cleanup**.
+
+Three consequences, each with a matching decision:
+
+- **Both React roots see one run.** The overlay is a separate root and imports the same module, so a run started in the chat appears in the overlay with nothing passed between them.
+- **Exits must be exhaustive**, since a run can now outlive every screen showing it. Every path — success, failure, abort, and the early return when no provider key is set — routes through one `finish`. That is the invariant: a notification outliving the work tells the user their phone is being driven when it is not.
+- **The single-run rule moved into the controller.** With ownership in a component, a second run needed two mounted screens; now it needs two calls. `start` refuses rather than replacing, because replacing would leave the first loop running with nothing tracking it.
+
+### The assumption, and why the app measures it
+
+Everything rests on JS continuing to execute under a foreground service while backgrounded. It should hold — RN runs JS on its own thread, and a foreground service keeps the process out of the states where Doze applies — but **expectation is not verification**, and manufacturer skins vary.
+
+`backgroundProbe` records the worst wall-clock gap between one-second ticks during a run, and Agent Mode settings reports it in a sentence. **Wall clock rather than tick count**, because a throttled timer still fires eventually; the question is how much time passed. The final gap is measured at stop as well as per tick — a process frozen when the run ended has no tick left to record the interesting gap.
+
+If a device suspends the process the app says so, rather than the user concluding the agent is unreliable and nobody learning why.
+
+### The status overlay
+
+A narrow strip on the **right edge**, vertically centred. Right because on-screen content is left-aligned in the languages this ships in first, so it covers less of what the user is reading; centred so it misses the app's toolbar, which is usually where the controls the agent is about to press are.
+
+`AgentOverlayGeometry` is a **separate class** from `OverlayGeometry`, not a parameter on it. A right-edge strip and a bottom-anchored panel share no arithmetic, and merging them would produce a class made of `if` branches.
+
+Collapsed it answers two questions: what is it doing, and how do I stop it. Expanded it adds the event log — **newest first here, oldest first in the chat**, because on a floating strip the current step is what matters while in the chat the history is the point.
+
+The follow-up box **queues rather than injects, and says so**. The loop builds the model's context per step and has no mid-run input point; inventing one means changing the loop, which is Step 4's work. An input box that silently did something other than what it looked like would be worse than one that explains itself. A queued instruction only auto-starts if the run ended naturally — after an explicit stop, starting something else is the opposite of what the user pressed.
+
+### Stop from three places, one implementation
+
+Chat and overlay call `stopRun` directly. The notification is the interesting path: its action is delivered to the service, and **a service cannot reach JavaScript**. So the service broadcasts **before** `stopSelf` — order matters, because killing the service alone would leave the loop running unthrottled with no notification left to stop it from.
+
+`listenForExternalStop()` is wired in `index.js` rather than a component, because the notification is most useful precisely when nothing is mounted.
+
+The broadcast is package-scoped and the receiver `NOT_EXPORTED` from API 33, so no other app can stop the user's automation. Registered against the React context rather than held statically, which would outlive a reload and deliver a stop into a dead context.
+
+### Two overlays that must never coexist
+
+`OverlayExclusivity` arbitrates: **last-one-wins**, claimed rather than negotiated. The reason is honesty rather than layout — the status overlay carries a stop button, and with a toolset panel also floating it would not be clear what that button stops. Refusing the second would mean telling a user they cannot see their running agent because a panel from the other mode is open.
+
+`release` is guarded on ownership, which prevents the ordering bug where an evicted overlay's late `hide()` clears the claim of the one that replaced it.
+
+It holds lambdas rather than manager references, so it depends on neither implementation — which is what lets two React Native modules that cannot see each other share one rule.
+
+### The awkward cases
+
+| Case                               | Behaviour, and why                                                                                                                                                           |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Run ends while expanded            | The overlay collapses itself, so the last thing seen is the outcome rather than a chat box for finished work                                                                 |
+| Overlay permission revoked mid-run | `showAgentOverlay` never throws and reports whether it appeared; the run continues without a strip, because the automation is the point                                      |
+| Process killed                     | `START_NOT_STICKY`, deliberately — a user who did not see a run start cannot know why their phone is being driven                                                            |
+| Stale window                       | The overlay compares its bound run id against the controller's and says the panel belongs to a finished run, rather than offering a stop button for work never seen to start |
+
+**Verification**
+
+```
+pnpm turbo run typecheck lint test build     60/60 tasks, 268 app Jest tests (16 suites)
+pnpm format:check                            clean
+pnpm install --frozen-lockfile               clean
+cd android && gradle ktlintCheck testDebugUnitTest   566 tests, 10 modules, clean
+cd apps/mobile/android && gradle :app:testDebugUnitTest   clean
+npx react-native bundle --dev false          succeeds with the third root registered
+```
+
+CI runs `33243497410` (Android) and `33243497411` (TypeScript) green.
+
+The load-bearing tests: a run keeps going when every subscriber has gone (B1 directly), a subscriber that throws does not abandon the run, the service and overlay are stopped even on the provider-misconfigured early return, and the probe measures its final gap at stop.
+
+**Two Jest traps hit:** `jest.mock` factories are hoisted, so a variable they reference must be named `mock*` or it reads as uninitialised. And `finish` awaits twice, so a three-flush settle asserted on a half-finished teardown — reported as "the service was never stopped", which sends you looking at the wrong code. A `neverFinishes()` helper using a 60s `setTimeout` also kept Jest's worker alive after the suite; replaced with a promise that never settles.
+
+**Files**
+
+```
+Development_Plan/decisions/0016-run-controller-is-a-module-not-a-component.md
+apps/mobile/src/features/agent/runController.ts       the run, outside React
+apps/mobile/src/features/agent/runService.ts          foreground service wrapper
+apps/mobile/src/features/agent/backgroundProbe.ts     the assumption, measured
+apps/mobile/src/features/agent/agentOverlay.ts        non-throwing overlay bridge
+apps/mobile/src/features/agent-overlay/AgentStatusOverlay.tsx
+apps/mobile/src/overlay/AgentOverlayRoot.tsx          third React root
+apps/mobile/src/features/agent-mode/BackgroundExecutionCard.tsx
+android/overlays/.../AgentOverlayGeometry.kt          right-edge strip geometry
+android/overlays/.../AgentStatusOverlayManager.kt     bound to a run id
+android/overlays/.../OverlayExclusivity.kt            one overlay at a time
+apps/mobile/android/.../agentoverlay/AgentOverlayModule.kt
+apps/mobile/android/.../agentoverlay/AgentOverlayReactHost.kt
+android/automation/.../AutomationForegroundService.kt  + ACTION_STOP_BROADCAST
+```
+
+**Commit:** `26232ed`
+
+### Deliberately left
+
+- **The follow-up box queues; it does not interleave.** Genuinely injecting an instruction mid-run means giving the loop an input point, which is Step 4's session work. The UI states what it does rather than implying more.
+- **No session history.** One run at a time, and starting a new one replaces the last. Step 4 adds sessions.
+- **The overlay cannot be dragged yet.** `moveTo` exists on the manager and is tested, but nothing calls it — a drag handle on a floating window needs gesture wiring inside a second React root, and it is not what B1 was about.
+
+### Not yet verified on a device — and this is the step where it matters most
+
+- **That a run genuinely continues with another app in front.** Everything is built for it and nothing proves it. This is the single check that decides whether Step 3 achieved its purpose.
+- **What the probe reports on real hardware**, especially on a skin with aggressive battery management.
+- **That the overlay window appears, and stays on top of a third-party app.**
+- **Stop from the notification**, which crosses service → broadcast → module → JS and cannot be exercised off-device.
+- **That the two overlays evict each other correctly** when a run starts while the toolset is open.
+
+---
+
 ## Remaining
 
-**Steps 1 and 2 are done; Steps 3–13 remain.** The plan is `Development_Plan/steps/`, and `03_Issue_Register.md` is the checklist — a step is not finished while one of its issue IDs survives.
+**Steps 1, 2 and 3 are done; Steps 4–13 remain.** The plan is `Development_Plan/steps/`, and `03_Issue_Register.md` is the checklist — a step is not finished while one of its issue IDs survives.
 
-**Next is Step 3 — background execution.** This closes **B1, the most serious defect in the product**: the agent stops the moment the user leaves the app, which makes an automation tool that cannot automate. Two parts:
+**Next is Step 4 — Agent Mode.** The engine works and the run now survives backgrounding; what is missing is the product around it. Closes B3, B4 and B6:
 
-- **A foreground service that owns the run** (ADR 0012). The loop stays in JavaScript; the service keeps the process alive and does not become the agent. Run state moves out of the React component into a module-level controller, so no unmount can abort a run.
-- **The agent status overlay** — a right-edge container showing the current task with a stop button, expanding into a compact chat wired to the same session.
+- **Chat sessions with history.** Today there is one run and starting another replaces it. Sessions need persistence, a list, and a way back into a past conversation.
+- **A tools page.** The user should see which device tools the agent may use and be able to turn any of them off — with the permission mechanism from Step 2 behind each toggle.
+- **Multiple providers.** One provider is configured today; the registry needs to hold several and let the user choose per mode.
 
-The step rests on an assumption that must be verified early rather than late: **that JS execution genuinely continues under a foreground service while backgrounded.** If timers throttle harder than expected, ADR 0012 needs revisiting, so Step 3 checks it explicitly and records what was observed.
+Step 4 also owns the piece Step 3 deliberately left: **a mid-run input point in the loop**, so the overlay's follow-up box can interleave rather than queue. That is a change to `runAgent`'s context assembly, which is why it was not smuggled into a step about lifetimes.
 
-Then Step 4 (Agent Mode), Step 5 (OCR), and on through `01_Roadmap.md`.
+Then Step 5 (OCR and the perception chain), Step 6 (Workflow Mode shell), and on through `01_Roadmap.md`.
 
 **Phase 10's work is now Step 12**, and what it inherits is unchanged: `tool-sdk` is the single source of tool definitions and the MCP tool list must be **generated** from `allToolDefinitions()` rather than restated; `invokeTool` is the one dispatch, so MCP becomes its fourth caller rather than a new path to the device; `validateToolCall` already rejects bad arguments, which matters most for external input. What Step 12 must decide rather than inherit: local-only and authenticated by default, how a token is issued and stored, and what happens when an external caller asks for a destructive tool — the `impact` field on every definition exists for that question. Step 12 also adds the **MCP client** direction, which the original plan never covered (B5).
 
@@ -1334,6 +1494,11 @@ Carry-forward notes:
 - **Zustand v5 selectors must return a stable reference.** A selector doing `.filter(...)` creates a new array each call, `Object.is` never matches, and the component re-renders forever — presenting as a hang with no error. Subscribe to the array and derive with `useMemo`; see `apps/mobile/src/features/permissions/useCapabilityViews.ts`.
 - **`fireEvent.press` is required to trigger a `Pressable` under RNTL.** Reaching for `.props.onPress()` on the found node does nothing, and the test fails claiming the handler was never called.
 - **Permission state is never cached** (Step 2). Every read goes to the platform, because the grant flow sends the user to system settings and back — the common case is a permission that changed while the app was in the background.
+- **The run lives in a module, not a component** (ADR 0016, Step 3). `runController.ts` owns the `AbortController`; `useAgentRun` subscribes and has **no cleanup**, because an unmount aborting the run is exactly what B1 was. Every exit routes through one `finish`, so the notification and overlay cannot outlive the work.
+- **There are three React roots in one process**: the app, the node toolset overlay, and the agent status overlay. They share state only through the store and controller **modules all three import** — never through props or events, since they have no common ancestor. Each also has to set `colorScheme` itself, because any of them can be the first to mount.
+- **`jest.mock` factories are hoisted**, so a variable one references must be named `mock*` or it reads as uninitialised. And when asserting on teardown, flush generously: `finish` awaits twice, so a three-flush settle asserted on a half-finished teardown and reported it as "the service was never stopped".
+- **A pending timer keeps Jest's worker alive** after a suite ends, surfacing as "a worker process has failed to exit gracefully" — which then hides any real leak. Prefer a promise that never settles over a long `setTimeout` in a test helper.
+- **Debug APKs need Metro; use the release artifact for device testing.** A debug build fetches its JS at runtime, so a sideloaded one shows "unable to load script". `adb reverse tcp:8081 tcp:8081` connects it if the debug build is genuinely needed.
 - **`isEntirelyBlack` samples a 16×16 grid.** If a real app is ever misreported as secure, that is the tuning knob.
 - Local Gradle runs need `ANDROID_HOME` set (`%LOCALAPPDATA%\Android\Sdk` on this machine).
 - The Gradle wrapper JAR is deliberately not committed; CI provisions Gradle 8.11.1 via `gradle/actions/setup-gradle`.
@@ -1343,21 +1508,24 @@ Carry-forward notes:
 
 Every engine layer needs physical hardware, and none can be automated here — each requires a user to enable the accessibility service, grant screen capture, or allow display over other apps, and no APK is built locally per ADR 0010.
 
-| From                 | What needs checking on a device                                                                                                                                                                                 |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Kotlin core          | the service reads a third-party app's tree; tap a resolved element, swipe, type, capture a screenshot                                                                                                           |
-| Bridge               | `automation.getUiTree()` and `automation.click(selector)` from JS drive that same device                                                                                                                        |
-| Workflow engine      | a workflow runs end to end: `RN → JSON → engine → registry → executor → tool runtime → device`                                                                                                                  |
-| Canvas               | node text renders, drag behaves, 60fps with dozens of nodes, a workflow survives a restart                                                                                                                      |
-| Agent                | the WhatsApp scenario with a real provider key, **continuing while another app is in front**                                                                                                                    |
-| Overlay              | the toolset stays on top in WhatsApp and returns a valid condition config                                                                                                                                       |
-| Recorder             | replaying a generated workflow reproduces the recorded outcome                                                                                                                                                  |
-| Shell (Step 1)       | onboarding on a fresh install, the back button through every route, the transition's feel                                                                                                                       |
-| Permissions (Step 2) | the settings round trip for all four settings-granted capabilities across OEM skins; the usage-access appop read; the assistant secure setting; whether resume fires after a settings visit killed the activity |
+| From                 | What needs checking on a device                                                                                                                                                                                                                                        |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Kotlin core          | the service reads a third-party app's tree; tap a resolved element, swipe, type, capture a screenshot                                                                                                                                                                  |
+| Bridge               | `automation.getUiTree()` and `automation.click(selector)` from JS drive that same device                                                                                                                                                                               |
+| Workflow engine      | a workflow runs end to end: `RN → JSON → engine → registry → executor → tool runtime → device`                                                                                                                                                                         |
+| Canvas               | node text renders, drag behaves, 60fps with dozens of nodes, a workflow survives a restart                                                                                                                                                                             |
+| Agent                | the WhatsApp scenario with a real provider key, **continuing while another app is in front**                                                                                                                                                                           |
+| Overlay              | the toolset stays on top in WhatsApp and returns a valid condition config                                                                                                                                                                                              |
+| Recorder             | replaying a generated workflow reproduces the recorded outcome                                                                                                                                                                                                         |
+| Shell (Step 1)       | onboarding on a fresh install, the back button through every route, the transition's feel                                                                                                                                                                              |
+| Permissions (Step 2) | the settings round trip for all four settings-granted capabilities across OEM skins; the usage-access appop read; the assistant secure setting; whether resume fires after a settings visit killed the activity                                                        |
+| Background (Step 3)  | **that a run continues with another app in front** — the check that decides whether Step 3 worked; what the probe reports on an aggressive OEM skin; the status overlay appearing and staying on top; stop from the notification; the two overlays evicting each other |
 
 **Step 13 runs this as one session, in an order where each stage feeds the next so a failure localises itself:** onboarding → the agent outside the app → OCR on a tree-less screen → the recorded trace → generation → running the workflow from the canvas → the node toolset overlay → a force-stop persistence check.
 
-The `app-debug` artifact from the latest green Android CI run is the build to sideload. This remains the single largest gap in the project: every layer is built and tested against fakes, and the device testing that _has_ happened is precisely what produced the issue register — which is the argument for doing the rest deliberately rather than incidentally.
+**The release artifact is the one to sideload**, not `app-debug` — a debug build fetches its JS from Metro and shows "unable to load script" when installed on its own.
+
+The gap is narrowing but still the largest risk in the project. Two rounds of device testing have now happened, and **both produced defects that no amount of unit testing would have found**: a capability that could never be granted because the app was absent from the picker it linked to, and a theme preference applied to one of two independent styling systems. That is the argument for testing each step on hardware as it lands rather than saving it all for Step 13.
 
 ### Deliberately out of scope
 
