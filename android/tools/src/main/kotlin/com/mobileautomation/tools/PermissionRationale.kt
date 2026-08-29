@@ -62,6 +62,34 @@ data class PermissionRationale(
                         settingsAction = ACTION_OVERLAY_SETTINGS,
                     )
 
+                SensitiveCapability.ASSISTANT ->
+                    PermissionRationale(
+                        capability = capability,
+                        title = "Set as your digital assistant",
+                        explanation =
+                            "As your assistant, the app gets a more precise picture of what is on " +
+                                "screen than the accessibility service alone can give it, which makes " +
+                                "automations more reliable on apps that draw their own interface.",
+                        consequenceIfDenied =
+                            "Without this, automation still works, but it will misread some screens " +
+                                "that do not expose their contents in the usual way.",
+                        settingsAction = ACTION_ASSISTANT_SETTINGS,
+                    )
+
+                SensitiveCapability.USAGE_ACCESS ->
+                    PermissionRationale(
+                        capability = capability,
+                        title = "Allow the app to see which app is open",
+                        explanation =
+                            "So automations know reliably which app is in front of you. Only the name " +
+                                "of the app in the foreground is used - not what you do in it, and " +
+                                "nothing is stored.",
+                        consequenceIfDenied =
+                            "Without this, the app has to guess the current app from screen events, " +
+                                "which goes stale and can make a workflow act on the wrong app.",
+                        settingsAction = ACTION_USAGE_ACCESS_SETTINGS,
+                    )
+
                 SensitiveCapability.FOREGROUND_SERVICE ->
                     PermissionRationale(
                         capability = capability,
@@ -109,6 +137,7 @@ data class PermissionRationale(
                         consequenceIfDenied =
                             "Without this, alarms open your clock app pre-filled instead of being " +
                                 "set directly, and timed triggers may fire late.",
+                        settingsAction = ACTION_EXACT_ALARM_SETTINGS,
                     )
 
                 SensitiveCapability.NOTIFICATIONS ->
@@ -127,7 +156,16 @@ data class PermissionRationale(
         /** Rationale for every sensitive capability, for a permissions overview screen. */
         fun all(): List<PermissionRationale> = SensitiveCapability.entries.map { forCapability(it) }
 
+        /** Rationale for the capabilities onboarding must gate on, in the order to present them. */
+        fun required(): List<PermissionRationale> = SensitiveCapability.required().map { forCapability(it) }
+
+        /** Rationale for the capabilities onboarding offers but does not require. */
+        fun optional(): List<PermissionRationale> = SensitiveCapability.optional().map { forCapability(it) }
+
         const val ACTION_ACCESSIBILITY_SETTINGS: String = "android.settings.ACCESSIBILITY_SETTINGS"
         const val ACTION_OVERLAY_SETTINGS: String = "android.settings.action.MANAGE_OVERLAY_PERMISSION"
+        const val ACTION_ASSISTANT_SETTINGS: String = "android.settings.VOICE_INPUT_SETTINGS"
+        const val ACTION_USAGE_ACCESS_SETTINGS: String = "android.settings.USAGE_ACCESS_SETTINGS"
+        const val ACTION_EXACT_ALARM_SETTINGS: String = "android.settings.REQUEST_SCHEDULE_EXACT_ALARM"
     }
 }

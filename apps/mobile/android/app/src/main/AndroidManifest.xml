@@ -35,6 +35,17 @@
     <!-- Resolves a person by name for goals such as "message Robert". Read-only. -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
 
+    <!--
+      Reliable foreground-app detection (Step 2). This is an appop-guarded
+      permission: declaring it here is necessary but not sufficient, and
+      `checkSelfPermission` returns granted purely because of this line - which is
+      why the capability is read through AppOpsManager instead. The user grants it
+      in Settings > Special app access > Usage access.
+    -->
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+
+
     <!-- Time-based triggers and the createAlarm tool. -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />

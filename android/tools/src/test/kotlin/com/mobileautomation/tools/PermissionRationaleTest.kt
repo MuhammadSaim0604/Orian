@@ -82,4 +82,36 @@ class PermissionRationaleTest {
         val explanation = PermissionRationale.forCapability(SensitiveCapability.CONTACTS).explanation
         assertTrue(explanation.contains("names and phone numbers", ignoreCase = true))
     }
+
+    @Test
+    fun `the assistant rationale opens voice input settings`() {
+        val rationale = PermissionRationale.forCapability(SensitiveCapability.ASSISTANT)
+        assertEquals(PermissionRationale.ACTION_ASSISTANT_SETTINGS, rationale.settingsAction)
+    }
+
+    @Test
+    fun `the usage access rationale opens usage access settings`() {
+        val rationale = PermissionRationale.forCapability(SensitiveCapability.USAGE_ACCESS)
+        assertEquals(PermissionRationale.ACTION_USAGE_ACCESS_SETTINGS, rationale.settingsAction)
+    }
+
+    @Test
+    fun `the usage access explanation says only the app name is used`() {
+        // The permission sounds far broader than what the app does with it, so the rationale has to
+        // narrow it explicitly or the user is agreeing to something vaguer than the truth.
+        val explanation = PermissionRationale.forCapability(SensitiveCapability.USAGE_ACCESS).explanation
+
+        assertTrue(explanation.contains("foreground", ignoreCase = true))
+        assertTrue(explanation.contains("nothing is stored", ignoreCase = true))
+    }
+
+    @Test
+    fun `the required tier has rationale copy for every entry`() {
+        assertEquals(SensitiveCapability.required().size, PermissionRationale.required().size)
+    }
+
+    @Test
+    fun `the optional tier has rationale copy for every entry`() {
+        assertEquals(SensitiveCapability.optional().size, PermissionRationale.optional().size)
+    }
 }

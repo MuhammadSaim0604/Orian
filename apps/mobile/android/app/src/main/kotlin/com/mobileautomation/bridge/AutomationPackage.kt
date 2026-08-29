@@ -5,6 +5,7 @@ import com.facebook.react.bridge.NativeModule
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.uimanager.ViewManager
 import com.mobileautomation.overlay.OverlayModule
+import com.mobileautomation.permissions.PermissionsModule
 import com.mobileautomation.preferences.AppPreferencesModule
 import com.mobileautomation.settings.ProviderSettingsModule
 import com.mobileautomation.storage.WorkflowStorageModule
@@ -31,6 +32,10 @@ class AutomationPackage : ReactPackage {
             // Step 1: shell preferences. Read synchronously at startup so the first paint
             // shows the right screen rather than guessing and correcting itself.
             AppPreferencesModule(reactContext),
+            // Step 2: the capability registry surfaced to JS. Separate from AutomationModule
+            // because capability state must be readable when the accessibility service is
+            // off - which is exactly when the user is being asked to turn it on.
+            PermissionsModule(reactContext),
         )
 
     override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> = emptyList()

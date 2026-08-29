@@ -73,7 +73,12 @@ object AutomationRuntimeProvider {
         }
 
         val metrics = context.resources.displayMetrics
-        val permissionGate = AndroidPermissionGate(context, accessibilityServiceClassName)
+        val permissionGate =
+            AndroidPermissionGate(
+                context = context,
+                accessibilityServiceClassName = accessibilityServiceClassName,
+                hasScreenCaptureSession = { hasScreenCaptureSession() },
+            )
 
         val runtime =
             DefaultAutomationRuntime(
@@ -122,7 +127,7 @@ object AutomationRuntimeProvider {
 
         return AutomationBridge(
             runtime = runtime,
-            canCaptureScreen = { screenCapture?.isReady == true },
+            canCaptureScreen = { hasScreenCaptureSession() },
             canDrawOverlay = { canDrawOverlay(context) },
         )
     }
@@ -174,6 +179,18 @@ object AutomationRuntimeProvider {
         Log.i(TAG, "Screen capture session released")
     }
 
+    /**
+     * Whether a screen-capture session is currently held.
+     *
+     * Exposed separately from [bridgeOrNull] because the two are **independent**, and conflating
+     * them caused a real bug (issue E1): `getStatus` fell back to a stub whenever the accessibility
+     * service was off, and that stub hardcoded capture as unavailable - so a user who granted screen
+     * recording was told it had not worked, because a different permission was missing.
+     *
+     * MediaProjection has nothing to do with accessibility. This reads the session directly.
+     */
+    fun hasScreenCaptureSession(): Boolean = screenCapture?.isReady == true
+
     /** Deletes every stored screenshot. Called when the user clears data. */
     fun clearScreenshots(context: Context): Int =
         ScreenshotStore(File(context.filesDir, CAPTURE_DIRECTORY)).clear()
@@ -185,8 +202,7 @@ object AutomationRuntimeProvider {
      * `capture_consent_required` error - which tells the caller to ask the user -
      * instead of a generic failure.
      */
-    private fun screenCaptureOrPlaceholder(context: Context): ScreenCapture =
-        screenCapture ?: ConsentRequiredScreenCapture
+    private fun screenCaptureOrPlaceholder(context: Context): ScreenCapture = screenCapture ?: ConsentRequiredScreenCapture
 
     private fun canDrawOverlay(context: Context): Boolean =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -194,6 +210,19 @@ object AutomationRuntimeProvider {
         } else {
             true
         }
+
+    /**
+     * The permission gate, for callers that need capability state without a runtime.
+     *
+     * The permissions module uses this: capability state must be readable when the accessibility
+     * service is **off**, since that is precisely when the user is being asked to turn it on.
+     */
+    fun permissionGate(context: Context): AndroidPermissionGate =
+        AndroidPermissionGate(
+            context = context,
+            accessibilityServiceClassName = accessibilityServiceClassName,
+            hasScreenCaptureSession = { hasScreenCaptureSession() },
+        )
 
     /** Stands in before the user has granted a capture session. */
     private object ConsentRequiredScreenCapture : ScreenCapture {

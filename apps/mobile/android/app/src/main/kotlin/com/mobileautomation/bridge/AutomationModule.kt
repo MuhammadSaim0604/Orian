@@ -431,10 +431,20 @@ class AutomationModule(
         }
     }
 
+    /**
+     * The status reported when there is no runtime.
+     *
+     * **Each capability is read independently.** An earlier version hardcoded `canCaptureScreen =
+     * false` here, which caused issue E1: with the accessibility service off, `getStatus` fell
+     * through to this stub, so a user who had just granted screen recording was told it had not
+     * worked. Screen capture and overlay permission have nothing to do with accessibility, and a
+     * status object that lies about two capabilities because a third is missing is worse than no
+     * status at all.
+     */
     private fun notReadyStatusJson(): String =
         BridgeResults.statusToJson(
             isReady = false,
-            canCaptureScreen = false,
+            canCaptureScreen = AutomationRuntimeProvider.hasScreenCaptureSession(),
             canDrawOverlay = canDrawOverlay(),
         )
 

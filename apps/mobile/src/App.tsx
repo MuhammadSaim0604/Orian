@@ -3,6 +3,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import './global.css';
+import { useCapabilityWatcher } from './features/permissions/useCapability';
 import { RootScreen } from './features/shell/RootScreen';
 import { useShellStore } from './features/shell/shellStore';
 
@@ -23,9 +24,25 @@ export default function App() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <ThemeProvider preference={themePreference ?? 'system'}>
+          <CapabilityWatcher />
           <RootScreen />
         </ThemeProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );
 }
+
+/**
+ * Keeps capability state current for the whole app.
+ *
+ * Its own component so the effects sit above every screen but below the providers, and so a
+ * re-render from a permission change does not re-render `App` itself. Renders nothing.
+ *
+ * The load-bearing part is the app-resume listener inside the hook: four of the five required
+ * permissions can only be granted in system settings, and Android gives no callback — returning to
+ * the foreground is the only moment the app can learn the answer.
+ */
+const CapabilityWatcher = () => {
+  useCapabilityWatcher();
+  return null;
+};

@@ -15,7 +15,7 @@ This app requests some of the most powerful permissions Android offers. Every on
 
 ## Tier 1 — required, granted during onboarding
 
-Onboarding cannot be completed without these. The product does not work at all otherwise.
+Onboarding cannot be completed without these. The product does not work at all otherwise, and the gate is enforced in code: `CapabilityRegistry.requiredCapabilitiesGranted()` consults this tier and nothing else.
 
 | Capability | Mechanism | Why it is needed |
 | --- | --- | --- |
@@ -26,6 +26,26 @@ Onboarding cannot be completed without these. The product does not work at all o
 | **Notifications** | `POST_NOTIFICATIONS` | The foreground-service notification, which is how the user knows automation is running |
 
 Four of the five have **no runtime prompt** — they can only be granted in system settings. The app explains each, deep-links to the right settings page, and re-checks on resume. Onboarding is designed around that round trip rather than pretending it is a dialog.
+
+### Two state reads that are not what they look like
+
+Both cost real time to get right, and both fail in the direction of a false positive — the app believing it has a permission it does not.
+
+- **Usage access is an appop, not a permission.** `PACKAGE_USAGE_STATS` must be declared in the manifest, but `checkSelfPermission` then returns *granted* purely because of that declaration, whether or not the user ever allowed it. The only honest read is `AppOpsManager.unsafeCheckOpNoThrow(OPSTR_GET_USAGE_STATS, …)`; `MODE_DEFAULT` means "fall back to the permission check", so it is confirmed rather than assumed either way.
+- **The assistant role has no public API.** It is read from the non-public `assistant` secure setting, which holds a `package/ServiceClass` string. The check is a **prefix match on the package**, not the whole component, so renaming our own service cannot silently revoke the capability.
+
+## The four grant mechanisms
+
+Every capability declares one, because conflating them is what makes permission UI feel broken. The mechanism decides how the UI behaves, not just how the request is made.
+
+| Mechanism | Resolves with a result? | What the UI must do |
+| --- | --- | --- |
+| `runtime_prompt` | yes, via callback | show a dialog, await the answer, label the button "Allow" |
+| `settings_screen` | **no** | deep-link, tell the user to come back, re-read on resume, label the button "Open settings" |
+| `session_consent` | yes, but only for this session | request per session; "granted" is never permanent |
+| `install_time` | n/a | nothing to request; absence means the build is wrong |
+
+The second row is the one that shapes the code. A settings grant has **no callback at all**, so anything that awaits it waits forever — which is why `requestCapability` resolves with `settings_opened` rather than a boolean, and why the app carries an `AppState` resume listener rather than trusting an event.
 
 ## Tier 2 — optional, requested at the moment of need
 
@@ -60,7 +80,7 @@ This is the permission that makes the product possible and the one most open to 
 ## Screen capture and OCR
 
 - MediaProjection consent is requested per session. The app does not attempt to persist a capture token across reboots.
-- **Granting consent must immediately reflect as enabled.** A confirmed defect had the app still reporting the capability disabled after the user allowed it; that class of bug makes the permission model untrustworthy.
+- **Granting consent must immediately reflect as enabled.** This was a confirmed defect (issue E1) with an instructive cause: the status object's fallback path hardcoded `canCaptureScreen = false`, and that path was taken whenever the accessibility service was off — so a user who had just granted screen recording was told it had not worked, because a *different* permission was missing. **Every capability is now read independently.** A status object that lies about one capability because another is absent is worse than no status at all.
 - **OCR runs entirely on-device.** Recognised text never leaves the phone. A cloud OCR service would silently break the promise that screen content goes only to the configured provider.
 - Screenshots are written to app-private storage, referenced from the database by path, deleted with their trace, and wipeable from root settings.
 - A screenshot is sent to the AI provider only when a vision feature the user invoked needs it.
@@ -91,6 +111,24 @@ The MCP server exposes full device control to an external client, which makes it
 - The provider key must never be reachable over MCP, directly or through a tool that echoes settings.
 
 As a **client**, external MCP servers' tools are merged into Agent Mode's tool set but marked as external. A user should never be unsure whether a tool runs on their phone or someone else's server.
+
+## Where this lives in code
+
+One registry, so a new capability appears everywhere at once rather than being added to four screens and forgotten in a fifth.
+
+| Piece | Responsibility |
+| --- | --- |
+| `android/tools/SensitiveCapability.kt` | the capability list, with tier and grant mechanism |
+| `android/tools/PermissionRationale.kt` | title, explanation, consequence, settings action — exhaustive `when`, so a capability with no rationale does not compile |
+| `android/tools/AndroidPermissionGate.kt` | the live state read for each one |
+| `android/tools/CapabilityRegistry.kt` | pairs state with a `CapabilityRequest`; holds no Android types, so it is unit-testable |
+| `apps/mobile/android/…/permissions/PermissionsModule.kt` | the bridge: launches prompts and settings intents, emits `capabilitiesChanged` |
+| `apps/mobile/src/features/permissions/` | the typed view, the store, `useCapability`, and the shared `CapabilityRow` |
+
+Two rules the structure enforces:
+
+- **The registry describes a request; it does not perform one.** Launching an intent needs an Activity, which belongs to the React Native layer.
+- **All rationale copy comes from Kotlin.** A screen that wrote its own explanation could describe a permission differently from the rationale the model requires, and the two would drift.
 
 ## Privacy posture
 

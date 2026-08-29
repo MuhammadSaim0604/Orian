@@ -1,24 +1,31 @@
-import { Badge, Button, Card } from '@mobile-automation/ui';
+import { Button, Card, useTheme } from '@mobile-automation/ui';
 import { ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { AutomationStatusPanel } from '../automation/AutomationStatusPanel';
+import { CapabilityRow } from '../permissions/CapabilityRow';
+import { useCapabilityStore } from '../permissions/capabilityStore';
+import {
+  useMissingRequiredCapabilities,
+  useOptionalCapabilities,
+  useRequiredCapabilities,
+  useRequiredCapabilitiesGranted,
+} from '../permissions/useCapabilityViews';
 
 /**
  * The permission stage of onboarding.
  *
- * **Deliberately partial.** Step 2 builds the real permission engine: a capability registry, the
- * assistant-role and usage-access requests, and per-capability rationale screens. This stage exists
- * now so the onboarding flow and its gate are real, and so the shell is not built around a
- * placeholder that later has to be unpicked.
+ * Driven entirely by the capability registry rather than a screen per permission. That is deliberate:
+ * a hand-written screen per capability is how one gets forgotten, and it lets two people describe the
+ * same permission differently.
  *
- * What it does today is honest about that: it shows the capabilities the bridge can already report,
- * lets the user grant screen capture, and explains what is still to come rather than pretending the
- * list is complete.
+ * **This is a real gate.** Continue stays disabled until every required capability is granted, and it
+ * says what is still missing rather than leaving the user to work it out. Optional capabilities are
+ * offered here and skippable, because making someone grant contacts to reach the app they downloaded
+ * is exactly what the permission model exists to prevent.
  *
- * The **required** tier is not enforced yet, because four of the five capabilities have no runtime
- * prompt and the settings round trip is Step 2's work. Continuing is therefore allowed - with the
- * consequence stated - rather than blocking the user behind a check the app cannot yet perform.
+ * Four of the five required capabilities can only be granted in system settings, so this screen is
+ * built around a round trip: the user leaves, allows, comes back, and the state updates from the
+ * resume listener in `useCapabilityWatcher`.
  */
 
 export interface PermissionSetupScreenProps {
@@ -26,89 +33,93 @@ export interface PermissionSetupScreenProps {
   readonly onBack: () => void;
 }
 
-/** The required set, from `conventions/Permission_Model.md`. Step 2 makes each one requestable. */
-const REQUIRED = [
-  {
-    name: 'Accessibility service',
-    why: 'Reads what is on screen and taps for you. Nothing works without it.',
-  },
-  {
-    name: 'Display over other apps',
-    why: 'Shows the agent status panel and the node toolset on top of whatever app you are in.',
-  },
-  {
-    name: 'Default assistant',
-    why: 'Gives more precise screen reading than accessibility alone.',
-  },
-  {
-    name: 'Usage access',
-    why: 'Lets the app tell reliably which app is in the foreground.',
-  },
-  {
-    name: 'Notifications',
-    why: 'Shows a notification whenever automation is running, so you always know.',
-  },
-] as const;
-
 export const PermissionSetupScreen = ({ onContinue, onBack }: PermissionSetupScreenProps) => {
+  const { theme } = useTheme();
   const insets = useSafeAreaInsets();
+
+  const required = useRequiredCapabilities();
+  const optional = useOptionalCapabilities();
+  const missing = useMissingRequiredCapabilities();
+  const allRequiredGranted = useRequiredCapabilitiesGranted();
+  const loading = useCapabilityStore((state) => state.loading);
+  const error = useCapabilityStore((state) => state.error);
 
   return (
     <View className="flex-1 bg-background">
       <ScrollView
         contentContainerStyle={{
-          paddingTop: insets.top + 24,
-          paddingBottom: insets.bottom + 24,
-          paddingHorizontal: 20,
-          gap: 16,
+          paddingTop: insets.top + theme.spacing[5],
+          paddingBottom: insets.bottom + theme.spacing[6],
+          paddingHorizontal: theme.spacing[5],
+          gap: theme.spacing[4],
         }}
       >
         <View accessibilityRole="header" style={{ gap: 8 }}>
           <Text className="text-3xl font-bold text-text-primary">Permissions</Text>
           <Text className="text-sm leading-5 text-text-secondary">
-            These are the powerful ones. Each is explained before it is requested, and you can turn
-            any of them off later from your phone&apos;s settings.
+            These are the powerful ones. Each explains itself before it is requested, and you can
+            turn any of them off later from your phone&apos;s settings.
           </Text>
         </View>
 
-        <Card title="Needed to work at all">
-          <View style={{ gap: 14 }}>
-            {REQUIRED.map((capability) => (
-              <View
-                key={capability.name}
-                accessible
-                accessibilityLabel={`${capability.name}. ${capability.why}`}
-                style={{ gap: 2 }}
-              >
-                <Text className="text-sm font-medium text-text-primary">{capability.name}</Text>
-                <Text className="text-xs leading-4 text-text-secondary">{capability.why}</Text>
-              </View>
-            ))}
-          </View>
-        </Card>
+        {error != null && (
+          <Card muted>
+            <Text className="text-xs text-danger">{error}</Text>
+          </Card>
+        )}
 
-        {/* The live view of what the bridge can currently do. This is the part that already
-            works, and it is also where screen-capture consent is granted. */}
-        <AutomationStatusPanel />
-
-        <Card
-          title="Everything else is asked for when needed"
-          trailing={<Badge label="later" tone="neutral" />}
-          muted
-        >
-          <Text className="text-xs leading-4 text-text-secondary">
-            Contacts, calling, messages, and the rest are only requested when a step or a tool
-            actually needs them — not up front.
+        <View style={{ gap: theme.spacing[2] }}>
+          <Text className="px-1 text-base font-semibold text-text-primary">
+            Needed to work at all
           </Text>
-        </Card>
 
-        <View style={{ gap: 8 }}>
-          <Button label="Continue" full onPress={onContinue} />
+          {loading && required.length === 0 ? (
+            <Text className="px-1 text-xs text-text-muted">Checking what is already allowed…</Text>
+          ) : (
+            required.map((capability) => (
+              <CapabilityRow key={capability.id} capability={capability} />
+            ))
+          )}
+        </View>
+
+        <View style={{ gap: theme.spacing[2] }}>
+          <Text className="px-1 text-base font-semibold text-text-primary">
+            Allow now, or when something needs them
+          </Text>
+          <Text className="px-1 text-xs leading-4 text-text-secondary">
+            You can skip all of these. Each one is requested again when a step or a tool actually
+            needs it.
+          </Text>
+
+          {optional.map((capability) => (
+            <CapabilityRow key={capability.id} capability={capability} compact />
+          ))}
+        </View>
+
+        <View style={{ gap: theme.spacing[2] }}>
+          {/* Named rather than merely disabled: a greyed-out button with no explanation is the most
+              frustrating thing an onboarding flow can do. */}
+          {!allRequiredGranted && missing.length > 0 && (
+            <Card muted>
+              <Text className="text-xs leading-4 text-text-secondary">
+                Still to allow: {missing.map((capability) => capability.title).join(', ')}.
+              </Text>
+            </Card>
+          )}
+
+          <Button
+            label="Continue"
+            full
+            disabled={!allRequiredGranted}
+            onPress={onContinue}
+            accessibilityLabel={
+              allRequiredGranted
+                ? 'Continue to choose a mode'
+                : 'Continue — allow the required permissions first'
+            }
+          />
+
           <Button label="Back" variant="ghost" full onPress={onBack} />
-          <Text className="text-xs leading-4 text-text-muted">
-            You can continue without granting everything, but automation will not run until the
-            accessibility service is on.
-          </Text>
         </View>
       </ScrollView>
     </View>

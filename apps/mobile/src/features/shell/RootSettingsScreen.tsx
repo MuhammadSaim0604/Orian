@@ -4,7 +4,7 @@ import { Alert, Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ProviderSettingsScreen } from '../agent/ProviderSettingsScreen';
-import { AutomationStatusPanel } from '../automation/AutomationStatusPanel';
+import { PermissionsOverview } from '../permissions/PermissionsOverview';
 import { deleteTrace, listTraces, traceStorageUsedBytes } from '../recorder/traceStorage';
 import { countWorkflows } from '../workflows/storage';
 
@@ -92,12 +92,10 @@ export const RootSettingsScreen = () => {
           </View>
         </Card>
 
-        {/* Permissions overview. Step 2 replaces this with the full capability registry; today it
-            shows what the bridge can actually report rather than a list it cannot verify. */}
-        <View style={{ gap: theme.spacing[2] }}>
-          <Text className="px-1 text-base font-semibold text-text-primary">Permissions</Text>
-          <AutomationStatusPanel />
-        </View>
+        {/* Every capability with its live state, replacing the three-capability panel Step 1 had
+            here — which could report everything as fine while a permission the app needed was
+            missing. */}
+        <PermissionsOverview />
 
         <DataManagement />
 
