@@ -11,6 +11,7 @@ import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.WritableNativeMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
+import com.mobileautomation.overlays.OverlayExclusivity
 import com.mobileautomation.overlays.OverlayFailure
 import com.mobileautomation.overlays.OverlayGeometry
 import com.mobileautomation.overlays.OverlayLayout
@@ -44,9 +45,14 @@ class OverlayModule(
             viewFactory = { nodeId -> host.createView(nodeId) },
             onDetached = { nodeId ->
                 host.release()
+                OverlayExclusivity.release(OverlayExclusivity.Kind.NODE_TOOLSET)
                 emit(EVENT_DISMISSED, WritableNativeMap().apply { putString("nodeId", nodeId) })
             },
-        )
+        ).also { created ->
+            // Registered so the agent status overlay can evict this window rather than stacking on it
+            // (Step 3). The two belong to different modes and must never both be visible.
+            OverlayExclusivity.registerEvictor(OverlayExclusivity.Kind.NODE_TOOLSET) { created.hide() }
+        }
     }
 
     override fun getName(): String = NAME
@@ -97,9 +103,19 @@ class OverlayModule(
     ) {
         val layout = if (expanded) OverlayLayout.EXPANDED else OverlayLayout.COMPACT
 
+        // Claimed before showing, which evicts the agent status overlay if a run is in progress. Last
+        // one wins deliberately: refusing would tell a user they cannot configure a node because of a
+        // window belonging to the other mode.
+        OverlayExclusivity.claim(OverlayExclusivity.Kind.NODE_TOOLSET)
+
         when (val result = manager.show(nodeId, layout)) {
             is OverlayResult.Shown -> promise.resolve(stateMap())
-            is OverlayResult.Failed -> promise.reject(codeFor(result.failure), messageFor(result.failure))
+            is OverlayResult.Failed -> {
+                // Given back on failure, or a denial here would leave the agent overlay evicted by a
+                // window that never appeared.
+                OverlayExclusivity.release(OverlayExclusivity.Kind.NODE_TOOLSET)
+                promise.reject(codeFor(result.failure), messageFor(result.failure))
+            }
         }
     }
 

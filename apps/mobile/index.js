@@ -10,6 +10,8 @@ import { AppRegistry } from 'react-native';
 
 import { name as appName } from './app.json';
 import App from './src/App';
+import { listenForExternalStop } from './src/features/agent/runController';
+import AgentOverlayRoot from './src/overlay/AgentOverlayRoot';
 import OverlayRoot from './src/overlay/OverlayRoot';
 
 AppRegistry.registerComponent(appName, () => App);
@@ -20,3 +22,13 @@ AppRegistry.registerComponent(appName, () => App);
 // `OverlayReactHost.COMPONENT_NAME` - a mismatch produces an empty window with
 // only a log warning.
 AppRegistry.registerComponent('ConfigureWithAiOverlay', () => OverlayRoot);
+
+// The agent status overlay is a third root, on the same terms. Its name must match
+// `AgentOverlayReactHost.COMPONENT_NAME`.
+AppRegistry.registerComponent('AgentStatusOverlay', () => AgentOverlayRoot);
+
+// Wired here rather than in a component, deliberately: the notification's stop button is most useful
+// when no screen is mounted, so the listener has to exist before any React tree does and outlive all
+// of them. Registering it at the entry point is what makes stop work from the shade during a run the
+// user has walked away from.
+listenForExternalStop();

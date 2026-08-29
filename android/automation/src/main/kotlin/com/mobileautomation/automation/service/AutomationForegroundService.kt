@@ -14,14 +14,16 @@ import android.util.Log
 /**
  * Keeps automation running while the user is in another app.
  *
- * Android aggressively suspends background work, and automation by definition
- * happens while the user's app is not in the foreground - so without a foreground
- * service a workflow would be killed part-way through, which is worse than not
- * starting it.
+ * Android aggressively suspends background work, and automation by definition happens while the user's
+ * app is not in the foreground - so without a foreground service a run would be throttled part-way
+ * through, which is worse than not starting it. That was issue B1.
  *
- * The persistent notification is not optional and is not something to minimise:
- * the user must be able to see that automation is running and stop it. The
- * notification therefore always carries a stop action.
+ * **The service keeps the process alive; it does not become the agent** (ADR 0012). No reasoning lives
+ * here. The loop, the memory, and the prompts are all TypeScript and tested, and a second
+ * implementation in Kotlin could disagree with the first.
+ *
+ * The persistent notification is not optional and is not something to minimise: the user must be able
+ * to see that automation is running and stop it. It therefore always carries a stop action.
  */
 class AutomationForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
@@ -33,20 +35,31 @@ class AutomationForegroundService : Service() {
     ): Int {
         when (intent?.action) {
             ACTION_STOP -> {
-                Log.i(TAG, "Stop requested by the user")
+                Log.i(TAG, "Stop requested from the notification")
+
+                // Broadcast **before** stopping: the JS side has to abort the loop, and the loop is what
+                // actually stops the automation. Killing the service alone would leave the agent running
+                // unthrottled while the app is foregrounded, with no notification to stop it from.
+                sendBroadcast(
+                    Intent(ACTION_STOP_BROADCAST).setPackage(packageName),
+                )
+
                 stopSelf()
                 return START_NOT_STICKY
             }
 
             else -> {
                 val label = intent?.getStringExtra(EXTRA_STATUS_LABEL) ?: DEFAULT_STATUS
+
+                // Called on every update as well as the first start. `startForeground` with the same id
+                // replaces the notification rather than stacking, which is what lets the caller use one
+                // path for "begin" and "the task changed".
                 startForeground(NOTIFICATION_ID, buildNotification(label))
             }
         }
 
-        // NOT_STICKY: if the system kills this service, silently restarting it
-        // would resume automation the user cannot see the origin of. A new run
-        // must be started deliberately.
+        // NOT_STICKY: if the system kills this service, silently restarting it would resume automation
+        // the user cannot see the origin of. A new run must be started deliberately.
         return START_NOT_STICKY
     }
 
@@ -106,6 +119,15 @@ class AutomationForegroundService : Service() {
         const val ACTION_STOP = "com.mobileautomation.action.STOP_AUTOMATION"
         const val EXTRA_STATUS_LABEL = "status_label"
 
+        /**
+         * Broadcast when the notification's stop action is pressed.
+         *
+         * The bridge listens for this and aborts the run. A broadcast rather than a direct call because
+         * a `Service` has no route into the React context, and package-scoped so no other app can stop
+         * the user's automation.
+         */
+        const val ACTION_STOP_BROADCAST = "com.mobileautomation.action.AGENT_STOP_REQUESTED"
+
         private const val TAG = "AutomationService"
         private const val NOTIFICATION_ID = 1001
         private const val REQUEST_STOP = 1
@@ -116,7 +138,11 @@ class AutomationForegroundService : Service() {
         private const val DEFAULT_STATUS = "Running an automation"
         private const val STOP_ACTION_LABEL = "Stop"
 
-        /** Starts the service with an optional status line for the notification. */
+        /**
+         * Starts the service, or updates its notification if it is already running.
+         *
+         * Both cases go through the same call deliberately - see `onStartCommand`.
+         */
         fun start(
             context: Context,
             statusLabel: String? = null,

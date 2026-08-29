@@ -8,6 +8,7 @@ import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.bridge.WritableArray
 import com.facebook.react.bridge.WritableMap
+import com.mobileautomation.agentoverlay.AgentOverlayModule
 import com.mobileautomation.overlay.OverlayModule
 import com.mobileautomation.permissions.PermissionsModule
 import com.mobileautomation.preferences.AppPreferencesModule
@@ -93,6 +94,7 @@ class ReactMethodSignatureTest {
             OverlayModule::class.java,
             AppPreferencesModule::class.java,
             PermissionsModule::class.java,
+            AgentOverlayModule::class.java,
         )
 
     private fun reactMethodsOf(moduleClass: Class<*>): List<Method> =

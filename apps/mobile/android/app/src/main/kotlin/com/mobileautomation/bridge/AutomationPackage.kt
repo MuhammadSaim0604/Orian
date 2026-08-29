@@ -4,6 +4,7 @@ import com.facebook.react.ReactPackage
 import com.facebook.react.bridge.NativeModule
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.uimanager.ViewManager
+import com.mobileautomation.agentoverlay.AgentOverlayModule
 import com.mobileautomation.overlay.OverlayModule
 import com.mobileautomation.permissions.PermissionsModule
 import com.mobileautomation.preferences.AppPreferencesModule
@@ -36,6 +37,10 @@ class AutomationPackage : ReactPackage {
             // because capability state must be readable when the accessibility service is
             // off - which is exactly when the user is being asked to turn it on.
             PermissionsModule(reactContext),
+            // Step 3: the agent status overlay, and the route by which the notification's
+            // stop action reaches the run controller. A separate window from the node
+            // toolset because the two belong to different modes and must never coexist.
+            AgentOverlayModule(reactContext),
         )
 
     override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> = emptyList()

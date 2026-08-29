@@ -35,12 +35,28 @@ export interface AgentScreenProps {
 export const AgentScreen = ({ onBuildWorkflow }: AgentScreenProps = {}) => {
   const { theme } = useTheme();
   const { status } = useAutomationStatus();
-  const { runState, events, result, configError, trace, start, stop, reset } = useAgentRun();
+  const {
+    runState,
+    goal: activeGoal,
+    currentTask,
+    events,
+    result,
+    configError,
+    trace,
+    start,
+    stop,
+    reset,
+  } = useAgentRun();
 
   const [goal, setGoal] = useState('');
 
   const running = runState === 'running';
   const canRun = status.isReady && goal.trim() !== '' && !running;
+
+  // A run in progress with an empty field means this screen was mounted mid-run — the user left and came
+  // back, or navigated away and returned. Showing the live goal rather than a blank box is the
+  // reconnection requirement in Step 3.
+  const displayedGoal = running && goal === '' ? activeGoal : goal;
 
   return (
     <View className="flex-1 gap-3">
@@ -75,11 +91,17 @@ export const AgentScreen = ({ onBuildWorkflow }: AgentScreenProps = {}) => {
           className="rounded-lg border border-border bg-surface px-3 py-3 text-base text-text-primary"
           placeholder="Send Robert a WhatsApp message that I'll be late tomorrow"
           placeholderTextColor={theme.colors.textMuted}
-          value={goal}
+          value={displayedGoal}
           onChangeText={setGoal}
           editable={!running}
           multiline
         />
+
+        {/* The live task, so a user returning to the app sees what is happening now rather than
+            having to read back through the log. */}
+        {running && currentTask !== '' && (
+          <Text className="px-1 text-xs text-text-secondary">{currentTask}</Text>
+        )}
 
         <View className="flex-row gap-2">
           <Pressable

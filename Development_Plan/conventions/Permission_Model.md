@@ -92,13 +92,25 @@ Two overlay windows exist and both need `SYSTEM_ALERT_WINDOW`:
 - **The agent status overlay** — shows the running agent's task with a stop button. This is a transparency feature as much as a convenience: the user must be able to see and stop automation from wherever they are.
 - **The node toolset overlay** — lets the user configure a node against a live screen.
 
-Both use `FLAG_NOT_FOCUSABLE` so they never steal touches meant for the app underneath, paired with `FLAG_ALT_FOCUSABLE_IM` so the keyboard still opens for their own text fields.
+Both use `FLAG_NOT_FOCUSABLE` so they never steal touches meant for the app underneath, paired with `FLAG_ALT_FOCUSABLE_IM` so the keyboard still opens for their own text fields. That pairing matters twice over for the status overlay: the agent is actively tapping the app underneath, so an overlay that took focus would interfere with the automation it is reporting on.
+
+**They are mutually exclusive** (Step 3, `OverlayExclusivity`). Never both on screen, for a reason that is about honesty rather than layout: the status overlay carries a stop button, and with a toolset panel also floating it would not be clear what that button stops. The rule is last-one-wins — showing one evicts the other — because refusing the second would mean telling a user they cannot see their running agent while a panel from the other mode is open.
+
+**A denied or revoked overlay permission never blocks a run.** `showAgentOverlay` reports whether the window appeared and the run continues either way. The automation is the point; the strip is how the user watches it. Refusing to work because a status window could not be drawn would be the worse failure.
 
 ## Foreground service
 
-- Required for the agent to keep running while the user is in another app.
-- The notification is mandatory and always reflects the current task, with a stop action.
-- If the service is killed by the system, the app reports it rather than leaving a dead run showing as active.
+Required for the agent to keep running while the user is in another app. Without it the JS context is throttled and the loop stalls, which was issue B1 — the most serious defect the product had.
+
+- **The service keeps the process alive; it does not become the agent** (ADR 0012). No reasoning moves into Kotlin, because a second agent implementation could disagree with the tested one.
+- **The notification is mandatory and always reflects the current task**, with a stop action. It is the user's guarantee that they know when their phone is being driven.
+- **It is stopped on every exit from a run** — success, failure, abort, and the early return when no provider key is configured. Every path routes through one `finish` in the run controller for exactly this reason: a notification outliving the work tells the user their phone is being driven when it is not, which is worse than no notification at all.
+- **`START_NOT_STICKY`.** A killed service does not silently restart. A user who did not see a run start cannot know why their phone is being driven, so a new run must be started deliberately.
+- **Stop from the notification aborts the loop, not just the service.** The action is delivered to the service, which broadcasts before calling `stopSelf` — order matters, because killing the service alone would leave the agent running with no notification left to stop it from.
+
+### The assumption underneath
+
+All of this rests on JavaScript continuing to execute under a foreground service while the app is backgrounded. It is expected to hold — RN runs JS on its own thread, and a foreground service keeps the process out of the states where Doze applies — but **expectation is not verification**, and manufacturer skins vary. The app therefore measures it: `backgroundProbe` records the worst wall-clock gap during a run, and Agent Mode settings reports what was observed. If a device suspends the process, the app says so rather than the user concluding the agent is unreliable.
 
 ## MCP server and clients
 

@@ -7,6 +7,8 @@ import { AutomationStatusPanel } from '../automation/AutomationStatusPanel';
 import { ModeSettingsFooter } from '../shell/ModeSettingsFooter';
 import { useShellStore } from '../shell/shellStore';
 
+import { BackgroundExecutionCard } from './BackgroundExecutionCard';
+
 /**
  * Agent Mode.
  *
@@ -108,6 +110,10 @@ const AgentSettingsScreen = () => {
             (issue A3). A user whose automation is not running needs to see which grant is
             missing, and this is where they would look for it. */}
         <AutomationStatusPanel />
+
+        {/* Whether the run survived being backgrounded. The one measurement that says whether
+            ADR 0012's assumption holds on this device (Step 3). */}
+        <BackgroundExecutionCard />
 
         <Card title="Coming in Step 4" muted>
           <Text className="text-xs leading-4 text-text-secondary">
