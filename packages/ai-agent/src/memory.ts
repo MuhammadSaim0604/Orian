@@ -57,6 +57,50 @@ export class AgentMemory {
   private readonly steps: MemoryStep[] = [];
   private observation: Observation | null = null;
   private currentPlan: readonly string[] = [];
+  private seeded = 0;
+
+  /**
+   * Seeds memory with steps from earlier in the same conversation.
+   *
+   * Added for per-session memory (Step 4): a second run in a session must know what the first
+   * one did, or the agent re-treads ground the user watched it cover a minute ago. Without
+   * this, memory began empty on every run and the persistence layer had nowhere to put the
+   * history it had carefully kept.
+   *
+   * Seeded steps are **indistinguishable from steps taken now**, on purpose. The repeat and
+   * stuck detectors reason over adjacency, so an entry marked "from before" would either be
+   * excluded from them - defeating the point - or need a second code path through every
+   * detector.
+   *
+   * `stepCount` therefore includes them, which means the caller must budget for it: a run
+   * whose `maxSteps` is 40 and whose seed is 30 has ten steps left. That is why the loop
+   * offsets its ceiling rather than using the raw count.
+   */
+  seed(entries: readonly MemoryEntry[]): void {
+    for (const entry of entries) {
+      this.steps.push({
+        ...entry,
+        step: this.steps.length + 1,
+        // Null rather than a guess. The screen before a step from a previous run is not
+        // knowable now, and inventing one would make `stepsOnCurrentScreen` count a screen
+        // the agent was never on.
+        screenBefore: null,
+        timestampEpochMs: Date.now(),
+      });
+
+      this.seeded++;
+    }
+  }
+
+  /** How many steps were seeded rather than taken, so a caller can budget the difference. */
+  get seededCount(): number {
+    return this.seeded;
+  }
+
+  /** Steps actually taken in this run, which is what a step ceiling should bound. */
+  get takenCount(): number {
+    return this.steps.length - this.seeded;
+  }
 
   /** Records what the agent can see, before it decides anything. */
   observe(observation: Observation): void {
@@ -228,6 +272,7 @@ export class AgentMemory {
     this.steps.length = 0;
     this.observation = null;
     this.currentPlan = [];
+    this.seeded = 0;
   }
 }
 

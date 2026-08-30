@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   type RunSnapshot,
   type RunState,
+  bindSession,
   clearFollowUp,
   queueFollowUp,
   readRun,
@@ -43,6 +44,8 @@ export type AgentActivity = {
   readonly queuedFollowUp: string | null;
   /** False when the run will pause if the app is backgrounded. Worth telling the user before they leave. */
   readonly timersHeld: boolean;
+  /** The conversation this run belongs to. */
+  readonly sessionId: string | null;
   start: (goal: string) => void;
   stop: () => void;
   reset: () => void;
@@ -65,7 +68,9 @@ export const useAgentRun = (): AgentActivity => {
   }, []);
 
   const start = useCallback((goal: string) => {
-    startRun(goal);
+    // The session comes from the controller's own binding rather than from a caller, so every entry point -
+    // the chat, the overlay, a queued follow-up - agrees on which conversation a run belongs to.
+    startRun(goal, readRun().sessionId);
   }, []);
 
   return {
@@ -79,6 +84,7 @@ export const useAgentRun = (): AgentActivity => {
     trace: snapshot.trace,
     queuedFollowUp: snapshot.queuedFollowUp,
     timersHeld: snapshot.timersHeld,
+    sessionId: snapshot.sessionId,
     start,
     stop: stopRun,
     reset: resetRun,
@@ -86,3 +92,6 @@ export const useAgentRun = (): AgentActivity => {
     clearQueued: clearFollowUp,
   };
 };
+
+/** Binds the run controller to a conversation. Re-exported so screens need one import. */
+export { bindSession };

@@ -1,4 +1,5 @@
 import {
+  type MemoryEntry,
   type Observation,
   buildAgentContext,
   buildPlanContext,
@@ -63,6 +64,19 @@ export type AgentRunOptions = {
 
   /** Skips the planning turn, for a single obvious action. */
   readonly skipPlanning?: boolean;
+
+  /**
+   * History from earlier in the same conversation.
+   *
+   * For per-session memory (Step 4): a second run in a session must know what the first did,
+   * or the agent repeats work the user just watched it do. Seeded into the existing
+   * `AgentMemory` rather than held separately, so the stuck and replan detectors reason over
+   * the whole conversation and there is no second implementation of "what has been tried".
+   *
+   * These do **not** consume the step budget: `maxSteps` bounds what this run does, and a
+   * follow-up in a long conversation would otherwise start with almost no budget left.
+   */
+  readonly seedMemory?: readonly MemoryEntry[];
 
   readonly runId?: string;
 };
@@ -137,6 +151,14 @@ export const runAgent = async (
   const requestTools = toolsForRequest(toolNames);
 
   const memory = new AgentMemory();
+
+  // Before the run starts, so the plan is made in light of what has already been tried. Planning with
+  // no memory in a conversation that has history would produce a plan the agent then immediately
+  // abandons.
+  if (options.seedMemory !== undefined && options.seedMemory.length > 0) {
+    memory.seed(options.seedMemory);
+  }
+
   const startedAt = now();
 
   events.emit({
@@ -168,7 +190,10 @@ export const runAgent = async (
       });
     }
 
-    while (memory.stepCount < maxSteps) {
+    // Bounded on steps **taken**, not on total memory. Seeded history from earlier in the conversation
+    // must not consume this run's budget, or a follow-up in a long session would start with nothing left
+    // to spend.
+    while (memory.takenCount < maxSteps) {
       if (signal.aborted) {
         outcome = 'cancelled';
         summary = 'The run was stopped.';
@@ -406,7 +431,7 @@ export const runAgent = async (
     runId,
     timestampEpochMs: now(),
     outcome,
-    stepsTaken: memory.stepCount,
+    stepsTaken: memory.takenCount,
     durationMs,
     summary,
     error: errorMessage,
@@ -415,7 +440,7 @@ export const runAgent = async (
   return {
     runId,
     outcome,
-    stepsTaken: memory.stepCount,
+    stepsTaken: memory.takenCount,
     durationMs,
     summary,
     error: errorMessage,

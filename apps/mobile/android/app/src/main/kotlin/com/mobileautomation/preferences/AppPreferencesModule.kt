@@ -80,6 +80,33 @@ class AppPreferencesModule(
         promise.resolve(null)
     }
 
+    /**
+     * A namespaced string preference, read synchronously.
+     *
+     * Synchronous for the same reason as `getAllSync`: Agent Mode's tools page and settings screen read
+     * these during render, and a promise would make every toggle flash its default before correcting
+     * itself. The values are a handful of short strings already in memory.
+     *
+     * Returns `String`, a type React Native supports directly — the exact-class check that made
+     * `WritableNativeMap` a startup crash does not apply to primitives, but the rule still holds: only
+     * declare return types RN lists.
+     */
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun getString(
+        key: String,
+        fallback: String,
+    ): String = preferences.getNamespaced(key, fallback)
+
+    @ReactMethod
+    fun setString(
+        key: String,
+        value: String,
+        promise: Promise,
+    ) {
+        preferences.putNamespaced(key, value)
+        promise.resolve(null)
+    }
+
     companion object {
         const val NAME = "AppPreferences"
     }

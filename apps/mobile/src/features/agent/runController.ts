@@ -8,6 +8,8 @@ import { ExecutionRecorder, type ExecutionTrace } from '@mobile-automation/execu
 import { invokeTool } from '@mobile-automation/native-automation';
 import { type Observation } from '@mobile-automation/prompt-engine';
 
+import { readActiveApiKey } from '../providers/providerRegistry';
+import { readRunnableProvider } from '../providers/providerStore';
 import { saveTrace } from '../recorder/traceStorage';
 
 import {
@@ -15,10 +17,12 @@ import {
   onStopRequestedFromNotification,
   showAgentOverlay,
 } from './agentOverlay';
+import { enabledToolNames, readAgentSettings } from './agentSettings';
 import { startProbe, stopProbe } from './backgroundProbe';
-import { loadProviderSettings, readApiKey } from './providerSettings';
 import { holdTimersAwake, releaseTimers } from './runKeepAlive';
 import { startRunService, stopRunService } from './runService';
+import { contextualGoal, messageForEvent, seedEntriesFor } from './sessionMemory';
+import { appendMessage, loadMessages } from './sessionStorage';
 
 /**
  * Owns the agent run.
@@ -75,6 +79,14 @@ export type RunSnapshot = {
    * told why, and it is the difference between a bug and a device limitation.
    */
   readonly timersHeld: boolean;
+  /**
+   * The conversation this run belongs to.
+   *
+   * A run belongs to a session, so its activity lands in that session's history and is still there after the
+   * user leaves and comes back (issue B3). Held on the snapshot rather than passed around, because the
+   * overlay is a separate React root and learns which conversation is running by reading this.
+   */
+  readonly sessionId: string | null;
 };
 
 type Listener = (snapshot: RunSnapshot) => void;
@@ -94,6 +106,7 @@ const IDLE: RunSnapshot = {
   startedAtEpochMs: null,
   queuedFollowUp: null,
   timersHeld: false,
+  sessionId: null,
 };
 
 let snapshot: RunSnapshot = IDLE;
@@ -242,8 +255,12 @@ export type StartOutcome = 'started' | 'already-running' | 'empty-goal';
  * Refuses while one is active rather than replacing it. The bug this avoids: a second `runAgent` would
  * begin with the first still looping and nothing holding its controller, so two agents would drive the
  * device at once and only one could be stopped.
+ *
+ * `sessionId` binds the run to a conversation. Optional, because a run can legitimately have no session — the
+ * overlay's "run again" and any future headless caller — and in that case nothing is persisted rather than
+ * being written to a session that does not exist.
  */
-export const startRun = (goal: string): StartOutcome => {
+export const startRun = (goal: string, sessionId: string | null = null): StartOutcome => {
   const trimmed = goal.trim();
   if (trimmed === '') return 'empty-goal';
   if (snapshot.runState === 'running') return 'already-running';
@@ -252,8 +269,8 @@ export const startRun = (goal: string): StartOutcome => {
   controller = active;
   recorder = new ExecutionRecorder();
 
-  // Generated here rather than taken from the loop's own run id, because the overlay has to be bound
-  // to something before the first event arrives - and the first thing a user does is look at it.
+  // Generated here rather than taken from the loop's own run id, because the overlay has to be bound to
+  // something before the first event arrives - and the first thing a user does is look at it.
   const runId = `run_${Date.now().toString(36)}`;
 
   publish({
@@ -268,6 +285,9 @@ export const startRun = (goal: string): StartOutcome => {
     startedAtEpochMs: Date.now(),
     queuedFollowUp: null,
     timersHeld: false,
+    // Falls back to the session the previous run used, so a follow-up from the overlay - which knows a run id
+    // but not a session - still lands in the right conversation.
+    sessionId: sessionId ?? snapshot.sessionId,
   });
 
   // Fire and forget: the run owns its own lifetime from here, which is the entire point of this
@@ -298,22 +318,33 @@ const execute = async (goal: string, active: AbortController, runId: string): Pr
   void showAgentOverlay(runId);
 
   try {
-    const settings = await loadProviderSettings();
+    const readiness = await readRunnableProvider();
 
-    if (!settings.hasApiKey) {
-      await finish({
-        configError: 'Add an AI provider key in settings before running the agent.',
-        runState: 'idle',
-      });
+    if (!readiness.ok) {
+      await finish({ configError: readiness.reason, runState: 'idle' });
       return;
     }
 
     const provider = createChatCompletionsProvider({
-      baseUrl: settings.baseUrl,
-      model: settings.model,
+      baseUrl: readiness.provider.baseUrl,
+      model: readiness.provider.model,
       // Read at call time, from the Keystore. Never stored here (ADR 0007).
-      apiKey: readApiKey,
+      apiKey: readActiveApiKey,
     });
+
+    const settings = readAgentSettings();
+    const sessionId = snapshot.sessionId;
+
+    // Seeded from the conversation's own history, so a second run in a session knows what the first did. Fed
+    // into `packages/ai-agent`'s existing memory rather than a second implementation: the stuck and replan
+    // detectors already reason over exactly this, and two versions of "what has been tried" would eventually
+    // disagree with the untested one on the critical path.
+    const seedMemory = sessionId === null ? [] : await seedEntriesFor(sessionId);
+
+    // A follow-up like "now do the same for Sarah" is meaningless without what came before. Rather than
+    // changing the loop's one-goal contract, the recent exchange is folded into the goal itself.
+    const messages = sessionId === null ? [] : await loadMessages(sessionId);
+    const effectiveGoal = contextualGoal(goal, messages);
 
     const result = await runAgent(
       {
@@ -322,19 +353,26 @@ const execute = async (goal: string, active: AbortController, runId: string): Pr
         observe: observeScreen,
       },
       {
-        goal,
+        goal: effectiveGoal,
         signal: active.signal,
+        maxSteps: settings.maxSteps,
+        deadlineMs: settings.deadlineMs,
+        // **This is what makes a tool toggle mean something.** `allowedTools` filters the tool list in the
+        // prompt as well as the validator, so a disabled tool is never advertised - rather than being offered
+        // and then refused, which reads as the agent malfunctioning.
+        allowedTools: enabledToolNames(settings),
+        seedMemory,
         onEvent: (event) => {
-          handleEvent(event, settings.model);
+          handleEvent(event, readiness.provider.model);
         },
       },
     );
 
     const recorded = recorder.result;
 
-    // Persisted regardless of outcome. A failed run is often the more interesting recording, and it
-    // is the one a user wants to look at.
-    if (recorded !== null && recorded.steps.length > 0) {
+    // Persisted regardless of outcome, and only when the user asked for recordings. A failed run is often the
+    // more interesting one to look at, which is why the outcome is not a condition.
+    if (settings.recordTraces && recorded !== null && recorded.steps.length > 0) {
       await saveTrace(recorded).catch(() => false);
     }
 
@@ -364,9 +402,38 @@ const handleEvent = (event: AgentEvent, model: string): void => {
     currentTask: task ?? snapshot.currentTask,
   });
 
+  // Persisted so the conversation survives the run. Fire and forget, and deliberately not awaited: a database
+  // write must not pace the loop, and a session the user deleted mid-run simply returns false.
+  void persistEvent(event);
+
   // The notification follows the task, so a user who only sees the shade still knows what is
   // happening. Fire and forget: a failed notification update must not interrupt a step.
   if (task !== null) void startRunService(task);
+};
+
+/**
+ * Writes an event into the run's conversation.
+ *
+ * Only some events are worth keeping — `observed` fires before every step, and a transcript reading "Looking
+ * at the screen" forty times is worse than one that omits it. `messageForEvent` decides.
+ *
+ * Reads the session id from the snapshot at call time rather than closing over it, so a run whose session was
+ * deleted stops writing rather than resurrecting rows against a missing parent.
+ */
+const persistEvent = async (event: AgentEvent): Promise<void> => {
+  const sessionId = snapshot.sessionId;
+  if (sessionId === null) return;
+
+  const message = messageForEvent(event);
+  if (message === null) return;
+
+  await appendMessage({
+    sessionId,
+    role: message.role,
+    text: message.text,
+    detail: message.detail,
+    runId: snapshot.runId,
+  });
 };
 
 /**
@@ -412,7 +479,8 @@ const finish = async (next: Partial<RunSnapshot>): Promise<void> => {
 
   if (queued !== null && endedNaturally) {
     publish({ queuedFollowUp: null });
-    startRun(queued);
+    // Same session, deliberately: a follow-up belongs to the conversation it was typed into.
+    startRun(queued, snapshot.sessionId);
     return;
   }
 
@@ -447,10 +515,23 @@ export const resetRun = (): void => {
   controller = null;
   recorder = new ExecutionRecorder();
   stopProbe();
-  publish(IDLE);
+  // The session is kept: clearing a finished run means clearing the run, not leaving the conversation.
+  publish({ ...IDLE, sessionId: snapshot.sessionId });
   void hideAgentOverlay();
   void stopRunService();
   void releaseTimers();
+};
+
+/**
+ * Binds the controller to a conversation.
+ *
+ * Called when the user opens a session, so a run started afterwards lands in the right place. Refuses while a
+ * run is in flight: moving a running agent's transcript to another conversation would split it across two,
+ * and neither would make sense on its own.
+ */
+export const bindSession = (sessionId: string | null): void => {
+  if (snapshot.runState === 'running') return;
+  publish({ sessionId });
 };
 
 /**

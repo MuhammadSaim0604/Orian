@@ -56,6 +56,37 @@ class AppPreferences(context: Context) {
         prefs.edit().clear().apply()
     }
 
+    /**
+     * A namespaced string preference.
+     *
+     * Added for Agent Mode's settings (Step 4): the disabled-tool list and the run bounds are exactly the
+     * kind of scalar this file exists for, and giving each one a named property here would mean editing
+     * three files to add a setting.
+     *
+     * Namespaced by convention at the call site (`agent.maxSteps`), and **prefix-guarded** so a caller
+     * cannot reach the shell's own keys through this door - a JS bug that wrote `onboarding_complete` as a
+     * string would put the app into a state the typed accessors above cannot read.
+     */
+    fun getNamespaced(
+        key: String,
+        fallback: String,
+    ): String = if (!isNamespaced(key)) fallback else prefs.getString(key, fallback) ?: fallback
+
+    fun putNamespaced(
+        key: String,
+        value: String,
+    ) {
+        if (!isNamespaced(key)) return
+        prefs.edit().putString(key, value).apply()
+    }
+
+    /**
+     * Whether a key belongs to a feature namespace rather than to the shell's own scalars.
+     *
+     * A dot is the marker. The shell's keys use underscores, so the two sets cannot collide by accident.
+     */
+    private fun isNamespaced(key: String): Boolean = key.contains('.') && key.isNotBlank()
+
     private companion object {
         const val FILE_NAME = "app_preferences"
         const val KEY_ONBOARDING_COMPLETE = "onboarding_complete"

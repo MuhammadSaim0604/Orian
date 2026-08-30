@@ -13,7 +13,9 @@ import com.mobileautomation.keepalive.RunKeepAliveModule
 import com.mobileautomation.overlay.OverlayModule
 import com.mobileautomation.permissions.PermissionsModule
 import com.mobileautomation.preferences.AppPreferencesModule
+import com.mobileautomation.settings.ProviderRegistryModule
 import com.mobileautomation.settings.ProviderSettingsModule
+import com.mobileautomation.storage.SessionStorageModule
 import com.mobileautomation.storage.WorkflowStorageModule
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -97,6 +99,8 @@ class ReactMethodSignatureTest {
             PermissionsModule::class.java,
             AgentOverlayModule::class.java,
             RunKeepAliveModule::class.java,
+            SessionStorageModule::class.java,
+            ProviderRegistryModule::class.java,
         )
 
     private fun reactMethodsOf(moduleClass: Class<*>): List<Method> =

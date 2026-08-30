@@ -37,6 +37,17 @@ const mockHideOverlay = jest.fn(async () => undefined);
 const mockHoldTimers = jest.fn(async () => true);
 const mockReleaseTimers = jest.fn(async () => undefined);
 
+/**
+ * What the provider registry reports.
+ *
+ * A function rather than a constant so a test can make the provider unusable — which is the path that produces
+ * a `configError` rather than a failed run, and they are different states with different UI.
+ */
+let mockProviderReadiness: () => unknown = () => ({
+  ok: true,
+  provider: { baseUrl: 'https://example.invalid/v1', model: 'test-model', hasApiKey: true },
+});
+
 let mockRunAgent: (
   deps: unknown,
   options: { signal?: AbortSignal; onEvent?: (e: AgentEvent) => void },
@@ -60,13 +71,33 @@ jest.mock('../runKeepAlive', () => ({
   releaseTimers: () => mockReleaseTimers(),
 }));
 
-jest.mock('../providerSettings', () => ({
-  loadProviderSettings: async () => ({
-    baseUrl: 'https://example.invalid/v1',
-    model: 'test-model',
-    hasApiKey: true,
+jest.mock('../../providers/providerRegistry', () => ({
+  readActiveApiKey: async () => 'key',
+}));
+
+jest.mock('../../providers/providerStore', () => ({
+  readRunnableProvider: async () => mockProviderReadiness(),
+}));
+
+jest.mock('../agentSettings', () => ({
+  readAgentSettings: () => ({
+    disabledTools: [],
+    maxSteps: 40,
+    deadlineMs: 600_000,
+    recordTraces: true,
   }),
-  readApiKey: async () => 'key',
+  enabledToolNames: () => ['click', 'getUiTree'],
+}));
+
+jest.mock('../sessionStorage', () => ({
+  appendMessage: async () => true,
+  loadMessages: async () => [],
+}));
+
+jest.mock('../sessionMemory', () => ({
+  seedEntriesFor: async () => [],
+  contextualGoal: (goal: string) => goal,
+  messageForEvent: () => null,
 }));
 
 jest.mock('../../recorder/traceStorage', () => ({
@@ -104,6 +135,11 @@ const settle = async (): Promise<void> => {
 beforeEach(() => {
   jest.clearAllMocks();
   resetRunControllerForTests();
+
+  mockProviderReadiness = () => ({
+    ok: true,
+    provider: { baseUrl: 'https://example.invalid/v1', model: 'test-model', hasApiKey: true },
+  });
 
   mockRunAgent = async () => ({ outcome: 'succeeded', stepsTaken: 1, summary: 'done' });
 });
@@ -283,6 +319,62 @@ describe('finishing', () => {
     expect(mockStopService).toHaveBeenCalled();
     expect(mockHideOverlay).toHaveBeenCalled();
     expect(mockReleaseTimers).toHaveBeenCalled();
+  });
+
+  it('reports an unconfigured provider without starting the loop', async () => {
+    // A different failure from a thrown error, and the one a new user hits: no provider at all. The reason has
+    // to name what to do, because "cannot start" with no explanation is the most frustrating thing this screen
+    // could say.
+    mockProviderReadiness = () => ({
+      ok: false,
+      reason: 'Add an AI provider in settings before running the agent.',
+    });
+
+    let started = false;
+    mockRunAgent = async () => {
+      started = true;
+      return { outcome: 'succeeded', stepsTaken: 0, summary: '' };
+    };
+
+    startRun('send a message');
+    await settle();
+
+    expect(started).toBe(false);
+    expect(readRun().configError).toContain('Add an AI provider');
+    expect(mockStopService).toHaveBeenCalled();
+  });
+
+  it('passes the enabled tool list to the loop', async () => {
+    // The whole point of a tool toggle. A disabled tool must never be advertised to the model rather than being
+    // offered and then refused, which reads as the agent malfunctioning.
+    let seen: readonly string[] | undefined;
+
+    mockRunAgent = async (_deps, options) => {
+      seen = (options as { allowedTools?: readonly string[] }).allowedTools;
+      return { outcome: 'succeeded', stepsTaken: 1, summary: 'done' };
+    };
+
+    startRun('send a message');
+    await settle();
+
+    expect(seen).toEqual(['click', 'getUiTree']);
+  });
+
+  it('passes the configured run bounds to the loop', async () => {
+    // These are the user's protection against a confused model driving their phone, so they have to actually
+    // reach the engine rather than only being stored.
+    let bounds: { maxSteps?: number; deadlineMs?: number } = {};
+
+    mockRunAgent = async (_deps, options) => {
+      bounds = options as { maxSteps?: number; deadlineMs?: number };
+      return { outcome: 'succeeded', stepsTaken: 1, summary: 'done' };
+    };
+
+    startRun('send a message');
+    await settle();
+
+    expect(bounds.maxSteps).toBe(40);
+    expect(bounds.deadlineMs).toBe(600_000);
   });
 
   it('returns to idle after a configuration failure, not to finished', async () => {

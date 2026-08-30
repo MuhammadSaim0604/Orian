@@ -3,8 +3,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { Alert, Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { ProviderSettingsScreen } from '../agent/ProviderSettingsScreen';
 import { PermissionsOverview } from '../permissions/PermissionsOverview';
+import { ProviderRegistryScreen } from '../providers/ProviderRegistryScreen';
 import { deleteTrace, listTraces, traceStorageUsedBytes } from '../recorder/traceStorage';
 import { countWorkflows } from '../workflows/storage';
 
@@ -55,10 +55,11 @@ export const RootSettingsScreen = () => {
           </View>
         </View>
 
-        {/* The provider is deliberately root-level: both the device agent and the workflow
-            builder agent use it, so configuring it twice would be an invitation to drift. */}
-        <Card title="AI provider">
-          <ProviderSettingsScreen />
+        {/* The registry is deliberately root-level: both the device agent and the workflow builder agent use
+            it, so configuring it twice would be an invitation to drift (issue A5). Several providers with one
+            active, replacing the single base URL and hand-typed model of before (issue B6). */}
+        <Card title="AI providers">
+          <ProviderRegistryScreen />
         </Card>
 
         <Card title="Appearance">

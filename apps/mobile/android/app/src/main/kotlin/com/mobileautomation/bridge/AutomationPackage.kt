@@ -9,7 +9,9 @@ import com.mobileautomation.keepalive.RunKeepAliveModule
 import com.mobileautomation.overlay.OverlayModule
 import com.mobileautomation.permissions.PermissionsModule
 import com.mobileautomation.preferences.AppPreferencesModule
+import com.mobileautomation.settings.ProviderRegistryModule
 import com.mobileautomation.settings.ProviderSettingsModule
+import com.mobileautomation.storage.SessionStorageModule
 import com.mobileautomation.storage.WorkflowStorageModule
 
 /**
@@ -46,6 +48,12 @@ class AutomationPackage : ReactPackage {
             // JavaTimerManager clears the timer choreographer callback on activity pause -
             // so setTimeout stops firing and the loop freezes, foreground service or not.
             RunKeepAliveModule(reactContext),
+            // Step 4: chat sessions, and the provider registry that replaces the single
+            // base-URL-and-model arrangement. Both are shared surfaces rather than Agent
+            // Mode's own - the registry is root-level (issue A5) and the session table is
+            // scoped by mode so the workflow builder agent can use it too (ADR 0014).
+            SessionStorageModule(reactContext),
+            ProviderRegistryModule(reactContext),
         )
 
     override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> = emptyList()
