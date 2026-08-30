@@ -4,7 +4,7 @@ Living record of what has been implemented, what is complete, and what remains. 
 
 Authoritative plan: `Development_Plan/`. It was restructured from **phases** to **steps** after device testing (commit `b0c1c60`); phases 0–9 are complete and everything since is a numbered step. See `Development_Plan/03_Issue_Register.md` for the defect IDs each step closes.
 
-Last updated: after the Step 3 device-testing fix round, with both CI workflows green on `main` (Android CI run `33259866809`, TypeScript CI run `33259866804`).
+Last updated: after Step 4, with both CI workflows green on `main` (Android CI run `33312864389`, TypeScript CI run `33312864519`).
 
 ---
 
@@ -34,8 +34,8 @@ Rows below Phase 5 are in **execution order**, not numeric order. Phase 10's sco
 | 1    | App shell & onboarding                  | M6 A real app    | A1–A5          | **Complete**                                                                 |
 | 2    | Permission engine                       | M6 A real app    | E1–E4          | **Complete**                                                                 |
 | 3    | Background execution & agent overlay    | M6 A real app    | B1, B2         | **Complete** (fix round applied after device testing; likely also closes C5) |
-| 4    | Agent Mode                              | M7 Agent Mode    | B3, B4, B6     | Next                                                                         |
-| 5    | OCR & perception chain                  | M7 Agent Mode    | F1, F2, G7     | Not started                                                                  |
+| 4    | Agent Mode                              | M7 Agent Mode    | B3, B4, B6     | **Complete** (also closes the agent half of A5)                              |
+| 5    | OCR & perception chain                  | M7 Agent Mode    | F1, F2, G7     | Next                                                                         |
 | 6    | Workflow Mode shell                     | M8 Workflow Mode | A6             | Not started                                                                  |
 | 7    | Canvas rebuild                          | M8 Workflow Mode | C1–C3, G2      | Not started                                                                  |
 | 8    | Node editor & palette                   | M8 Workflow Mode | C4             | Not started                                                                  |
@@ -1591,9 +1591,86 @@ New `packages/native-automation/src/automation.test.ts` (7 tests) pins the parsi
 
 ---
 
+## Step 4 — Agent Mode (complete)
+
+**Closes B3, B4, B6 and the agent half of A5.** Commit `1ed2cbe`; Android CI `33312864389`, TypeScript CI `33312864519`, both green.
+
+Agent Mode was one text box and an event list whose history vanished when a run ended. It is now a chat product: conversations that survive a restart, memory that spans runs within a conversation, several providers with models discovered from the provider itself, and a tools page where every capability is visible and controllable.
+
+### Sessions, and why messages are rows
+
+Room-backed, one table scoped by a `mode` column so Agent Mode and the workflow builder agent share a schema and see none of each other's conversations (ADR 0014). A second near-identical table pair would have drifted; scoping at the query cannot.
+
+Messages are **rows, not one JSON blob** — the exact opposite of how a workflow is stored, and deliberately so:
+
+- A workflow document's schema belongs to TypeScript and to third-party node packages, so it has to stay opaque to Kotlin. A message's shape is small, stable, and owned in this module.
+- Appending happens **during a run**. Re-serialising the whole conversation on every reply would make each step pay for the length of the transcript.
+
+Two details worth keeping:
+
+- `appendMessage` and the session's `updated_at` bump are **one transaction**. A message whose session still claimed to be older would sort wrongly in the sidebar, and the sidebar's order is the only way a person finds a conversation again.
+- `appendMessage` returns **false** for a missing session rather than throwing. A run outliving its conversation is real — the user can delete one while the agent is still working in it — and a rejected insert would surface mid-run as a crash for something they did on purpose.
+
+### Per-session memory, and the two decisions that make it work
+
+`AgentMemory.seed()` plus `runAgent`'s `seedMemory`. The step file forbids a second memory implementation, and it would have been wrong regardless: two versions of "what has the agent tried" would eventually disagree, and the one on the critical path would be the untested one.
+
+- **Seeded steps are indistinguishable from steps taken now.** That is what lets the repeat and replan detectors catch a loop spanning two runs, which is the exact complaint per-session memory exists to answer. Asserted explicitly rather than assumed.
+- **They do not consume the step budget.** The loop now bounds on `memory.takenCount` rather than `stepCount`. Otherwise a follow-up in a long conversation would begin with nothing left to spend — a bug that would have looked like the agent refusing to work in exactly the sessions people use most.
+
+`contextualGoal` folds the recent exchange into the goal string, because the loop takes one goal and "now do the same for Sarah" is meaningless without what came before. Widening the loop's contract to accept a transcript was the alternative, and it would have been a larger change for a worse boundary.
+
+### The provider registry, and the key that never becomes a value
+
+Several providers with one active, in **root settings** — a provider is shared by both modes and belongs to neither (issue A5). Non-secret fields are rows in Room; each key is encrypted in the Keystore under an alias derived from the provider id.
+
+**Per-provider aliases rather than one shared alias**, and this is a correctness point rather than tidiness: with a shared alias, deleting one provider would invalidate every other provider's key, so removing a local gateway would silently break the user's OpenAI key.
+
+The key never exists as a value in JavaScript. `Provider` carries `hasApiKey`; the form's key field is write-only and cleared the moment it is saved; `getActiveKey` takes **no argument**, because a caller able to name any provider could enumerate them and the only key anyone legitimately needs is the one about to be used; and there is no code path that reads a key back for display. An edit form pre-filling the stored key is the natural thing to build and is exactly what ADR 0007 forbids.
+
+Exactly-one-active is enforced in a Kotlin transaction. Deleting the active provider re-elects the oldest, because otherwise every provider would be inactive and the agent would report "none configured" while settings showed two.
+
+### Model discovery, where failure is ordinary
+
+`GET {baseUrl}/models` with a 10s abort — a wrong base URL otherwise hangs until the platform gives up, which on a phone is a minute of unexplained spinner. Three response shapes are tolerated (`{data:[{id}]}`, a bare array of objects, a bare array of strings) because all three exist in the wild, and being strict would mean telling users to type model names by hand for no reason.
+
+**Discovery failing is information, not an error state.** Plenty of OpenAI-compatible providers do not implement the endpoint. The status code drives the wording — 401 points at the key, 404 says this provider may not offer a list — and manual entry sits beside it, stored exactly as a discovered list is rather than as a special case. Cached with a 24-hour TTL, and a discovered list never overrides a model the user already chose.
+
+### Tools, and why the stored set is the disabled ones
+
+Every tool with its description, its impact, and its permission state, grouped by impact rather than alphabetically — "does this read, touch my screen, or change something" is the actual question, and 24 tools in a flat list is a wall. Enabling a tool that needs a permission requests it there and then (issue E4).
+
+The model's own tool description is shown to the user unchanged. It is written to explain when to use a tool, which is what someone deciding whether to allow it needs, and any divergence between the two would mean one of them is wrong.
+
+**The stored set is the DISABLED tools.** With an enabled-list, every tool shipped after the user's last visit to that page would be silently unavailable — and that bug would present as the new feature simply not working.
+
+`enabledToolNames` feeds `runAgent`'s `allowedTools`, which filters the tool list in the prompt as well as the validator. So a disabled tool is **never advertised**, rather than offered and then refused, which reads as the agent malfunctioning. No loop change was needed; `allowedTools` already existed, which is worth noting as the one place this step found the engine already ready.
+
+### Files
+
+**New Kotlin:** `android/storage`'s `ChatSessionEntity`, `ChatSessionDao`, `SessionStore`, `ProviderEntity`, `ProviderRegistryStore`; the app module's `settings/ProviderKeyStore`, `settings/ProviderRegistryModule`, `storage/SessionStorageModule`.
+
+**New TypeScript:** `features/agent/`'s `sessionStorage`, `sessionStore`, `useSessionViews`, `sessionMemory`, `agentSettings`, `AgentChatScreen`, `ChatMessageRow`, `SessionSidebar`, `AgentToolsScreen`, `AgentSettingsScreen`; `features/providers/`'s `providerRegistry`, `providerStore`, `ProviderRegistryScreen`.
+
+**Changed:** `AutomationDatabase` (version 3 plus a hand-written `MIGRATION_2_3`), `AutomationPackage`, `ReactMethodSignatureTest` (ten modules now), `AppPreferences`/`AppPreferencesModule` (namespaced string get/put, prefix-guarded on a dot so a JS caller cannot reach the shell's own keys), `runController`, `useAgentRun`, `AgentModeShell`, `RootSettingsScreen`, and `packages/ai-agent`'s `memory.ts` and `loop.ts`.
+
+**Tests:** 90 new — 13 Kotlin, 11 in `ai-agent`, 66 in the app. Totals now 595 Kotlin and 389 app Jest tests across 23 suites.
+
+### Three test bugs of my own, worth recording
+
+- **`jest.mock` factories are hoisted**, so a factory referencing an ordinary `const` reads an uninitialised variable. The fake preferences map had to be renamed `mockStore` — the `mock` prefix is a required opt-out, not a convention.
+- **Session ids generated from `array.length` reused a deleted session's id**, which made a "creates a fresh conversation" assertion pass for the wrong reason. A counter reset per test fixed it.
+- **`modeSettings.test` asserted on copy this step replaced** ("configured once and shared"). Rewritten to assert the new behaviour — a route to the shared registry rather than a second copy of it.
+
+### Not verified on hardware
+
+Room persistence across a restart (issue G5 is still open for exactly this), and whether a follow-up genuinely benefits from seeded memory, are both device questions. Nothing here has been run on a phone.
+
+---
+
 ## Remaining
 
-**Steps 1, 2 and 3 are done; Steps 4–13 remain.** The plan is `Development_Plan/steps/`, and `03_Issue_Register.md` is the checklist — a step is not finished while one of its issue IDs survives.
+**Steps 1, 2, 3 and 4 are done; Steps 5–13 remain.** The plan is `Development_Plan/steps/`, and `03_Issue_Register.md` is the checklist — a step is not finished while one of its issue IDs survives.
 
 **Next is Step 4 — Agent Mode.** The engine works and the run now survives backgrounding; what is missing is the product around it. Closes B3, B4 and B6:
 
@@ -1643,19 +1720,20 @@ Carry-forward notes:
 
 Every engine layer needs physical hardware, and none can be automated here — each requires a user to enable the accessibility service, grant screen capture, or allow display over other apps, and no APK is built locally per ADR 0010.
 
-| From                 | What needs checking on a device                                                                                                                                                                                                                                                                                                                                                                                                   |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Kotlin core          | the service reads a third-party app's tree; tap a resolved element, swipe, type, capture a screenshot                                                                                                                                                                                                                                                                                                                             |
-| Bridge               | `automation.getUiTree()` and `automation.click(selector)` from JS drive that same device                                                                                                                                                                                                                                                                                                                                          |
-| Workflow engine      | a workflow runs end to end: `RN → JSON → engine → registry → executor → tool runtime → device`                                                                                                                                                                                                                                                                                                                                    |
-| Canvas               | node text renders, drag behaves, 60fps with dozens of nodes, a workflow survives a restart                                                                                                                                                                                                                                                                                                                                        |
-| Agent                | the WhatsApp scenario with a real provider key, **continuing while another app is in front**                                                                                                                                                                                                                                                                                                                                      |
-| Overlay              | the toolset stays on top in WhatsApp and returns a valid condition config                                                                                                                                                                                                                                                                                                                                                         |
-| Recorder             | replaying a generated workflow reproduces the recorded outcome                                                                                                                                                                                                                                                                                                                                                                    |
-| Shell (Step 1)       | onboarding on a fresh install, the back button through every route, the transition's feel                                                                                                                                                                                                                                                                                                                                         |
-| Permissions (Step 2) | the settings round trip for all four settings-granted capabilities across OEM skins; the usage-access appop read; the assistant secure setting; whether resume fires after a settings visit killed the activity                                                                                                                                                                                                                   |
-| Background (Step 3)  | **that a run continues with another app in front** — the check that decides whether Step 3 worked; what the probe reports on an aggressive OEM skin; the status overlay appearing and staying on top; stop from the notification; the two overlays evicting each other                                                                                                                                                            |
-| Fix round (Step 3)   | **that the held headless task really keeps timers firing** — the whole freeze fix rests on it; that the overlay survives repeated expand/collapse without the wrong-thread crash; that the stop button and the chat text box are both operable; that screen capture reports granted after consent on API 34+ **without crashing**, with the other two rows unmoved; whether the same UI-thread fix cleared C5 in the node toolset |
+| From                 | What needs checking on a device                                                                                                                                                                                                                                                                                                                                                                                                       |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Kotlin core          | the service reads a third-party app's tree; tap a resolved element, swipe, type, capture a screenshot                                                                                                                                                                                                                                                                                                                                 |
+| Bridge               | `automation.getUiTree()` and `automation.click(selector)` from JS drive that same device                                                                                                                                                                                                                                                                                                                                              |
+| Workflow engine      | a workflow runs end to end: `RN → JSON → engine → registry → executor → tool runtime → device`                                                                                                                                                                                                                                                                                                                                        |
+| Canvas               | node text renders, drag behaves, 60fps with dozens of nodes, a workflow survives a restart                                                                                                                                                                                                                                                                                                                                            |
+| Agent                | the WhatsApp scenario with a real provider key, **continuing while another app is in front**                                                                                                                                                                                                                                                                                                                                          |
+| Overlay              | the toolset stays on top in WhatsApp and returns a valid condition config                                                                                                                                                                                                                                                                                                                                                             |
+| Recorder             | replaying a generated workflow reproduces the recorded outcome                                                                                                                                                                                                                                                                                                                                                                        |
+| Shell (Step 1)       | onboarding on a fresh install, the back button through every route, the transition's feel                                                                                                                                                                                                                                                                                                                                             |
+| Permissions (Step 2) | the settings round trip for all four settings-granted capabilities across OEM skins; the usage-access appop read; the assistant secure setting; whether resume fires after a settings visit killed the activity                                                                                                                                                                                                                       |
+| Background (Step 3)  | **that a run continues with another app in front** — the check that decides whether Step 3 worked; what the probe reports on an aggressive OEM skin; the status overlay appearing and staying on top; stop from the notification; the two overlays evicting each other                                                                                                                                                                |
+| Fix round (Step 3)   | **that the held headless task really keeps timers firing** — the whole freeze fix rests on it; that the overlay survives repeated expand/collapse without the wrong-thread crash; that the stop button and the chat text box are both operable; that screen capture reports granted after consent on API 34+ **without crashing**, with the other two rows unmoved; whether the same UI-thread fix cleared C5 in the node toolset     |
+| Agent Mode (Step 4)  | **that conversations survive a force-stop** (issue G5, still open); that a follow-up in the same conversation shows the agent remembering the first run rather than repeating it; that `/models` discovery works against a real provider and that manual entry works against one that has no such endpoint; that switching a tool off makes the agent stop attempting it; that a key survives a restart and is never visible anywhere |
 
 **Step 13 runs this as one session, in an order where each stage feeds the next so a failure localises itself:** onboarding → the agent outside the app → OCR on a tree-less screen → the recorded trace → generation → running the workflow from the canvas → the node toolset overlay → a force-stop persistence check.
 
