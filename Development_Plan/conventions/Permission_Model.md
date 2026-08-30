@@ -120,7 +120,16 @@ A MediaProjection session, granted **per session and never persisted** — the u
 
 **From API 34 a `mediaProjection` foreground service must already be running before `getMediaProjection` is called**, or it throws. That is a separate service from the automation one, because a service declares a single foreground type and the two are different claims: *an automation is driving the phone* versus *the screen is being recorded*. Getting this wrong is not a subtle failure — the user grants recording in the system dialog, the call throws, and the app reports the capability as off with nothing to indicate their grant was accepted and then discarded.
 
-The service is started before the projection and stopped with the session. A notification saying the screen can be read must not outlive the ability to read it.
+**Waiting for that service is necessarily asynchronous, and getting it wrong crashes the process.** `startForegroundService` only *posts* `onStartCommand` to the main thread. A first version polled `getMediaProjection` with `Thread.sleep` from `onActivityResult` — which runs on the main thread — so the service could not start until the polling gave up, every attempt failed, and the failure path then stopped a service whose start had never been honoured. Android killed the app with `ForegroundServiceDidNotStartInTimeException`.
+
+Two rules follow, both now enforced in code:
+
+- **The service reports when it is ready**; nothing waits on the main thread for it. `ScreenCaptureService.start` takes a callback, and `attachScreenCapture` is callback-shaped for the same reason.
+- **Never stop a start that has not completed.** `stop` is called only once the service is genuinely in the foreground; otherwise the service stops itself after reporting failure.
+
+The service is stopped with the session. A notification saying the screen can be read must not outlive the ability to read it.
+
+**Consent accepted but capture unavailable is a failure, not a decline.** They resolve differently on purpose: declining resolves `false` and the UI explains the consequence, while a service that could not start **rejects** with an actionable message. Reporting the second as the first would tell a user who agreed that they had refused.
 
 **Status reads distinguish "off" from "unknown".** They are different claims: off means the user has not granted this and Settings is where to go; unknown means the app could not tell. Reporting a failed read as three revoked permissions sends the user to fix something that was never broken, which is what happened when a capture failure made the accessibility and overlay rows flip off with it.
 

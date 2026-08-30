@@ -91,14 +91,13 @@ export const AutomationStatusPanel = () => {
             <Text className="text-sm text-danger">{consent.errorMessage}</Text>
           )}
 
-          {/* The specific failure worth naming, because the user did nothing wrong and the fix is not
-              in Settings. Android requires a mediaProjection foreground service to exist before the
-              projection can be created, and if that start is refused the grant is accepted and then
-              discarded - which reads as "I allowed it and nothing happened". */}
+          {/* A second guard for the same failure, reached when capture stops after having worked - the
+              projection can be revoked from the shade, and the OS may stop our service with it. The
+              consent-failed message above covers the grant path; this covers losing it later. */}
           {consent.state === 'granted' && !status.canCaptureScreen && (
             <Text className="text-sm text-warning">
-              Screen recording was allowed but could not start. Check that notifications are enabled
-              for this app, then try again.
+              Screen recording stopped. Check that notifications are enabled for this app, then try
+              again.
             </Text>
           )}
         </View>

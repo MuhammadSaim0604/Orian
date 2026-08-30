@@ -34,6 +34,11 @@ export const useScreenCaptureConsent = (): {
     setErrorMessage(null);
 
     try {
+      // Resolves once the answer is genuinely known, which is later than it looks: on API 34+ the
+      // native side has to bring a mediaProjection foreground service up before the projection can be
+      // created, so `granted` false can mean either "the user declined" or "consent was accepted and
+      // the service could not start". The panel distinguishes those by reading the capability state
+      // afterwards, because only the second one is worth telling the user how to fix.
       const granted = await requestScreenCaptureConsent();
       setState(granted ? 'granted' : 'declined');
       return granted;

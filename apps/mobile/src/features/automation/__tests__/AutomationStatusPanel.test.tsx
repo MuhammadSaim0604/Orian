@@ -143,8 +143,8 @@ describe('when the status could not be read', () => {
 
 describe('consent granted but capture still off', () => {
   it('names notifications as the thing to check', async () => {
-    // The real cause is that the mediaProjection foreground service could not start, which the user
-    // cannot deduce and did not cause. Better to name the one thing they can check.
+    // Reached when capture stops after having worked - the projection can be revoked from the shade.
+    // The user did not cause it and cannot deduce the cause, so name the one thing they can check.
     mockStatus.mockReturnValue(status({ canCaptureScreen: false }));
     mockConsent.mockReturnValue({
       state: 'granted',
@@ -156,6 +156,26 @@ describe('consent granted but capture still off', () => {
     const { getByText } = await render();
 
     expect(getByText(/notifications are enabled/)).toBeTruthy();
+  });
+
+  it('shows the failure message when the capture service could not start', async () => {
+    // The grant path's version of the same problem: consent was given, the mediaProjection service
+    // could not reach the foreground, and the native side rejects with an actionable message rather
+    // than resolving false - which the UI would otherwise render as "you declined".
+    mockStatus.mockReturnValue(status({ canCaptureScreen: false }));
+    mockConsent.mockReturnValue({
+      state: 'failed',
+      request: jest.fn(),
+      release: jest.fn(),
+      errorMessage:
+        'Screen recording was allowed but could not start. Check that notifications are enabled for this app, then try again.',
+    });
+
+    const { getByText, queryByText } = await render();
+
+    expect(getByText(/could not start/)).toBeTruthy();
+    // And it must not also claim the user declined.
+    expect(queryByText(/Declined/)).toBeNull();
   });
 
   it('says nothing when capture is working', async () => {

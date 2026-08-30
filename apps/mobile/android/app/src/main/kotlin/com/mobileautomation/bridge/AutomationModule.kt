@@ -239,12 +239,31 @@ class AutomationModule(
             return
         }
 
-        val granted =
-            runCatching { AutomationRuntimeProvider.attachScreenCapture(reactContext, resultCode, data) }
-                .getOrDefault(false)
+        // Asynchronous because it has to be: the mediaProjection foreground service must reach the
+        // foreground before the projection can be created, and `onStartCommand` is delivered on this very
+        // thread - so waiting here would prevent the thing being waited for. The promise settles when the
+        // answer is known.
+        AutomationRuntimeProvider.attachScreenCapture(reactContext, resultCode, data) { granted ->
+            if (granted) {
+                promise.resolve(true)
+            } else {
+                // Rejected rather than resolved false, because at this point the user has already agreed.
+                // Resolving false is how declining is reported, and the UI answers that with "the AI will
+                // work from screen structure only" - which would be a lie here, and would hide a failure
+                // the user can often fix by allowing notifications.
+                //
+                // `tool_failed` rather than a new code: the error codes are a wire contract mirroring
+                // `AutomationError` in android/automation, and inventing one here would drift the two
+                // lists. The actionable detail belongs in the message.
+                promise.reject(
+                    "tool_failed",
+                    "Screen recording was allowed but could not start. Check that notifications are " +
+                        "enabled for this app, then try again.",
+                )
+            }
 
-        promise.resolve(granted)
-        emitStatusChanged()
+            emitStatusChanged()
+        }
     }
 
     override fun onNewIntent(intent: Intent?) {

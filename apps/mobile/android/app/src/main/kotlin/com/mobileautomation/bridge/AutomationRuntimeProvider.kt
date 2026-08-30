@@ -2,7 +2,6 @@ package com.mobileautomation.bridge
 
 import android.content.Context
 import android.content.Intent
-import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.provider.Settings
@@ -46,17 +45,6 @@ import java.io.File
 object AutomationRuntimeProvider {
 private const val TAG = "AutomationRuntime"
 private const val CAPTURE_DIRECTORY = "captures"
-
-/**
- * How many times to try creating the projection while the foreground service starts.
- *
- * `startForegroundService` is asynchronous and `getMediaProjection` throws until the service has
- * actually reached the foreground, so a single attempt loses the race on a loaded device. Ten attempts
- * at 50ms is half a second at worst - long enough for the service, short enough that the user does not
- * notice, and bounded so a genuinely broken projection fails rather than hanging.
- */
-private const val PROJECTION_ATTEMPTS = 10
-private const val PROJECTION_RETRY_DELAY_MS = 50L
 
     private val accessibilityServiceClassName = UiAutomationAccessibilityService::class.java.name
 
@@ -151,86 +139,75 @@ private const val PROJECTION_RETRY_DELAY_MS = 50L
      * nothing could grant it a session, because launching the consent dialog needs
      * an Activity and therefore belongs to the RN layer.
      *
-     * **The foreground service must be running first.** From API 34
-     * `getMediaProjection` throws unless a service of type `mediaProjection` is already active, and
-     * `startForegroundService` is asynchronous - so this starts the service, then polls briefly for the
-     * projection rather than calling once and giving up. Device testing found the alternative: the user
-     * granted recording, the call threw, the failure was swallowed, and the capability reported off.
+     * **The foreground service must be in the foreground first.** From API 34 `getMediaProjection`
+     * throws unless a `mediaProjection` service is already running, and `startForegroundService` merely
+     * *posts* `onStartCommand` to the main thread.
      *
-     * @return whether a session is now active.
+     * That makes this necessarily asynchronous, and the reason is worth stating because the synchronous
+     * version shipped and crashed. It polled with `Thread.sleep` from `onActivityResult`, which runs on
+     * the main thread - so the service could not start until the polling finished, every attempt failed,
+     * and stopping the service on the failure path left `startForegroundService`'s contract unsatisfied.
+     * Android killed the process with `ForegroundServiceDidNotStartInTimeException`.
+     *
+     * So [onResult] is called when the answer is known, on the main thread, exactly once. The consent
+     * token stays valid while waiting - it is the service that is not ready, not the grant.
      */
     fun attachScreenCapture(
         context: Context,
         resultCode: Int,
         data: Intent,
-    ): Boolean {
+        onResult: (Boolean) -> Unit,
+    ) {
         val manager =
             context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
-                ?: return false
 
-        // Before getMediaProjection, always. On API 34+ the call fails without it; below that it is
-        // harmless and keeps one code path.
-        ScreenCaptureService.start(context)
-
-        val projection = awaitProjection(manager, resultCode, data)
-
-        if (projection == null) {
-            // Nothing is recording, so the notification would be a lie.
-            ScreenCaptureService.stop(context)
-            Log.w(TAG, "Consent was granted but MediaProjection could not be created")
-            return false
+        if (manager == null) {
+            onResult(false)
+            return
         }
 
-        val metrics = context.resources.displayMetrics
-        val capture =
-            MediaProjectionScreenCapture(
-                context = context,
-                store = ScreenshotStore(File(context.filesDir, CAPTURE_DIRECTORY)),
-                screenWidthPx = metrics.widthPixels,
-                screenHeightPx = metrics.heightPixels,
-                densityDpi = metrics.densityDpi,
-                currentPackageName = { AccessibilityConnection.readerOrNull()?.currentPackageName() },
-            )
-
-        capture.attachProjection(projection)
-        screenCapture?.release()
-        screenCapture = capture
-
-        Log.i(TAG, "Screen capture session attached")
-        return true
-    }
-
-    /**
-     * Creates the projection, retrying while the foreground service reaches the foreground.
-     *
-     * `startForegroundService` returns before the service has called `startForeground`, and until it
-     * does, `getMediaProjection` throws on API 34+. A short poll is the honest way to handle that: the
-     * alternative is a fixed sleep, which is either too short on a loaded device or wasted time on a
-     * fast one.
-     *
-     * The consent token stays valid throughout - it is the *service* that is not ready yet, not the
-     * grant.
-     */
-    private fun awaitProjection(
-        manager: MediaProjectionManager,
-        resultCode: Int,
-        data: Intent,
-    ): MediaProjection? {
-        var lastError: Throwable? = null
-
-        repeat(PROJECTION_ATTEMPTS) { attempt ->
-            val projection = runCatching { manager.getMediaProjection(resultCode, data) }
-
-            projection.getOrNull()?.let { return it }
-            lastError = projection.exceptionOrNull()
-
-            if (attempt < PROJECTION_ATTEMPTS - 1) {
-                Thread.sleep(PROJECTION_RETRY_DELAY_MS)
+        ScreenCaptureService.start(context) { ready ->
+            if (!ready) {
+                // The service never reached the foreground, so the projection cannot be created. No stop
+                // call here: the service reports its own failure and stops itself, and stopping a start
+                // that is still queued is what crashed the process last time.
+                Log.w(TAG, "Screen capture service unavailable; cannot create a projection")
+                onResult(false)
+                return@start
             }
-        }
 
-        Log.e(TAG, "MediaProjection unavailable after $PROJECTION_ATTEMPTS attempts", lastError)
-        return null
+            val projection =
+                runCatching { manager.getMediaProjection(resultCode, data) }
+                    .onFailure { Log.e(TAG, "MediaProjection could not be created", it) }
+                    .getOrNull()
+
+            if (projection == null) {
+                // Safe now, because the service is genuinely in the foreground - its start contract is
+                // satisfied, so stopping it is an ordinary stop.
+                ScreenCaptureService.stop(context)
+                Log.w(TAG, "Consent was granted but MediaProjection could not be created")
+                onResult(false)
+                return@start
+            }
+
+            val metrics = context.resources.displayMetrics
+            val capture =
+                MediaProjectionScreenCapture(
+                    context = context,
+                    store = ScreenshotStore(File(context.filesDir, CAPTURE_DIRECTORY)),
+                    screenWidthPx = metrics.widthPixels,
+                    screenHeightPx = metrics.heightPixels,
+                    densityDpi = metrics.densityDpi,
+                    currentPackageName = { AccessibilityConnection.readerOrNull()?.currentPackageName() },
+                )
+
+            capture.attachProjection(projection)
+            screenCapture?.release()
+            screenCapture = capture
+
+            Log.i(TAG, "Screen capture session attached")
+            onResult(true)
+        }
     }
 
     /** Ends the capture session, stopping the system recording indicator. */
@@ -240,7 +217,10 @@ private const val PROJECTION_RETRY_DELAY_MS = 50L
 
         // The service exists only to make the projection possible, so it goes with the session. Left
         // running it would tell the user their screen is being read when it is not.
-        context?.let { ScreenCaptureService.stop(it) }
+        //
+        // Guarded on the service actually being in the foreground: stopping a start that is still queued
+        // leaves startForegroundService's contract unsatisfied and Android kills the process for it.
+        if (context != null && ScreenCaptureService.isInForeground) ScreenCaptureService.stop(context)
 
         Log.i(TAG, "Screen capture session released")
     }
