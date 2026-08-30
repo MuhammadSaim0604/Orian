@@ -1568,7 +1568,7 @@ The reasoning error worth recording: I treated "asynchronous" as "finishes short
 
 One further change fell out of it: consent granted but capture unavailable now **rejects** rather than resolving false. Resolving false is how declining is reported, and the UI answers that with "the AI will work from screen structure only" — which would be a lie to a user who had just tapped Allow, and would bury a failure they can often fix by enabling notifications.
 
-**Commit:** `de70e4b`. Verified: `:screen` and full `android` ktlint + unit tests, `:app:compileDebugKotlin`, `:app:testDebugUnitTest`, `assembleDebugAndroidTest`, 60/60 turbo tasks, 291 app Jest tests, release bundle. Still **not verified on hardware** — the crash path is exactly the kind that only a device shows.
+**Commit:** `c0cc965`. Verified: `:screen` and full `android` ktlint + unit tests, `:app:compileDebugKotlin`, `:app:testDebugUnitTest`, `assembleDebugAndroidTest`, 60/60 turbo tasks, 291 app Jest tests, release bundle. Still **not verified on hardware** — the crash path is exactly the kind that only a device shows.
 
 ---
 
