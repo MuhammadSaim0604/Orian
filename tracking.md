@@ -1587,7 +1587,7 @@ A second bug was sitting in the same event. `AutomationEventBridge.emitStatusCha
 
 New `packages/native-automation/src/automation.test.ts` (7 tests) pins the parsing, including that a bad payload does not stop later events arriving.
 
-**Commit:** `1a37ffe`. Verified: full `android` ktlint + unit tests, `:app:compileDebugKotlin`, `:app:testDebugUnitTest`, 60/60 turbo tasks, release bundle, format:check.
+**Commit:** `d62ca23`. Verified: full `android` ktlint + unit tests, `:app:compileDebugKotlin`, `:app:testDebugUnitTest`, 60/60 turbo tasks, release bundle, format:check.
 
 ---
 
