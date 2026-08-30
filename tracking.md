@@ -4,7 +4,7 @@ Living record of what has been implemented, what is complete, and what remains. 
 
 Authoritative plan: `Development_Plan/`. It was restructured from **phases** to **steps** after device testing (commit `b0c1c60`); phases 0–9 are complete and everything since is a numbered step. See `Development_Plan/03_Issue_Register.md` for the defect IDs each step closes.
 
-Last updated: after Step 3, with both CI workflows green on `main` (Android CI run `33243497410`, TypeScript CI run `33243497411`).
+Last updated: after the Step 3 device-testing fix round, with both CI workflows green on `main` (Android CI run `33259866809`, TypeScript CI run `33259866804`).
 
 ---
 
@@ -29,21 +29,21 @@ Rows below Phase 5 are in **execution order**, not numeric order. Phase 10's sco
 
 ### Steps 1–13 — the product rebuild
 
-| Step | Scope                                   | Milestone        | Closes         | Status       |
-| ---- | --------------------------------------- | ---------------- | -------------- | ------------ |
-| 1    | App shell & onboarding                  | M6 A real app    | A1–A5          | **Complete** |
-| 2    | Permission engine                       | M6 A real app    | E1–E4          | **Complete** |
-| 3    | Background execution & agent overlay    | M6 A real app    | B1, B2         | **Complete** |
-| 4    | Agent Mode                              | M7 Agent Mode    | B3, B4, B6     | Next         |
-| 5    | OCR & perception chain                  | M7 Agent Mode    | F1, F2, G7     | Not started  |
-| 6    | Workflow Mode shell                     | M8 Workflow Mode | A6             | Not started  |
-| 7    | Canvas rebuild                          | M8 Workflow Mode | C1–C3, G2      | Not started  |
-| 8    | Node editor & palette                   | M8 Workflow Mode | C4             | Not started  |
-| 9    | Node toolset overlay                    | M8 Workflow Mode | C5, C6         | Not started  |
-| 10   | Workflow builder agent                  | M9 Intelligence  | D1–D3          | Not started  |
-| 11   | Generation & recorder quality           | M9 Intelligence  | G4, G8         | Not started  |
-| 12   | MCP server & clients, node distribution | M10 Platform     | B5             | Not started  |
-| 13   | Device verification & hardening         | M10 Platform     | G1, G3, G5, G6 | Not started  |
+| Step | Scope                                   | Milestone        | Closes         | Status                                                                       |
+| ---- | --------------------------------------- | ---------------- | -------------- | ---------------------------------------------------------------------------- |
+| 1    | App shell & onboarding                  | M6 A real app    | A1–A5          | **Complete**                                                                 |
+| 2    | Permission engine                       | M6 A real app    | E1–E4          | **Complete**                                                                 |
+| 3    | Background execution & agent overlay    | M6 A real app    | B1, B2         | **Complete** (fix round applied after device testing; likely also closes C5) |
+| 4    | Agent Mode                              | M7 Agent Mode    | B3, B4, B6     | Next                                                                         |
+| 5    | OCR & perception chain                  | M7 Agent Mode    | F1, F2, G7     | Not started                                                                  |
+| 6    | Workflow Mode shell                     | M8 Workflow Mode | A6             | Not started                                                                  |
+| 7    | Canvas rebuild                          | M8 Workflow Mode | C1–C3, G2      | Not started                                                                  |
+| 8    | Node editor & palette                   | M8 Workflow Mode | C4             | Not started                                                                  |
+| 9    | Node toolset overlay                    | M8 Workflow Mode | C5, C6         | Not started                                                                  |
+| 10   | Workflow builder agent                  | M9 Intelligence  | D1–D3          | Not started                                                                  |
+| 11   | Generation & recorder quality           | M9 Intelligence  | G4, G8         | Not started                                                                  |
+| 12   | MCP server & clients, node distribution | M10 Platform     | B5             | Not started                                                                  |
+| 13   | Device verification & hardening         | M10 Platform     | G1, G3, G5, G6 | Not started                                                                  |
 
 ---
 
@@ -1456,6 +1456,92 @@ android/automation/.../AutomationForegroundService.kt  + ACTION_STOP_BROADCAST
 
 ---
 
+## Device-testing pass after Step 3 — five defects, all fixed
+
+Manual tests on the `app-release` artifact from Android CI run `33243497410`. Tests 1 and 3 passed: the event log fills, the notification appears and tracks the agent, and stop from the notification ends the run, removes the overlay and stops the agent. Tests 2 and 4 failed, and two further problems came out of the same session.
+
+Recorded here in the shape they were reported, because in three of the five cases the symptom pointed somewhere other than the cause.
+
+### The freeze — and a wrong assumption in ADR 0012
+
+**Reported:** the agent was told to send a WhatsApp message. It opened WhatsApp, showed "Opening com.whatsapp…" in both the notification and the overlay, and **stuck there**. No planned task advanced. Pressing back returned to the launcher rather than to the app, with no ANR and no crash dialog; reopening started at the mode switcher.
+
+**Cause:** not the foreground service, not the run controller, and not anything in the agent. React Native's `JavaTimerManager` is a `LifecycleEventListener`, and `onHostPause` calls `clearFrameCallback()`, which removes the `TIMERS_EVENTS` choreographer callback. **`setTimeout` and `setInterval` then do not fire at all** — not throttled, stopped. The loop awaits timers between steps, so it stalled where it stood and resumed when the activity came back.
+
+ADR 0012 had said this rested on "an assumption that must be verified early: that JS execution genuinely continues under a foreground service while backgrounded". The assumption was wrong, and it was wrong in a specific way worth keeping: the service keeps the **process** alive, which is real, but the timer system is driven by the **activity** lifecycle and the service has no bearing on it. Two different lifetimes, and only one of them was being managed.
+
+`clearFrameCallback` has exactly one escape hatch — `!headlessJsTaskContext.hasActiveTasks()` — so `RunKeepAliveModule` now holds a `HeadlessJsTask` open for the duration of a run. Two constraints shaped it, both from RN's source rather than guesswork:
+
+- `startTask` asserts it is on the UI thread, while a `@ReactMethod` runs on the native modules thread.
+- `isAllowedInForeground` must be true, because `startTask` throws outright if a foreground-disallowed task starts from a resumed activity — and the task **must** start while resumed, since one started on pause would race the callback removal it exists to prevent.
+
+**The task does no work.** It is a lifetime, not a worker. Running the agent inside it would create a second JS context with its own copy of the run controller's module state, which is precisely what ADR 0016 exists to prevent. The JS half is registered in `index.js` and returns a promise that never settles: resolving would notify native that the task finished and bring the freeze back.
+
+`timersHeld` is on the run snapshot so the overlay can say "may pause if you leave the app" **before** the user walks away. The probe stays, now measuring whether the keep-alive works on a given device rather than whether the assumption holds in principle.
+
+### The overlay crash — one root cause behind three symptoms
+
+**Reported:** `CalledFromWrongThreadException` firing continuously from the moment Run was pressed, the stop button not responding, the chat text box unable to take focus, and the app crashing after three or four expand/collapse taps. The user's own note said the errors looked like they came from the overlay rather than the agent, which was right.
+
+**Cause:** `addView` binds the resulting `ViewRootImpl` to the **calling** thread. `AgentOverlayModule.show` is a `@ReactMethod`, so it ran on the native modules thread, and every later mount from React's UI thread threw. One bug, three faces — and none of them looked like a threading error from the outside.
+
+Both overlay managers now post every `WindowManager` call through an injected `runOnUiThread`. Injected rather than calling `UiThreadUtil` directly, so the lifecycle stays unit-testable off-device where there is no main looper. `hideOnUiThread` is separate from `hide` because posting from inside a posted block would run the removal _after_ the addition and take down the new window.
+
+**The same bug was in the Phase 8 toolset module**, so this very likely closes C5 as well — worth confirming next time Workflow Mode is on a device.
+
+### The stop button — px where dp was meant
+
+**Reported:** "a very cheap type of stop button… no proper icon just a rectangle like curved".
+
+Two causes, both mine. `COLLAPSED_WIDTH_PX = 168` is 56dp on a 3x screen, so the strip rendered at a third of its intended width — `WindowManager.LayoutParams` takes physical pixels, which is what makes this easy to write and invisible on a low-density emulator. And the shared `Button`'s `danger` variant is an **outline** (`bg-transparent border border-danger`), which on a small floating strip reads as an empty rounded rectangle rather than a button.
+
+Every constant is now `*_DP`, converted by a new `Density` value class. The overlay builds its own controls: solid `bg-danger`, at least 48dp tall, with a square stop glyph drawn as a `View` so there is no icon font to go missing inside a floating window.
+
+**The lesson is in the tests, not the fix.** Every geometry test passed while the strip was unusable, because they asserted it stayed on screen — which a far-too-small window trivially does. `hasUsableControls` asserts the dp size a label plus a touch target actually needs, and `a strip sized in raw pixels would be rejected` feeds it the exact 168px spec that shipped and proves it fails.
+
+### The text box — FLAG_NOT_FOCUSABLE
+
+A non-focusable window never receives focus, so nothing inside it can either. `FLAG_ALT_FOCUSABLE_IM` does not rescue that; it only governs IME behaviour once a window already has focus.
+
+The flag is now applied to the collapsed layout only. The strip must stay non-focusable because the agent is actively tapping the app underneath and stealing focus would interfere with the automation it reports on. The expanded panel exists to be typed into, so it takes focus while open.
+
+### Screen capture — a missing service, and a dishonest status
+
+**Reported:** screen capture shows as off, and flips the other two capabilities off with it.
+
+Two independent bugs behind one symptom:
+
+1. **From API 34 `getMediaProjection` throws unless a foreground service of type `mediaProjection` is already running.** The grant was accepted, the call threw, the exception was caught, and the capability reported off with nothing to tell the user their consent had been discarded. `ScreenCaptureService` now exists in `android/screen`, declared in that module's manifest so it arrives by merge. Separate from `AutomationForegroundService` because a service declares one foreground type and these are different claims: _an automation is driving the phone_ versus _the screen is being recorded_. `attachScreenCapture` starts it and polls briefly for the projection, because `startForegroundService` is asynchronous and a single attempt loses the race.
+2. **`getStatus` returned all-false on a parse failure**, which the panel rendered as three revoked permissions. `AutomationStatus` now carries `statusKnown`, and the panel distinguishes **off** from **unknown**: off is a fact about the user's choices and sends them to Settings; unknown admits the app could not tell and suppresses the how-to-grant hint, because telling someone to enable what may already be enabled is worse than saying nothing.
+
+The Kotlin half of that second bug had already been fixed in Step 2 (`notReadyStatusJson` reads each capability independently). This was the same mistake surviving on the TypeScript side — worth noting, because a fix applied to one side of the bridge does not travel.
+
+### Files
+
+**New:** `apps/mobile/android/app/src/main/kotlin/com/mobileautomation/keepalive/RunKeepAliveModule.kt`, `apps/mobile/src/features/agent/runKeepAlive.ts`, `android/overlays/.../Density.kt`, `android/screen/.../ScreenCaptureService.kt`, plus `DensityTest.kt` (16 tests) and `AutomationStatusPanel.test.tsx` / `runKeepAlive.test.ts` (18 tests).
+
+**Changed:** both overlay managers, both geometries, `AgentOverlayModule`, `OverlayModule`, `AutomationRuntimeProvider`, `AutomationModule`, `AutomationPackage`, `ReactMethodSignatureTest`, `android/screen`'s manifest, `index.js`, `runController.ts`, `useAgentRun.ts`, `AgentStatusOverlay.tsx`, `AutomationStatusPanel.tsx`, `useAutomationStatus.ts`, `packages/native-automation`'s `automation.ts` and `types.ts`.
+
+**Docs:** ADR 0012 gained a "Correction: the foreground service is not sufficient" section quoting the consequence that was wrong; `Permission_Model.md` gained a screen-capture section; `ORION.md` gained the timer correction and three traps.
+
+**Verification:** 60/60 turbo tasks, 290 app Jest tests (18 suites), Kotlin 582 tests (10 modules), ktlint clean, `format:check` clean, `:app:testDebugUnitTest` green, `:app:processDebugMainManifest` confirming both services with distinct foreground types, release bundle builds.
+
+**Commits:** `8ab5c82`, then `f658345`.
+
+### The round trip, and why it happened again
+
+`8ab5c82` failed Android CI on `:overlays:compileDebugAndroidTestKotlin` — "No value passed for parameter 'runOnUiThread'". The `androidTest` source set is compiled **only** by `assembleDebugAndroidTest`; `ktlintCheck` and `testDebugUnitTest` both skip it, so adding a constructor parameter broke a caller that nothing in the local loop compiles.
+
+**This is the second time that source set has cost a round trip.** The rule already recorded after Phase 8 is the right one and was not followed: when changing anything an instrumentation test touches, run `gradle assembleDebugAndroidTest`. It was run before pushing `f658345`, which is why that one landed green.
+
+One compile error worth keeping for its own sake: `NoRetryPolicy` is `internal` in RN 0.76.6, so Kotlin cannot name it even though the Java constructor taking it is public. The four-argument `HeadlessJsTaskConfig` defaults to it anyway.
+
+### Not verified on hardware
+
+Every fix here is verified by build, unit test and merged manifest. **None is verified on a phone**, and the freeze fix is the one that matters — whether RN's timer callback genuinely survives backgrounding under a held headless task is a question only a device answers. `timersHeld` and the probe exist to report the answer rather than assume it.
+
+---
+
 ## Remaining
 
 **Steps 1, 2 and 3 are done; Steps 4–13 remain.** The plan is `Development_Plan/steps/`, and `03_Issue_Register.md` is the checklist — a step is not finished while one of its issue IDs survives.
@@ -1508,18 +1594,19 @@ Carry-forward notes:
 
 Every engine layer needs physical hardware, and none can be automated here — each requires a user to enable the accessibility service, grant screen capture, or allow display over other apps, and no APK is built locally per ADR 0010.
 
-| From                 | What needs checking on a device                                                                                                                                                                                                                                        |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Kotlin core          | the service reads a third-party app's tree; tap a resolved element, swipe, type, capture a screenshot                                                                                                                                                                  |
-| Bridge               | `automation.getUiTree()` and `automation.click(selector)` from JS drive that same device                                                                                                                                                                               |
-| Workflow engine      | a workflow runs end to end: `RN → JSON → engine → registry → executor → tool runtime → device`                                                                                                                                                                         |
-| Canvas               | node text renders, drag behaves, 60fps with dozens of nodes, a workflow survives a restart                                                                                                                                                                             |
-| Agent                | the WhatsApp scenario with a real provider key, **continuing while another app is in front**                                                                                                                                                                           |
-| Overlay              | the toolset stays on top in WhatsApp and returns a valid condition config                                                                                                                                                                                              |
-| Recorder             | replaying a generated workflow reproduces the recorded outcome                                                                                                                                                                                                         |
-| Shell (Step 1)       | onboarding on a fresh install, the back button through every route, the transition's feel                                                                                                                                                                              |
-| Permissions (Step 2) | the settings round trip for all four settings-granted capabilities across OEM skins; the usage-access appop read; the assistant secure setting; whether resume fires after a settings visit killed the activity                                                        |
-| Background (Step 3)  | **that a run continues with another app in front** — the check that decides whether Step 3 worked; what the probe reports on an aggressive OEM skin; the status overlay appearing and staying on top; stop from the notification; the two overlays evicting each other |
+| From                 | What needs checking on a device                                                                                                                                                                                                                                                                                                                                                                              |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Kotlin core          | the service reads a third-party app's tree; tap a resolved element, swipe, type, capture a screenshot                                                                                                                                                                                                                                                                                                        |
+| Bridge               | `automation.getUiTree()` and `automation.click(selector)` from JS drive that same device                                                                                                                                                                                                                                                                                                                     |
+| Workflow engine      | a workflow runs end to end: `RN → JSON → engine → registry → executor → tool runtime → device`                                                                                                                                                                                                                                                                                                               |
+| Canvas               | node text renders, drag behaves, 60fps with dozens of nodes, a workflow survives a restart                                                                                                                                                                                                                                                                                                                   |
+| Agent                | the WhatsApp scenario with a real provider key, **continuing while another app is in front**                                                                                                                                                                                                                                                                                                                 |
+| Overlay              | the toolset stays on top in WhatsApp and returns a valid condition config                                                                                                                                                                                                                                                                                                                                    |
+| Recorder             | replaying a generated workflow reproduces the recorded outcome                                                                                                                                                                                                                                                                                                                                               |
+| Shell (Step 1)       | onboarding on a fresh install, the back button through every route, the transition's feel                                                                                                                                                                                                                                                                                                                    |
+| Permissions (Step 2) | the settings round trip for all four settings-granted capabilities across OEM skins; the usage-access appop read; the assistant secure setting; whether resume fires after a settings visit killed the activity                                                                                                                                                                                              |
+| Background (Step 3)  | **that a run continues with another app in front** — the check that decides whether Step 3 worked; what the probe reports on an aggressive OEM skin; the status overlay appearing and staying on top; stop from the notification; the two overlays evicting each other                                                                                                                                       |
+| Fix round (Step 3)   | **that the held headless task really keeps timers firing** — the whole freeze fix rests on it; that the overlay survives repeated expand/collapse without the wrong-thread crash; that the stop button and the chat text box are both operable; that screen capture reports granted after consent on API 34+, with the other two rows unmoved; whether the same UI-thread fix cleared C5 in the node toolset |
 
 **Step 13 runs this as one session, in an order where each stage feeds the next so a failure localises itself:** onboarding → the agent outside the app → OCR on a tree-less screen → the recorded trace → generation → running the workflow from the canvas → the node toolset overlay → a force-stop persistence check.
 
