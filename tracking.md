@@ -1570,6 +1570,25 @@ One further change fell out of it: consent granted but capture unavailable now *
 
 **Commit:** `c0cc965`. Verified: `:screen` and full `android` ktlint + unit tests, `:app:compileDebugKotlin`, `:app:testDebugUnitTest`, `assembleDebugAndroidTest`, 60/60 turbo tasks, 291 app Jest tests, release bundle. Still **not verified on hardware** — the crash path is exactly the kind that only a device shows.
 
+### All three permissions read off while the screen was demonstrably being recorded
+
+The crash was gone, and what surfaced underneath it was stranger. Reported: two capabilities granted, screen capture off; tapped **Allow screen capture**, allowed the system dialog; **all three** rows then read off with "Screen recording stopped…" — while the recording notification was showing, the system's screen-monitoring icon was lit in the status bar, and going back and reopening the settings screen showed **all three granted** with a **Stop screen capture** button.
+
+The contradiction is the diagnosis. Two code paths read status, and they disagreed because only one of them parsed its payload:
+
+- `getStatus` is synchronous and **parses** the JSON string. That is the path a fresh mount uses — which is why reopening the screen was correct, and why the state was never actually wrong.
+- `addAutomationListener` handed the listener the **raw string**. `useAutomationStatus` then read `event.isReady` off a string, got `undefined`, and stored a falsy value for all three. The recording really was running the whole time; the UI was reading properties off the wrong type.
+
+Fixed in `addAutomationListener` rather than in the consumer, because the convention is that structured data crosses this bridge as JSON and **the wrapper owns re-typing it** — a fix in `useAutomationStatus` would have left the same trap for the next subscriber. An object payload is passed through untouched so a future native change to a `WritableMap` does not silently stop delivering events, and an unparseable payload is dropped rather than thrown: an emit happens on native's schedule, there is no caller to catch it, and throwing would take out the emitter for every other subscriber.
+
+A second bug was sitting in the same event. `AutomationEventBridge.emitStatusChanged` hardcoded `canCaptureScreen = false` and `canDrawOverlay = false`, so an event about **accessibility** asserted two unrelated capabilities were off. That is issue E1's mistake in a second place — the E1 fix corrected `AutomationModule`'s fallback and this copy survived. It now reads `hasScreenCaptureSession()` and `canDrawOverlay()` directly, which is why `canDrawOverlay` had to become public on `AutomationRuntimeProvider`.
+
+**The general lesson, and it has now cost three separate bugs:** a status object that reports several independent capabilities must read each one independently, in **every** place it is constructed. Fixing one construction site does not fix the others, and the failure always presents as the user's permissions spontaneously turning off.
+
+New `packages/native-automation/src/automation.test.ts` (7 tests) pins the parsing, including that a bad payload does not stop later events arriving.
+
+**Commit:** `1a37ffe`. Verified: full `android` ktlint + unit tests, `:app:compileDebugKotlin`, `:app:testDebugUnitTest`, 60/60 turbo tasks, release bundle, format:check.
+
 ---
 
 ## Remaining

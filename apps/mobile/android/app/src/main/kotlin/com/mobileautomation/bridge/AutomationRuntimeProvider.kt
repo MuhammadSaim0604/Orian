@@ -250,7 +250,14 @@ private const val CAPTURE_DIRECTORY = "captures"
      */
     private fun screenCaptureOrPlaceholder(context: Context): ScreenCapture = screenCapture ?: ConsentRequiredScreenCapture
 
-    private fun canDrawOverlay(context: Context): Boolean =
+    /**
+     * Whether "display over other apps" is granted.
+     *
+     * Public because the event bridge needs it too: a status event that guessed at this would report the
+     * overlay as unavailable every time the accessibility connection changed, which is the class of bug
+     * E1 was.
+     */
+    fun canDrawOverlay(context: Context): Boolean =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             Settings.canDrawOverlays(context)
         } else {

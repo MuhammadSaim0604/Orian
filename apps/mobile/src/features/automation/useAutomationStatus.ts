@@ -51,8 +51,9 @@ export const useAutomationStatus = (): {
       });
     });
 
-    // The native event carries only accessibility state on some paths, so a read
-    // on mount fills in capture and overlay.
+    // The native event carries every capability, but a read on mount is what makes the *first* paint
+    // correct - the event only fires when something changes, so without this the screen would show
+    // whatever it was seeded with until the user changed a permission.
     refresh();
 
     return () => subscription.remove();

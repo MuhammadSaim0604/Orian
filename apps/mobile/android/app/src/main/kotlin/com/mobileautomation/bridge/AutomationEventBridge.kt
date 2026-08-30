@@ -118,14 +118,23 @@ object AutomationEventBridge {
         }
     }
 
+    /**
+     * Emits a status change when the accessibility connection flips.
+     *
+     * **Each capability is read independently.** This used to hardcode `canCaptureScreen = false` and
+     * `canDrawOverlay = false`, so an event about *accessibility* asserted two unrelated capabilities were
+     * off — the same mistake as issue E1, in a second place. Screen capture is a MediaProjection session
+     * and overlay is a settings grant; neither has anything to do with the accessibility service
+     * connecting.
+     */
     private fun emitStatusChanged(connected: Boolean) {
         val context = reactContext ?: return
 
         val payload =
             BridgeResults.statusToJson(
                 isReady = connected,
-                canCaptureScreen = false,
-                canDrawOverlay = false,
+                canCaptureScreen = AutomationRuntimeProvider.hasScreenCaptureSession(),
+                canDrawOverlay = AutomationRuntimeProvider.canDrawOverlay(context),
             )
 
         emit(context, EVENT_STATUS_CHANGED, payload)

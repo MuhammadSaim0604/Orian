@@ -307,10 +307,40 @@ const eventEmitter = (): NativeEventEmitter => {
  * @returns a subscription; call `.remove()` when finished. Leaking subscriptions
  *   keeps a component's closure alive after unmount.
  */
+/**
+ * Subscribes to a native event.
+ *
+ * **Payloads arrive as JSON strings and are parsed here.** Structured data crosses this bridge as JSON
+ * by convention, and events are no exception — but a listener typed against `AutomationEventMap` expects
+ * an object, so without this every property read would be `undefined`.
+ *
+ * That is not hypothetical. It shipped: the status event was emitted as a string, `useAutomationStatus`
+ * read `event.isReady` off it, and all three capabilities went false the moment any event arrived. The
+ * user saw granting screen capture turn every permission off, then saw them all correct again after
+ * leaving and reopening the screen — because that path used the synchronous `getStatus`, which parses.
+ *
+ * A malformed payload is dropped rather than thrown: an emit happens on the native side's schedule, so
+ * there is no caller to catch it, and throwing would take out the emitter for every other subscriber.
+ */
 export const addAutomationListener = <K extends AutomationEventName>(
   eventName: K,
   listener: (payload: AutomationEventMap[K]) => void,
-): EmitterSubscription => eventEmitter().addListener(eventName, listener);
+): EmitterSubscription =>
+  eventEmitter().addListener(eventName, (raw: unknown) => {
+    if (typeof raw !== 'string') {
+      // Already an object. Tolerated so a future native change to a WritableMap does not silently stop
+      // delivering events.
+      listener(raw as AutomationEventMap[K]);
+      return;
+    }
+
+    try {
+      listener(JSON.parse(raw) as AutomationEventMap[K]);
+    } catch {
+      // Unreadable payload. Dropping it leaves the last known state in place, which is better than
+      // replacing it with garbage.
+    }
+  });
 
 /**
  * Starts streaming UI-tree changes.
