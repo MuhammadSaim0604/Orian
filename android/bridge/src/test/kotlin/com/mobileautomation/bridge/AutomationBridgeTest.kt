@@ -7,17 +7,20 @@ import com.mobileautomation.accessibility.selector.Selector
 import com.mobileautomation.accessibility.selector.SelectorStrategy
 import com.mobileautomation.automation.AutomationError
 import com.mobileautomation.automation.AutomationRuntime
+import com.mobileautomation.automation.CallOutcome
 import com.mobileautomation.automation.ResolvedElement
 import com.mobileautomation.automation.ToolResult
 import com.mobileautomation.gestures.SwipeDirection
 import com.mobileautomation.screen.Screenshot
 import com.mobileautomation.tools.IntentRequest
 import com.mobileautomation.tools.MediaCommand
+import com.mobileautomation.tools.RingerMode
 import com.mobileautomation.tools.VolumeDirection
 import com.mobileautomation.tools.model.AlarmRequest
 import com.mobileautomation.tools.model.Contact
 import com.mobileautomation.tools.model.CurrentScreen
 import com.mobileautomation.tools.model.InstalledApp
+import com.mobileautomation.tools.model.SmsMessage
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -178,6 +181,59 @@ class AutomationBridgeTest {
 
         override suspend fun adjustVolume(direction: VolumeDirection): ToolResult<Unit> {
             lastVolumeDirection = direction
+            return unitResult
+        }
+
+        // --- messaging and calls ------------------------------------------
+
+        var lastSms: Pair<String, String>? = null
+        var lastSmsRead: Pair<Int, String?>? = null
+        var lastCalledNumber: String? = null
+        var callOutcome: CallOutcome = CallOutcome.CALLING
+        var endedCalls: Int = 0
+        var messages: List<SmsMessage> = emptyList()
+
+        override suspend fun sendSms(
+            phoneNumber: String,
+            body: String,
+        ): ToolResult<Unit> {
+            lastSms = phoneNumber to body
+            return unitResult
+        }
+
+        override suspend fun readSms(
+            limit: Int,
+            fromNumber: String?,
+        ): ToolResult<List<SmsMessage>> {
+            lastSmsRead = limit to fromNumber
+            return ToolResult.success(messages)
+        }
+
+        override suspend fun placeCall(phoneNumber: String): ToolResult<CallOutcome> {
+            lastCalledNumber = phoneNumber
+            return ToolResult.success(callOutcome)
+        }
+
+        override suspend fun endCall(): ToolResult<Unit> {
+            endedCalls++
+            return unitResult
+        }
+
+        // --- device configuration -----------------------------------------
+
+        var lastSettingWrite: Pair<String, String>? = null
+        var lastRingerMode: RingerMode? = null
+
+        override suspend fun setSystemSetting(
+            key: String,
+            value: String,
+        ): ToolResult<Unit> {
+            lastSettingWrite = key to value
+            return unitResult
+        }
+
+        override suspend fun setRingerMode(mode: RingerMode): ToolResult<Unit> {
+            lastRingerMode = mode
             return unitResult
         }
     }

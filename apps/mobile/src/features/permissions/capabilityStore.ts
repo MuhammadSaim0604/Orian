@@ -9,6 +9,7 @@ import {
   readCapabilities,
   refreshCapabilities,
   requestCapability,
+  requestScreenCaptureSession,
 } from './capabilities';
 
 /**
@@ -98,21 +99,37 @@ export const useCapabilityStore = create<CapabilityState & CapabilityActions>((s
 
     const outcome = await requestCapability(id);
 
+    /**
+     * Screen capture is not requestable through the permissions module, and pretending otherwise was a
+     * real bug.
+     *
+     * `requestCapability` resolves `session_consent` for it — meaning "this one is granted by
+     * MediaProjection's own dialog, which lives on `AutomationModule`". The native side is right to say
+     * that rather than duplicate the activity-result plumbing. But every caller then treated the outcome
+     * as done, so the toggle on the tools page set a spinner, cleared it, and no dialog ever appeared.
+     * Only the device-automation card worked, because it happened to call the capture flow directly.
+     *
+     * Continuing the request here is what makes `request()` mean the same thing for all nine
+     * capabilities. A store action called `request` that silently does nothing for one of them is worse
+     * than one that throws.
+     */
+    const resolved = outcome === 'session_consent' ? await requestScreenCaptureSession() : outcome;
+
     set((state) => ({
       requesting: null,
       awaitingSettings:
-        outcome === 'settings_opened' && !state.awaitingSettings.includes(id)
+        resolved === 'settings_opened' && !state.awaitingSettings.includes(id)
           ? [...state.awaitingSettings, id]
           : state.awaitingSettings,
       error:
-        outcome === 'unsupported' ? 'That permission cannot be requested on this device.' : null,
+        resolved === 'unsupported' ? 'That permission cannot be requested on this device.' : null,
     }));
 
     // A runtime prompt has already resolved by now, so the snapshot is stale. A settings grant has
     // not, and refreshing is harmless — it simply reports the same state until the user returns.
     await get().refresh();
 
-    return outcome;
+    return resolved;
   },
 
   openSettings: async (id) => {

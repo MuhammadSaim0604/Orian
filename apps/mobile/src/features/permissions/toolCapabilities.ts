@@ -49,6 +49,16 @@ export const TOOL_CAPABILITY: Readonly<Record<ToolName, CapabilityId | null>> = 
 
   sendNotification: 'notifications',
 
+  sendSms: 'sms',
+  readSms: 'sms',
+
+  placeCall: 'phone',
+  endCall: 'phone',
+
+  setSystemSetting: 'write_settings',
+
+  setRingerMode: 'do_not_disturb',
+
   // Nothing below needs a permission. Listed explicitly rather than defaulted, so adding a tool forces the
   // decision — a `Record<ToolName, …>` will not compile until every name is present.
   openApp: null,
@@ -100,6 +110,23 @@ const GROUP_COPY: Readonly<Record<string, { readonly title: string; readonly sum
     title: 'Notifications',
     summary: 'Tell you something by posting a notification.',
   },
+  sms: {
+    title: 'Text messages',
+    summary:
+      'Send a text message, and read a recent one — for finding a code or replying to someone.',
+  },
+  phone: {
+    title: 'Phone calls',
+    summary: 'Dial a number without you having to press call, and hang up.',
+  },
+  write_settings: {
+    title: 'System settings',
+    summary: 'Change brightness, screen timeout, or auto-rotate when you ask.',
+  },
+  do_not_disturb: {
+    title: 'Silent mode',
+    summary: 'Switch the phone to silent or vibrate and back again.',
+  },
   none: {
     title: 'No permission needed',
     summary:
@@ -119,8 +146,12 @@ export const toolGroups = (): readonly ToolGroup[] => {
     'accessibility',
     'screen_capture',
     'contacts',
+    'sms',
+    'phone',
     'exact_alarm',
     'notifications',
+    'write_settings',
+    'do_not_disturb',
     null,
   ];
 
@@ -178,4 +209,10 @@ const TOOL_LABELS: Readonly<Record<ToolName, string>> = {
   getSystemSetting: 'Read a system setting',
   controlMedia: 'Control playback',
   adjustVolume: 'Change the volume',
+  sendSms: 'Send a text message',
+  readSms: 'Read recent messages',
+  placeCall: 'Call a number',
+  endCall: 'Hang up',
+  setSystemSetting: 'Change a system setting',
+  setRingerMode: 'Set silent or vibrate',
 };

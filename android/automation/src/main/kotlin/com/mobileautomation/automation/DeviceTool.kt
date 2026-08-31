@@ -35,6 +35,12 @@ enum class DeviceTool(val toolName: String) {
     GET_SYSTEM_SETTING("getSystemSetting"),
     CONTROL_MEDIA("controlMedia"),
     ADJUST_VOLUME("adjustVolume"),
+    SEND_SMS("sendSms"),
+    READ_SMS("readSms"),
+    PLACE_CALL("placeCall"),
+    END_CALL("endCall"),
+    SET_SYSTEM_SETTING("setSystemSetting"),
+    SET_RINGER_MODE("setRingerMode"),
     ;
 
     companion object {

@@ -29,7 +29,11 @@ import com.mobileautomation.tools.android.AndroidContactsReader
 import com.mobileautomation.tools.android.AndroidIntentTool
 import com.mobileautomation.tools.android.AndroidMediaTool
 import com.mobileautomation.tools.android.AndroidNotificationTool
+import com.mobileautomation.tools.android.AndroidPhoneTool
+import com.mobileautomation.tools.android.AndroidRingerTool
+import com.mobileautomation.tools.android.AndroidSmsTool
 import com.mobileautomation.tools.android.AndroidSystemSettingsReader
+import com.mobileautomation.tools.android.AndroidSystemSettingsWriter
 import java.io.File
 
 /**
@@ -131,6 +135,10 @@ private const val CAPTURE_DIRECTORY = "captures"
                 intentTool = AndroidIntentTool(context),
                 systemSettingsReader = AndroidSystemSettingsReader(context),
                 mediaTool = AndroidMediaTool(context),
+                smsTool = AndroidSmsTool(context, permissionGate),
+                phoneTool = AndroidPhoneTool(context, permissionGate),
+                systemSettingsWriter = AndroidSystemSettingsWriter(context, permissionGate),
+                ringerTool = AndroidRingerTool(context, permissionGate),
                 globalActionPerformer = { action: GlobalAction ->
                     // Re-read rather than closing over the instance above: the user can enable the
                     // service between this runtime being built and the action being performed.

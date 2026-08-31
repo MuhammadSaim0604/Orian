@@ -43,6 +43,12 @@ vi.mock('./automation', () => ({
   getSystemSetting: record('getSystemSetting'),
   controlMedia: record('controlMedia'),
   adjustVolume: record('adjustVolume'),
+  sendSms: record('sendSms'),
+  readSms: record('readSms'),
+  placeCall: record('placeCall'),
+  endCall: record('endCall'),
+  setSystemSetting: record('setSystemSetting'),
+  setRingerMode: record('setRingerMode'),
 }));
 
 const { invokeTool } = await import('./tools');
@@ -153,6 +159,12 @@ describe('dispatch', () => {
       getSystemSetting: { key: 'x' },
       controlMedia: { command: 'play' },
       adjustVolume: { direction: 'up' },
+      sendSms: { phoneNumber: '+447700900123', body: 'x' },
+      readSms: {},
+      placeCall: { phoneNumber: '+447700900123' },
+      endCall: {},
+      setSystemSetting: { key: 'screen_brightness', value: '128' },
+      setRingerMode: { mode: 'silent' },
     };
 
     for (const name of TOOL_NAMES) {

@@ -373,8 +373,47 @@ class AutomationModule(
             }
     }
 
-    // --- event channel ----------------------------------------------------
+    // --- messaging and calls ----------------------------------------------
 
+    @ReactMethod
+    fun sendSms(
+        phoneNumber: String,
+        body: String,
+        promise: Promise,
+    ) = dispatch(promise) { it.sendSms(phoneNumber, body) }
+
+    @ReactMethod
+    fun readSms(
+        limit: Double,
+        fromNumber: String,
+        promise: Promise,
+    ) = dispatch(promise) { it.readSms(limit.toInt(), fromNumber) }
+
+    @ReactMethod
+    fun placeCall(
+        phoneNumber: String,
+        promise: Promise,
+    ) = dispatch(promise) { it.placeCall(phoneNumber) }
+
+    @ReactMethod
+    fun endCall(promise: Promise) = dispatch(promise) { it.endCall() }
+
+    // --- device configuration ---------------------------------------------
+
+    @ReactMethod
+    fun setSystemSetting(
+        key: String,
+        value: String,
+        promise: Promise,
+    ) = dispatch(promise) { it.setSystemSetting(key, value) }
+
+    @ReactMethod
+    fun setRingerMode(
+        mode: String,
+        promise: Promise,
+    ) = dispatch(promise) { it.setRingerMode(mode) }
+
+    // --- event channel ----------------------------------------------------
     @ReactMethod
     fun startUiTreeUpdates(
         throttleMs: Double,

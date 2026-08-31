@@ -43,6 +43,10 @@ class AndroidPermissionGate(
             SensitiveCapability.SCREEN_CAPTURE -> hasScreenCaptureSession()
             SensitiveCapability.FOREGROUND_SERVICE -> hasRuntimePermission(capability.permission)
             SensitiveCapability.CONTACTS -> hasRuntimePermission(capability.permission)
+            SensitiveCapability.SMS -> hasRuntimePermission(capability.permission)
+            SensitiveCapability.PHONE -> hasRuntimePermission(capability.permission)
+            SensitiveCapability.WRITE_SETTINGS -> canWriteSettings()
+            SensitiveCapability.DO_NOT_DISTURB -> hasNotificationPolicyAccess()
         }
 
     private fun hasRuntimePermission(permission: String): Boolean =
@@ -175,6 +179,39 @@ class AndroidPermissionGate(
             AppOpsManager.MODE_DEFAULT -> hasRuntimePermission(SensitiveCapability.USAGE_ACCESS.permission)
             else -> false
         }
+    }
+
+    /**
+     * Whether the app may change system settings.
+     *
+     * `Settings.System.canWrite` rather than `checkSelfPermission`: `WRITE_SETTINGS` is a special access
+     * grant held per app in its own settings screen, and the permission check returns granted merely
+     * because the manifest declares it. Same class of false positive as usage access.
+     */
+    private fun canWriteSettings(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            runCatching { Settings.System.canWrite(context) }.getOrDefault(false)
+        } else {
+            // Below API 23 it is an ordinary install-time permission.
+            hasRuntimePermission(SensitiveCapability.WRITE_SETTINGS.permission)
+        }
+
+    /**
+     * Whether the app may change Do Not Disturb, and therefore the ringer mode.
+     *
+     * Asked of `NotificationManager` rather than the package manager, because the grant is a policy
+     * exemption the user gives on a dedicated screen. Without it `setRingerMode` throws a
+     * `SecurityException` when moving to silent or vibrate - and only for those two, which is exactly the
+     * kind of partial failure that reads as a broken tool.
+     */
+    private fun hasNotificationPolicyAccess(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
+
+        val manager =
+            context.getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager
+                ?: return false
+
+        return runCatching { manager.isNotificationPolicyAccessGranted }.getOrDefault(false)
     }
 
     private companion object {

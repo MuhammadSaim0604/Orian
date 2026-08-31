@@ -87,3 +87,33 @@ data class CurrentScreen(
 ) {
     val isKnown: Boolean get() = !packageName.isNullOrBlank()
 }
+
+/**
+ * One text message.
+ *
+ * Only what a task needs: who, what, when, and which direction. Deliberately no thread id, no read state,
+ * no attachment metadata — an agent asked to find a verification code or reply to someone needs none of it,
+ * and every extra field is more of the user's private data crossing the bridge and potentially reaching a
+ * model.
+ */
+data class SmsMessage(
+    /** The other party's number. For an outgoing message, the recipient. */
+    val address: String,
+    val body: String,
+    val receivedAtEpochMs: Long,
+    /** True when the user sent it rather than received it. */
+    val isOutgoing: Boolean = false,
+) {
+    /**
+     * A short preview, for logs and confirmation prompts.
+     *
+     * Truncated because message bodies end up in places a full one should not: a notification, a
+     * confirmation dialog, a log line.
+     */
+    fun preview(maxLength: Int = PREVIEW_LENGTH): String =
+        if (body.length <= maxLength) body else body.take(maxLength - 1) + "\u2026"
+
+    private companion object {
+        const val PREVIEW_LENGTH = 60
+    }
+}

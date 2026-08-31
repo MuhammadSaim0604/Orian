@@ -1,3 +1,7 @@
+import {
+  isAvailable as isAutomationAvailable,
+  requestScreenCaptureConsent,
+} from '@mobile-automation/native-automation';
 import { NativeEventEmitter, NativeModules } from 'react-native';
 
 /**
@@ -22,6 +26,10 @@ export const CAPABILITY_IDS = [
   'screen_capture',
   'contacts',
   'exact_alarm',
+  'sms',
+  'phone',
+  'write_settings',
+  'do_not_disturb',
 ] as const;
 
 export type CapabilityId = (typeof CAPABILITY_IDS)[number];
@@ -172,6 +180,34 @@ export const openSettingsFor = async (id: CapabilityId): Promise<boolean> => {
     return await native.openSettingsFor(id);
   } catch {
     return false;
+  }
+};
+
+/**
+ * Runs the MediaProjection consent flow.
+ *
+ * Screen capture is the one capability the permissions module cannot grant. Its consent is a per-session
+ * activity result, and that plumbing lives on `AutomationModule` — so `requestCapability` resolves
+ * `session_consent` to say "not mine, use the other flow".
+ *
+ * That answer was being treated as a completed request, which is why the tools page toggle appeared to do
+ * nothing: it asked, was told where to go, and stopped. This is the other half.
+ *
+ * Reported as a `RequestOutcome` like any other so callers need no special case: granted, denied when the
+ * user dismissed the dialog, unsupported when the native module is absent or the projection could not be
+ * created after consent — which is a real outcome on API 34+, where a foreground service has to start
+ * first.
+ */
+export const requestScreenCaptureSession = async (): Promise<RequestOutcome> => {
+  if (!isAutomationAvailable()) return 'unsupported';
+
+  try {
+    return (await requestScreenCaptureConsent()) ? 'granted' : 'denied';
+  } catch {
+    // The consent dialog could not be shown, or consent was accepted and the projection still could not
+    // be created. Either way it is not a refusal, and reporting it as one would tell the user they said
+    // no when they said yes.
+    return 'unsupported';
   }
 };
 

@@ -1,6 +1,7 @@
 package com.mobileautomation.automation
 
 import com.mobileautomation.tools.MediaCommand
+import com.mobileautomation.tools.RingerMode
 import com.mobileautomation.tools.VolumeDirection
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -51,6 +52,12 @@ class DeviceToolParityTest {
             "getSystemSetting",
             "controlMedia",
             "adjustVolume",
+            "sendSms",
+            "readSms",
+            "placeCall",
+            "endCall",
+            "setSystemSetting",
+            "setRingerMode",
         )
 
     @Test
@@ -120,5 +127,36 @@ class DeviceToolParityTest {
         assertEquals(MediaCommand.PLAY_PAUSE, MediaCommand.fromName("Play_Pause"))
         assertEquals(VolumeDirection.UP, VolumeDirection.fromName("up"))
         assertEquals(null, MediaCommand.fromName("moonwalk"))
+    }
+
+    @Test
+    fun `messaging and call tools are part of the tool surface`() {
+        assertTrue(DeviceTool.toolNames.containsAll(listOf("sendSms", "readSms", "placeCall", "endCall")))
+    }
+
+    @Test
+    fun `device configuration tools are part of the tool surface`() {
+        assertTrue(DeviceTool.toolNames.containsAll(listOf("setSystemSetting", "setRingerMode")))
+    }
+
+    @Test
+    fun `ringer modes match the tool sdk enum`() {
+        // Mirrors RINGER_MODES in packages/tool-sdk/src/arguments.ts. A mode the model can name but the
+        // runtime cannot parse would fail validation-free, deep in the tool call.
+        assertEquals(listOf("normal", "vibrate", "silent"), RingerMode.names)
+    }
+
+    @Test
+    fun `only silent and vibrate need do not disturb access`() {
+        // Returning a phone to normal should never be the call that fails for want of a permission.
+        assertTrue(RingerMode.SILENT.requiresPolicyAccess)
+        assertTrue(RingerMode.VIBRATE.requiresPolicyAccess)
+        assertTrue(!RingerMode.NORMAL.requiresPolicyAccess)
+    }
+
+    @Test
+    fun `ringer mode names resolve case-insensitively`() {
+        assertEquals(RingerMode.VIBRATE, RingerMode.fromName("Vibrate"))
+        assertEquals(null, RingerMode.fromName("loud"))
     }
 }

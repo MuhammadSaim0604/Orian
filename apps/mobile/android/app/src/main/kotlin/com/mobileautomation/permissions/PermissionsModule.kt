@@ -313,11 +313,20 @@ class PermissionsModule(
         const val RESULT_SESSION_CONSENT = "session_consent"
         const val RESULT_UNSUPPORTED = "unsupported"
 
-        /** Settings pages that can be scoped to one app with a package URI. */
+        /**
+         * Settings pages that can be scoped to one app with a package URI.
+         *
+         * Named rather than applied to every action, because the pages that ignore the data URI are fine
+         * with it while a few refuse to open at all — the accessibility and assistant lists among them, so
+         * a blanket hint would break the two most important grants.
+         */
         private val PACKAGE_SCOPED_ACTIONS =
             setOf(
                 "android.settings.action.MANAGE_OVERLAY_PERMISSION",
                 "android.settings.REQUEST_SCHEDULE_EXACT_ALARM",
+                // Without the package this lands on the device-wide "Modify system settings" list and the
+                // user has to find this app in it.
+                "android.settings.action.MANAGE_WRITE_SETTINGS",
             )
     }
 }

@@ -16,13 +16,19 @@ import com.mobileautomation.tools.MediaCommand
 import com.mobileautomation.tools.MediaTool
 import com.mobileautomation.tools.MissingPermissionException
 import com.mobileautomation.tools.NotificationTool
+import com.mobileautomation.tools.PhoneTool
+import com.mobileautomation.tools.RingerMode
+import com.mobileautomation.tools.RingerTool
 import com.mobileautomation.tools.SensitiveCapability
+import com.mobileautomation.tools.SmsTool
 import com.mobileautomation.tools.SystemSettingsReader
+import com.mobileautomation.tools.SystemSettingsWriter
 import com.mobileautomation.tools.VolumeDirection
 import com.mobileautomation.tools.model.AlarmRequest
 import com.mobileautomation.tools.model.Contact
 import com.mobileautomation.tools.model.CurrentScreen
 import com.mobileautomation.tools.model.InstalledApp
+import com.mobileautomation.tools.model.SmsMessage
 
 /**
  * Fakes for every capability the runtime composes.
@@ -229,4 +235,111 @@ class FakeMediaTool(
         volumeChanges.add(direction)
         return volumeSucceeds
     }
+}
+
+/**
+ * Records sends and returns scripted messages.
+ *
+ * [permitted] models the permission rather than a `PermissionGate`, because what the runtime has to get
+ * right is turning a `MissingPermissionException` into a typed error - so the fake throws the real
+ * exception the real tool throws.
+ */
+class FakeSmsTool(
+    var permitted: Boolean = true,
+    var sendSucceeds: Boolean = true,
+    private val messages: List<SmsMessage> = emptyList(),
+) : SmsTool {
+    val sent = mutableListOf<Pair<String, String>>()
+    val reads = mutableListOf<Pair<Int, String?>>()
+
+    override fun sendSms(
+        phoneNumber: String,
+        body: String,
+    ): Boolean {
+        if (!permitted) throw MissingPermissionException(SensitiveCapability.SMS)
+        sent.add(phoneNumber to body)
+        return sendSucceeds
+    }
+
+    override fun readRecentSms(
+        limit: Int,
+        fromNumber: String?,
+    ): List<SmsMessage> {
+        if (!permitted) throw MissingPermissionException(SensitiveCapability.SMS)
+        reads.add(limit to fromNumber)
+        return messages
+    }
+}
+
+class FakePhoneTool(
+    var permitted: Boolean = true,
+    var callSucceeds: Boolean = true,
+    var dialerSucceeds: Boolean = true,
+    var endSucceeds: Boolean = true,
+    override var isCallInProgress: Boolean = false,
+) : PhoneTool {
+    val calls = mutableListOf<String>()
+    val dialed = mutableListOf<String>()
+    var endedCalls: Int = 0
+        private set
+
+    override fun placeCall(phoneNumber: String): Boolean {
+        if (!permitted) throw MissingPermissionException(SensitiveCapability.PHONE)
+        calls.add(phoneNumber)
+        return callSucceeds
+    }
+
+    override fun openDialer(phoneNumber: String): Boolean {
+        // Deliberately ungated: the no-permission fallback is the whole reason this exists.
+        dialed.add(phoneNumber)
+        return dialerSucceeds
+    }
+
+    override fun endCall(): Boolean {
+        if (!permitted) throw MissingPermissionException(SensitiveCapability.PHONE)
+        endedCalls++
+        return endSucceeds
+    }
+}
+
+class FakeSystemSettingsWriter(
+    var permitted: Boolean = true,
+    var writeSucceeds: Boolean = true,
+    private val allowed: Set<String> = setOf("screen_brightness", "screen_off_timeout"),
+) : SystemSettingsWriter {
+    val writes = mutableListOf<Pair<String, String>>()
+
+    override fun putSystemSetting(
+        key: String,
+        value: String,
+    ): Boolean {
+        if (!permitted) throw MissingPermissionException(SensitiveCapability.WRITE_SETTINGS)
+        require(key in allowed) { "$key is not a writable setting" }
+        writes.add(key to value)
+        return writeSucceeds
+    }
+
+    override fun writableKeys(): List<String> = allowed.toList()
+}
+
+class FakeRingerTool(
+    var permitted: Boolean = true,
+    var setSucceeds: Boolean = true,
+    private var current: RingerMode? = RingerMode.NORMAL,
+) : RingerTool {
+    val modes = mutableListOf<RingerMode>()
+
+    override fun setRingerMode(mode: RingerMode): Boolean {
+        // Only silent and vibrate need policy access, mirroring the real tool - a phone being returned to
+        // normal should never fail for want of a permission.
+        if (mode.requiresPolicyAccess && !permitted) {
+            throw MissingPermissionException(SensitiveCapability.DO_NOT_DISTURB)
+        }
+
+        modes.add(mode)
+        if (setSucceeds) current = mode
+        return setSucceeds
+    }
+
+    override fun currentRingerMode(): RingerMode? = current
 }

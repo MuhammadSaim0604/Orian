@@ -6,14 +6,17 @@ import NativeAutomation, { type Spec } from './spec/NativeAutomation';
 import {
   type AlarmRequest,
   type AutomationStatus,
+  type CallResult,
   type Contact,
   type CurrentScreen,
   type InstalledApp,
   type IntentRequest,
   type MediaCommand,
   type ResolvedElement,
+  type RingerMode,
   type Screenshot,
   type Selector,
+  type SmsMessage,
   type SwipeDirection,
   type UiTree,
   type VolumeDirection,
@@ -274,6 +277,55 @@ export const controlMedia = async (command: MediaCommand): Promise<void> =>
 export const adjustVolume = async (direction: VolumeDirection): Promise<void> =>
   call(() => requireModule().adjustVolume(direction));
 
+// --- messaging and calls -----------------------------------------------
+
+/**
+ * Sends a text message.
+ *
+ * Sends it, rather than opening the user's messaging app pre-filled. That distinction is the whole
+ * reason this needs a dangerous permission: an agent asked to text someone must not leave an unsent
+ * draft and report success.
+ */
+export const sendSms = async (phoneNumber: string, body: string): Promise<void> =>
+  call(() => requireModule().sendSms(phoneNumber, body));
+
+/**
+ * Recent messages, newest first.
+ *
+ * @param fromNumber only messages involving this number, matched on trailing digits so formatting need
+ *   not match. Omit for all recent messages.
+ */
+export const readSms = async (limit = 10, fromNumber?: string): Promise<SmsMessage[]> =>
+  callParsing('messages', () => requireModule().readSms(limit, fromNumber ?? ''));
+
+/**
+ * Calls a number.
+ *
+ * **Check the outcome.** Without the call permission this degrades to opening the dialer pre-filled,
+ * which is a better result than refusing but is not a placed call — and telling the user their call was
+ * made when it is sitting on screen waiting for a tap would be worse than either.
+ */
+export const placeCall = async (phoneNumber: string): Promise<CallResult> =>
+  callParsing('a call result', () => requireModule().placeCall(phoneNumber));
+
+export const endCall = async (): Promise<void> => call(() => requireModule().endCall());
+
+// --- device configuration ----------------------------------------------
+
+/**
+ * Changes a system setting.
+ *
+ * Only the allowlisted keys, which is enforced natively as well as by the tool schema: the caller is a
+ * model inferring a key name from a sentence, and `Settings.System` holds keys that make parts of the
+ * device unusable when written badly.
+ */
+export const setSystemSetting = async (key: string, value: string): Promise<void> =>
+  call(() => requireModule().setSystemSetting(key, value));
+
+/** Sets the ringer to normal, vibrate, or silent. */
+export const setRingerMode = async (mode: RingerMode): Promise<void> =>
+  call(() => requireModule().setRingerMode(mode));
+
 // --- foreground service ------------------------------------------------
 
 /**
@@ -392,6 +444,12 @@ export const automation = {
   getSystemSetting,
   controlMedia,
   adjustVolume,
+  sendSms,
+  readSms,
+  placeCall,
+  endCall,
+  setSystemSetting,
+  setRingerMode,
   startAutomationService,
   stopAutomationService,
   addAutomationListener,

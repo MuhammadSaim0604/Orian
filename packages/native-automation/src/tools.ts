@@ -6,6 +6,7 @@ import {
   click,
   controlMedia,
   createAlarm,
+  endCall,
   findContacts,
   findElement,
   getContacts,
@@ -17,10 +18,15 @@ import {
   longPress,
   openApp,
   openAppByName,
+  placeCall,
   pressBack,
   pressHome,
   readClipboard,
+  readSms,
   sendNotification,
+  sendSms,
+  setRingerMode,
+  setSystemSetting,
   swipe,
   takeScreenshot,
   typeText,
@@ -29,6 +35,7 @@ import {
 } from './automation';
 import {
   type MediaCommand,
+  type RingerMode,
   type Selector,
   type SwipeDirection,
   type VolumeDirection,
@@ -156,6 +163,28 @@ export const invokeTool = async (tool: string, args: ToolArguments): Promise<unk
 
     case 'adjustVolume':
       return adjustVolume(args.direction as VolumeDirection);
+
+    // --- messaging and calls ---------------------------------------------
+
+    case 'sendSms':
+      return sendSms(args.phoneNumber as string, args.body as string);
+
+    case 'readSms':
+      return readSms(args.limit as number | undefined, args.fromNumber as string | undefined);
+
+    case 'placeCall':
+      return placeCall(args.phoneNumber as string);
+
+    case 'endCall':
+      return endCall();
+
+    // --- device configuration --------------------------------------------
+
+    case 'setSystemSetting':
+      return setSystemSetting(args.key as string, args.value as string);
+
+    case 'setRingerMode':
+      return setRingerMode(args.mode as RingerMode);
 
     default:
       throw new Error(

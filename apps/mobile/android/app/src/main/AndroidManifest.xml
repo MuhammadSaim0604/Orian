@@ -70,6 +70,50 @@
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
 
     <!--
+      Sending and reading text messages, so a task such as "text Robert that I am
+      running late" sends rather than leaving a draft in the messaging app.
+
+      One permission group as far as the runtime dialog is concerned: asking for
+      either shows the same "Send and view SMS messages" prompt, which is why the
+      capability registry models them as one capability rather than two toggles the
+      platform cannot honour separately.
+    -->
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-permission android:name="android.permission.READ_SMS" />
+
+    <!--
+      Placing a call directly, rather than opening the dialer pre-filled and waiting
+      for a tap. Requested at the moment of use, with a rationale that says plainly
+      that it dials without confirming.
+
+      ANSWER_PHONE_CALLS is what allows TelecomManager.endCall from API 28; READ_PHONE_STATE
+      is how the tool knows whether a call is already in progress before dialling over it.
+    -->
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+    <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+
+    <!--
+      Changing system settings such as brightness and screen timeout. A special
+      access grant held per app on its own settings screen, not a runtime dialog -
+      `Settings.System.canWrite` is the only correct way to read it, since
+      `checkSelfPermission` returns granted merely because of this declaration.
+
+      The writable set is an allowlist in AndroidSystemSettingsWriter; a model
+      inferring a key name from a sentence cannot know which keys are safe.
+    -->
+    <uses-permission android:name="android.permission.WRITE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+
+    <!--
+      Switching the phone to silent or vibrate. Android treats this as Do Not Disturb
+      policy access: `setRingerMode` succeeds for normal without it and throws a
+      SecurityException for the other two, which is exactly the sort of partial
+      failure that reads as a broken tool.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+
+    <!--
       Lets the app resolve and open other apps by package name. Without this,
       queryable packages are limited on API 30+ and listApps/openApp would see
       almost nothing.

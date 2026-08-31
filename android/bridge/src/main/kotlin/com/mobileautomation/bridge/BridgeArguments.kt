@@ -5,6 +5,7 @@ import com.mobileautomation.accessibility.selector.Selector
 import com.mobileautomation.gestures.SwipeDirection
 import com.mobileautomation.tools.IntentRequest
 import com.mobileautomation.tools.MediaCommand
+import com.mobileautomation.tools.RingerMode
 import com.mobileautomation.tools.VolumeDirection
 import com.mobileautomation.tools.model.AlarmRequest
 
@@ -123,6 +124,12 @@ object BridgeArguments {
     fun parseVolumeDirection(value: String): VolumeDirection =
         VolumeDirection.fromName(value)
             ?: throw MalformedArgument("unknown volume direction \"$value\"; expected up or down")
+
+    fun parseRingerMode(value: String): RingerMode =
+        RingerMode.fromName(value)
+            ?: throw MalformedArgument(
+                "unknown ringer mode \"$value\"; expected one of ${RingerMode.names.joinToString()}",
+            )
 
     private fun parseBoundsFields(fields: JsonReader.Fields): Bounds =
         Bounds(

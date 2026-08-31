@@ -31,6 +31,12 @@ export const TOOL_NAMES = [
   'getSystemSetting',
   'controlMedia',
   'adjustVolume',
+  'sendSms',
+  'readSms',
+  'placeCall',
+  'endCall',
+  'setSystemSetting',
+  'setRingerMode',
 ] as const;
 
 export type ToolName = (typeof TOOL_NAMES)[number];

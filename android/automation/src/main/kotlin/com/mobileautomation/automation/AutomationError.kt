@@ -63,17 +63,32 @@ sealed interface AutomationError {
         override val message = "Gesture failed: $detail"
     }
 
-    /** The foreground window is `FLAG_SECURE`; no retry will ever succeed. */
+    /**
+     * Repeated black frames, which usually means `FLAG_SECURE` - but not certainly.
+     *
+     * The platform does not report a secure window; it simply mirrors black pixels. So this is an
+     * **inference from several samples**, and the message says so rather than asserting it as fact.
+     *
+     * That wording matters because it reaches the user through the model. The old message stated flatly
+     * that the app blocks screenshots, and the agent relayed it as certainty - explaining at length that
+     * the app had set a secure window flag - when the real cause had been a blank first frame from a
+     * freshly created VirtualDisplay. It also has to say what to do instead, or the agent treats a
+     * screenshot failure as the end of the task rather than as one perception route being closed.
+     */
     data object SecureScreen : AutomationError {
         override val code = "secure_screen"
         override val message =
-            "This app blocks screenshots, so the screen cannot be captured"
+            "The screen came back blank several times, which usually means this app blocks " +
+                "screen capture. Read the screen with getUiTree instead - the element hierarchy " +
+                "is available even when images are not."
     }
 
     /** Screen-capture consent has not been granted for this session. */
     data object CaptureConsentRequired : AutomationError {
         override val code = "capture_consent_required"
-        override val message = "Screen capture needs your permission for this session"
+        override val message =
+            "Screen capture needs the user's permission for this session. Ask them to allow it in " +
+                "settings, or read the screen with getUiTree instead."
         override val needsUserAction = true
     }
 

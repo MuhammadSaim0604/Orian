@@ -94,6 +94,57 @@ enum class SensitiveCapability(
         tier = CapabilityTier.OPTIONAL,
         grant = GrantMechanism.SETTINGS_SCREEN,
     ),
+
+    /**
+     * Sending and reading text messages.
+     *
+     * One capability rather than two, because `SEND_SMS` and `READ_SMS` are one permission group as far
+     * as the runtime dialog is concerned: asking for either shows the same "Send and view SMS messages"
+     * prompt, so presenting them as separate toggles would imply a choice the platform does not offer.
+     */
+    SMS(
+        permission = "android.permission.SEND_SMS",
+        tier = CapabilityTier.OPTIONAL,
+        grant = GrantMechanism.RUNTIME_PROMPT,
+    ),
+
+    /**
+     * Placing and ending phone calls.
+     *
+     * `CALL_PHONE` dials without a confirmation screen, which is the point - an agent that opened the
+     * dialer pre-filled and waited would not have completed the task. It is also why this is optional and
+     * asked for at the moment it is needed.
+     */
+    PHONE(
+        permission = "android.permission.CALL_PHONE",
+        tier = CapabilityTier.OPTIONAL,
+        grant = GrantMechanism.RUNTIME_PROMPT,
+    ),
+
+    /**
+     * Changing system settings such as brightness or screen timeout.
+     *
+     * A special access grant rather than a runtime permission: `WRITE_SETTINGS` is held per app in a
+     * dedicated settings screen, so `checkSelfPermission` is not the way to read it and there is no
+     * dialog to show.
+     */
+    WRITE_SETTINGS(
+        permission = "android.permission.WRITE_SETTINGS",
+        tier = CapabilityTier.OPTIONAL,
+        grant = GrantMechanism.SETTINGS_SCREEN,
+    ),
+
+    /**
+     * Changing the ringer mode, including silencing the phone.
+     *
+     * Silent and vibrate are behind Do Not Disturb policy access from API 23 - `setRingerMode` throws
+     * without it - so the capability is that access rather than a permission the app can simply hold.
+     */
+    DO_NOT_DISTURB(
+        permission = "android.permission.ACCESS_NOTIFICATION_POLICY",
+        tier = CapabilityTier.OPTIONAL,
+        grant = GrantMechanism.SETTINGS_SCREEN,
+    ),
     ;
 
     /** True when the user must leave the app to grant this. */

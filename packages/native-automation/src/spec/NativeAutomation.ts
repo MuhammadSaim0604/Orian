@@ -153,6 +153,50 @@ export interface Spec extends TurboModule {
   /** @param direction `up` or `down`. */
   adjustVolume(direction: string): Promise<void>;
 
+  // --- messaging and calls ----------------------------------------------
+
+  /**
+   * Sends a text message immediately.
+   *
+   * Not an intent to the user's messaging app: that would open a compose screen and
+   * wait for a human, so an agent would leave an unsent draft and report success.
+   */
+  sendSms(phoneNumber: string, body: string): Promise<void>;
+
+  /**
+   * Recent messages as a JSON `SmsMessage[]`, newest first.
+   *
+   * @param fromNumber empty means any number. The spec cannot express an optional
+   *   string, so the absence has to be encoded as a value.
+   */
+  readSms(limit: number, fromNumber: string): Promise<string>;
+
+  /**
+   * Calls a number, as a JSON `CallResult`.
+   *
+   * Resolves with `calling` or `dialer_opened` - the second when the call permission
+   * is missing, which degrades to opening the dialer rather than failing. The caller
+   * must not report the second as a placed call.
+   */
+  placeCall(phoneNumber: string): Promise<string>;
+
+  /** Ends the call in progress. Needs API 28+. */
+  endCall(): Promise<void>;
+
+  // --- device configuration ---------------------------------------------
+
+  /**
+   * Writes a system setting.
+   *
+   * Only the allowlisted keys; anything else rejects with the list. Values cross as
+   * strings because that is how settings are stored, and numeric keys are coerced
+   * natively.
+   */
+  setSystemSetting(key: string, value: string): Promise<void>;
+
+  /** @param mode one of the `RINGER_MODES` values. */
+  setRingerMode(mode: string): Promise<void>;
+
   // --- foreground service -----------------------------------------------
 
   /**

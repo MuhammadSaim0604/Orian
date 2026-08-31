@@ -147,7 +147,8 @@ export const TOOL_DEFINITIONS: { readonly [K in ToolName]: ToolDefinition<K> } =
     'takeScreenshot',
     'Capture the screen as an image. Only useful when the element hierarchy is not ' +
       'enough - for example a canvas or an image-only screen. Requires the user to ' +
-      'have granted screen capture.',
+      'have granted screen capture. If it fails, fall back to getUiTree rather than ' +
+      'giving up: the element hierarchy is available even when images are not.',
     'A file path to the image, its size, and when it was taken.',
     'read',
     true,
@@ -269,6 +270,65 @@ export const TOOL_DEFINITIONS: { readonly [K in ToolName]: ToolDefinition<K> } =
     'Nudge the media volume one step up or down.',
     'Nothing.',
     'interact',
+    false,
+  ),
+
+  sendSms: define(
+    'sendSms',
+    'Send a text message. This sends it immediately - it does not open a messaging ' +
+      'app for the user to confirm. Use findContacts first if you have a name rather ' +
+      'than a number.',
+    'Nothing. The message was sent if the call succeeded.',
+    // `write` rather than `interact`: it leaves the device and reaches another person.
+    'write',
+    false,
+  ),
+
+  readSms: define(
+    'readSms',
+    'Read recent text messages, newest first. Use this to find a verification code ' +
+      'or see what someone said. Pass fromNumber to read one conversation.',
+    'Messages with the other party\u2019s number, the text, when it arrived, and whether ' +
+      'it was sent or received.',
+    'read',
+    true,
+  ),
+
+  placeCall: define(
+    'placeCall',
+    'Call a phone number. If the user has not allowed calling, this opens the dialer ' +
+      'with the number filled in instead - check the returned outcome before telling ' +
+      'the user the call was made.',
+    'Either "calling" or "dialer_opened". The second means the user still has to press call.',
+    'write',
+    false,
+  ),
+
+  endCall: define(
+    'endCall',
+    'Hang up the call in progress. Needs Android 9 or later.',
+    'Nothing.',
+    'write',
+    false,
+  ),
+
+  setSystemSetting: define(
+    'setSystemSetting',
+    'Change a device setting: screen brightness, brightness mode, screen timeout, or ' +
+      'auto-rotate. Only those four can be changed. Brightness is 0-255, and setting ' +
+      'it has no lasting effect while screen_brightness_mode is 1 (automatic) - set ' +
+      'the mode to 0 first.',
+    'Nothing.',
+    'system',
+    false,
+  ),
+
+  setRingerMode: define(
+    'setRingerMode',
+    'Set the phone to normal, vibrate, or silent. Silent and vibrate need Do Not ' +
+      'Disturb access; returning to normal never does.',
+    'Nothing.',
+    'system',
     false,
   ),
 };

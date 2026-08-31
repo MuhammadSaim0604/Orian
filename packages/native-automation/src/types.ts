@@ -175,6 +175,37 @@ export const VOLUME_DIRECTIONS = ['up', 'down'] as const;
 
 export type VolumeDirection = (typeof VOLUME_DIRECTIONS)[number];
 
+export const RINGER_MODES = ['normal', 'vibrate', 'silent'] as const;
+
+export type RingerMode = (typeof RINGER_MODES)[number];
+
+/**
+ * One text message.
+ *
+ * Only what a task needs: who, what, when, and which direction. No thread id, no read state, no
+ * attachment metadata — an agent asked to find a verification code needs none of it, and every extra
+ * field is more of the user's private data crossing the bridge and potentially reaching a model.
+ */
+export type SmsMessage = {
+  /** The other party's number. For an outgoing message, the recipient. */
+  readonly address: string;
+  readonly body: string;
+  readonly receivedAtEpochMs: number;
+  readonly isOutgoing: boolean;
+};
+
+/**
+ * What happened when a call was requested.
+ *
+ * Not a boolean, because "the dialer is open with the number in it" and "the phone is ringing them" are
+ * different enough that the agent must not confuse them. The first still needs the user to press a
+ * button, and reporting it as a placed call would have the agent tell someone their call was made when
+ * it was not.
+ */
+export type CallResult = {
+  readonly outcome: 'calling' | 'dialer_opened';
+};
+
 /** An alarm to create. Validated on the Kotlin side as well. */
 export type AlarmRequest = {
   hour: number;

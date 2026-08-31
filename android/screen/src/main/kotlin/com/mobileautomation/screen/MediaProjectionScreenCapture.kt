@@ -12,6 +12,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
@@ -98,24 +99,54 @@ class MediaProjectionScreenCapture(
 
     private suspend fun captureFrame(activeProjection: MediaProjection): CaptureResult {
         val reader = ensureReader()
+        val displayWasFresh = virtualDisplay == null
 
         ensureVirtualDisplay(activeProjection, reader)
 
-        val image =
-            withTimeoutOrNull(FRAME_TIMEOUT_MS) { awaitImage(reader) }
-                ?: return CaptureResult.Failed("No frame arrived within ${FRAME_TIMEOUT_MS}ms")
+        // A freshly created VirtualDisplay produces one or more blank frames while the mirror initialises,
+        // and a genuinely secure window produces black frames forever. Those are indistinguishable from a
+        // single sample, so the only honest way to tell them apart is to look again.
+        //
+        // This was a real defect: the first capture of a session reported `SecureWindow`, the agent was told
+        // "this app blocks screenshots", and it relayed that to the user as fact about an app that blocks
+        // nothing. Retrying costs a few hundred milliseconds on a path that is already slow, and only on the
+        // frames that look black.
+        val attempts = if (displayWasFresh) BLACK_FRAME_ATTEMPTS else BLACK_FRAME_ATTEMPTS_WARM
 
-        return try {
-            val bitmap = image.toBitmap()
-            if (bitmap.isEntirelyBlack()) {
-                // A secure window yields black frames rather than an error, so
-                // this is the only way to detect it.
-                CaptureResult.SecureWindow
-            } else {
-                CaptureResult.Success(writeToStore(bitmap))
-            }
-        } finally {
-            image.close()
+        var sawBlackFrame = false
+
+        repeat(attempts) { attempt ->
+            if (attempt > 0) delay(BLACK_FRAME_RETRY_DELAY_MS)
+
+            val image =
+                withTimeoutOrNull(FRAME_TIMEOUT_MS) { awaitImage(reader) }
+                    ?: return CaptureResult.Failed("No frame arrived within ${FRAME_TIMEOUT_MS}ms")
+
+            val outcome =
+                try {
+                    val bitmap = image.toBitmap()
+
+                    if (bitmap.isEntirelyBlack()) {
+                        bitmap.recycle()
+                        sawBlackFrame = true
+                        null
+                    } else {
+                        CaptureResult.Success(writeToStore(bitmap))
+                    }
+                } finally {
+                    image.close()
+                }
+
+            if (outcome != null) return outcome
+        }
+
+        return if (sawBlackFrame) {
+            // Still black after several attempts, so a secure window is the likeliest explanation - but it is
+            // an inference, not something the platform told us, and the message says so. The agent used to
+            // repeat it as certainty.
+            CaptureResult.SecureWindow
+        } else {
+            CaptureResult.Failed("No usable frame was produced")
         }
     }
 
@@ -250,6 +281,25 @@ class MediaProjectionScreenCapture(
         const val FRAME_TIMEOUT_MS = 3_000L
         const val FRAME_POLL_INTERVAL_MS = 16L
         const val MAX_DRAIN_ATTEMPTS = 30
+
+        /**
+         * How many black frames to see before concluding the window is secure.
+         *
+         * Applies to the first capture after the VirtualDisplay is created, which is when the mirror is
+         * still initialising and a blank frame is expected rather than meaningful.
+         */
+        const val BLACK_FRAME_ATTEMPTS = 4
+
+        /**
+         * The same, for a display that has already produced frames.
+         *
+         * Lower because the initialisation excuse no longer applies - but not one, because a screen mid
+         * transition can genuinely be black for a frame.
+         */
+        const val BLACK_FRAME_ATTEMPTS_WARM = 2
+
+        /** Long enough for the mirror to produce a real frame; short enough not to stall a run. */
+        const val BLACK_FRAME_RETRY_DELAY_MS = 120L
 
         /** Sample a 16x16 grid when checking for a black (secure) frame. */
         const val BLACK_SAMPLE_GRID = 16

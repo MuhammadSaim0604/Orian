@@ -151,6 +151,61 @@ data class PermissionRationale(
                             "Without this, you will not see automation results or be able to stop a " +
                                 "run from the notification shade.",
                     )
+
+                SensitiveCapability.SMS ->
+                    PermissionRationale(
+                        capability = capability,
+                        title = "Allow sending and reading text messages",
+                        explanation =
+                            "So a task such as \"text Robert that I am running late\" can send the " +
+                                "message itself, and so it can read a recent message when you ask it to " +
+                                "find a code or reply to someone. Messages are read only when a task " +
+                                "needs them, and nothing is stored.",
+                        consequenceIfDenied =
+                            "Without this, the agent has to open your messaging app and type into it, " +
+                                "which is slower and fails on apps it cannot read.",
+                    )
+
+                SensitiveCapability.PHONE ->
+                    PermissionRationale(
+                        capability = capability,
+                        title = "Allow placing calls",
+                        explanation =
+                            "So \"call Mum\" actually dials rather than opening the dialer and waiting " +
+                                "for you to press the button. The app never places a call unless a task " +
+                                "you started asks it to.",
+                        consequenceIfDenied =
+                            "Without this, the agent can only open the dialer with the number filled in " +
+                                "for you to confirm.",
+                    )
+
+                SensitiveCapability.WRITE_SETTINGS ->
+                    PermissionRationale(
+                        capability = capability,
+                        title = "Allow changing system settings",
+                        explanation =
+                            "So a task can turn the brightness down, extend the screen timeout, or " +
+                                "change other device settings you ask it to. Only the settings a task " +
+                                "names are touched.",
+                        consequenceIfDenied =
+                            "Without this, the agent can read settings but not change them, and has to " +
+                                "navigate the Settings app instead.",
+                        settingsAction = ACTION_WRITE_SETTINGS,
+                    )
+
+                SensitiveCapability.DO_NOT_DISTURB ->
+                    PermissionRationale(
+                        capability = capability,
+                        title = "Allow silencing and un-silencing the phone",
+                        explanation =
+                            "So a task can put your phone on silent or vibrate and set it back " +
+                                "afterwards. Android treats this as Do Not Disturb access, which is why " +
+                                "it is granted on its own screen.",
+                        consequenceIfDenied =
+                            "Without this, the agent can turn the volume up and down but cannot switch " +
+                                "the phone to silent or vibrate.",
+                        settingsAction = ACTION_NOTIFICATION_POLICY,
+                    )
             }
 
         /** Rationale for every sensitive capability, for a permissions overview screen. */
@@ -167,5 +222,16 @@ data class PermissionRationale(
         const val ACTION_ASSISTANT_SETTINGS: String = "android.settings.VOICE_INPUT_SETTINGS"
         const val ACTION_USAGE_ACCESS_SETTINGS: String = "android.settings.USAGE_ACCESS_SETTINGS"
         const val ACTION_EXACT_ALARM_SETTINGS: String = "android.settings.REQUEST_SCHEDULE_EXACT_ALARM"
+
+        /**
+         * Per-app special-access screens.
+         *
+         * `MANAGE_WRITE_SETTINGS` needs this app's package as the intent data or it lands on the
+         * device-wide list and the user has to find us in it - the kind of small friction that makes a
+         * permission screen feel broken. `PermissionsModule` appends the package; the action is declared
+         * here so the decision stays next to the capability that needs it.
+         */
+        const val ACTION_WRITE_SETTINGS: String = "android.settings.action.MANAGE_WRITE_SETTINGS"
+        const val ACTION_NOTIFICATION_POLICY: String = "android.settings.NOTIFICATION_POLICY_ACCESS_SETTINGS"
     }
 }

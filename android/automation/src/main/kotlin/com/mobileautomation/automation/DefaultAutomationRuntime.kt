@@ -26,16 +26,22 @@ import com.mobileautomation.tools.MediaCommand
 import com.mobileautomation.tools.MediaTool
 import com.mobileautomation.tools.MissingPermissionException
 import com.mobileautomation.tools.NotificationTool
+import com.mobileautomation.tools.PhoneTool
+import com.mobileautomation.tools.RingerMode
+import com.mobileautomation.tools.RingerTool
+import com.mobileautomation.tools.SmsTool
 import com.mobileautomation.tools.SystemSettingsReader
+import com.mobileautomation.tools.SystemSettingsWriter
 import com.mobileautomation.tools.VolumeDirection
 import com.mobileautomation.tools.model.AlarmRequest
 import com.mobileautomation.tools.model.Contact
 import com.mobileautomation.tools.model.CurrentScreen
 import com.mobileautomation.tools.model.InstalledApp
+import com.mobileautomation.tools.model.SmsMessage
 import kotlinx.coroutines.delay
 
 /**
- * Joins the five capability modules into the one runtime both engines call.
+ * Joins the capability modules into the one runtime both engines call.
  *
  * Every dependency is injected as an interface, so the whole runtime - including
  * the selector-resolve-then-act sequence that is the heart of the product - is
@@ -58,6 +64,10 @@ class DefaultAutomationRuntime(
     private val intentTool: IntentTool,
     private val systemSettingsReader: SystemSettingsReader,
     private val mediaTool: MediaTool,
+    private val smsTool: SmsTool,
+    private val phoneTool: PhoneTool,
+    private val systemSettingsWriter: SystemSettingsWriter,
+    private val ringerTool: RingerTool,
     private val globalActionPerformer: (GlobalAction) -> Boolean,
     private val selectorResolver: SelectorResolver = SelectorResolver(),
 ) : AutomationRuntime {
@@ -443,6 +453,83 @@ class DefaultAutomationRuntime(
             ToolResult.failure(
                 AutomationError.ToolFailed("adjustVolume", "the audio service rejected the change"),
             )
+        }
+
+    // --- messaging and calls ----------------------------------------------
+
+    override suspend fun sendSms(
+        phoneNumber: String,
+        body: String,
+    ): ToolResult<Unit> =
+        guardingPermissions("sendSms") {
+            if (!smsTool.sendSms(phoneNumber, body)) {
+                error("the message could not be sent; there may be no SIM or no telephony on this device")
+            }
+        }
+
+    override suspend fun readSms(
+        limit: Int,
+        fromNumber: String?,
+    ): ToolResult<List<SmsMessage>> = guardingPermissions("readSms") { smsTool.readRecentSms(limit, fromNumber) }
+
+    /**
+     * Places a call, degrading to the dialer rather than failing.
+     *
+     * The fallback is the substance here. Without the call permission the agent could report the task
+     * impossible - but opening the dialer with the number filled in gets the user one tap from done, which
+     * is a far better outcome than a refusal. [CallOutcome] is what keeps that honest: the agent must be
+     * able to tell the user "the dialer is open" rather than "I called them".
+     */
+    override suspend fun placeCall(phoneNumber: String): ToolResult<CallOutcome> {
+        val placed =
+            guardingPermissions("placeCall") {
+                if (!phoneTool.placeCall(phoneNumber)) error("nothing on this device can place a call")
+            }
+
+        if (placed is ToolResult.Success) return ToolResult.success(CallOutcome.CALLING)
+
+        val error = (placed as ToolResult.Failure).error
+
+        // Only a missing permission degrades. A device with no dialer at all, or a malformed number, is a
+        // real failure and pretending otherwise would hide it.
+        if (error !is AutomationError.PermissionDenied) return ToolResult.Failure(error)
+
+        return if (phoneTool.openDialer(phoneNumber)) {
+            ToolResult.success(CallOutcome.DIALER_OPENED)
+        } else {
+            ToolResult.Failure(error)
+        }
+    }
+
+    override suspend fun endCall(): ToolResult<Unit> =
+        guardingPermissions("endCall") {
+            if (!phoneTool.endCall()) {
+                error("the call could not be ended; this needs Android 9 or later")
+            }
+        }
+
+    // --- device configuration ---------------------------------------------
+
+    override suspend fun setSystemSetting(
+        key: String,
+        value: String,
+    ): ToolResult<Unit> {
+        if (key.isBlank()) {
+            return ToolResult.failure(AutomationError.InvalidArgument("setting key cannot be blank"))
+        }
+
+        return guardingPermissions("setSystemSetting") {
+            if (!systemSettingsWriter.putSystemSetting(key, value)) {
+                error("the system rejected the write of $key")
+            }
+        }
+    }
+
+    override suspend fun setRingerMode(mode: RingerMode): ToolResult<Unit> =
+        guardingPermissions("setRingerMode") {
+            if (!ringerTool.setRingerMode(mode)) {
+                error("the audio service rejected the ringer change")
+            }
         }
 
     // --- helpers ----------------------------------------------------------

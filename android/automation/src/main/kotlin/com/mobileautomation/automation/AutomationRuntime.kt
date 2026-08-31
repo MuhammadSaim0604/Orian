@@ -7,11 +7,13 @@ import com.mobileautomation.gestures.SwipeDirection
 import com.mobileautomation.screen.Screenshot
 import com.mobileautomation.tools.IntentRequest
 import com.mobileautomation.tools.MediaCommand
+import com.mobileautomation.tools.RingerMode
 import com.mobileautomation.tools.VolumeDirection
 import com.mobileautomation.tools.model.AlarmRequest
 import com.mobileautomation.tools.model.Contact
 import com.mobileautomation.tools.model.CurrentScreen
 import com.mobileautomation.tools.model.InstalledApp
+import com.mobileautomation.tools.model.SmsMessage
 
 /**
  * The single entry point to every device capability.
@@ -151,6 +153,52 @@ interface AutomationRuntime {
     /** Nudges the music volume one step. */
     suspend fun adjustVolume(direction: VolumeDirection): ToolResult<Unit>
 
+    // --- messaging and calls ----------------------------------------------
+
+    /**
+     * Sends a text message.
+     *
+     * Sends it, rather than opening a compose screen: an agent that left an unsent draft would have failed
+     * the task it reported success for.
+     */
+    suspend fun sendSms(
+        phoneNumber: String,
+        body: String,
+    ): ToolResult<Unit>
+
+    /** Recent messages, newest first, optionally filtered to one number. */
+    suspend fun readSms(
+        limit: Int = DEFAULT_SMS_LIMIT,
+        fromNumber: String? = null,
+    ): ToolResult<List<SmsMessage>>
+
+    /**
+     * Places a call.
+     *
+     * Dials immediately when the call permission is held. Without it, [placeCall] falls back to opening
+     * the dialer pre-filled and says so in its result, rather than reporting the task impossible.
+     */
+    suspend fun placeCall(phoneNumber: String): ToolResult<CallOutcome>
+
+    /** Ends the call in progress. Needs API 28+. */
+    suspend fun endCall(): ToolResult<Unit>
+
+    // --- device configuration ---------------------------------------------
+
+    /**
+     * Changes a system setting.
+     *
+     * Only the keys the writer allows; anything else is refused with the list, so a model can pick a real
+     * key rather than retrying variations of a guess.
+     */
+    suspend fun setSystemSetting(
+        key: String,
+        value: String,
+    ): ToolResult<Unit>
+
+    /** Sets the ringer to normal, vibrate, or silent. */
+    suspend fun setRingerMode(mode: RingerMode): ToolResult<Unit>
+
     companion object {
         /**
          * Long enough for a screen transition and a network-backed list to appear,
@@ -161,7 +209,29 @@ interface AutomationRuntime {
         const val DEFAULT_SWIPE_FRACTION: Double = 0.8
 
         const val DEFAULT_CONTACT_LIMIT: Int = 200
+
+        /** Enough to find a code or the last thing someone said. */
+        const val DEFAULT_SMS_LIMIT: Int = 10
     }
+}
+
+/**
+ * What happened when a call was requested.
+ *
+ * A result rather than a boolean, because "the dialer is open with the number in it" and "the phone is
+ * ringing them" are different enough that the agent must not confuse them - the first still needs the user
+ * to press a button, and reporting it as a placed call would have the agent tell someone their call was
+ * made when it was not.
+ */
+enum class CallOutcome {
+    /** Dialling now. */
+    CALLING,
+
+    /** The dialer is open, pre-filled, waiting for the user. The call-permission fallback. */
+    DIALER_OPENED,
+    ;
+
+    val wireName: String get() = name.lowercase()
 }
 
 /**

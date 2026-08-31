@@ -98,6 +98,26 @@ export const MEDIA_COMMANDS = [
 
 export const VOLUME_DIRECTIONS = ['up', 'down'] as const;
 
+export const RINGER_MODES = ['normal', 'vibrate', 'silent'] as const;
+
+/**
+ * Settings the agent may change.
+ *
+ * An allowlist, mirroring the Kotlin writer's. `Settings.System` holds keys that make parts of the device
+ * unusable when written badly, and the caller is a model inferring a key from a sentence like "make the
+ * screen dimmer" — it has no way to know which keys are safe, so it is not asked to.
+ *
+ * Enumerated in the schema rather than validated only natively, so a wrong key is rejected *before* the
+ * call with the real list in the error. The model can then pick one instead of retrying variations of the
+ * same guess.
+ */
+export const WRITABLE_SYSTEM_SETTINGS = [
+  'screen_brightness',
+  'screen_brightness_mode',
+  'screen_off_timeout',
+  'accelerometer_rotation',
+] as const;
+
 /**
  * Argument schema per tool.
  *
@@ -212,6 +232,46 @@ export const TOOL_ARGUMENT_SCHEMAS = {
   controlMedia: z.object({ command: z.enum(MEDIA_COMMANDS) }).strict(),
 
   adjustVolume: z.object({ direction: z.enum(VOLUME_DIRECTIONS) }).strict(),
+
+  // --- messaging and calls ----------------------------------------------
+
+  sendSms: z
+    .object({
+      phoneNumber: z.string().min(3),
+      /**
+       * Bounded, and not because the platform demands it.
+       *
+       * Long messages are split into parts and billed per part, so a model that pasted a page of text
+       * into a text message would cost the user real money. Ten parts is generous for anything a person
+       * would actually send.
+       */
+      body: z.string().min(1).max(1_600),
+    })
+    .strict(),
+
+  readSms: z
+    .object({
+      limit: z.number().int().positive().max(50).optional(),
+      /** Only messages involving this number. Matched on trailing digits, so formatting need not match. */
+      fromNumber: z.string().min(3).optional(),
+    })
+    .strict(),
+
+  placeCall: z.object({ phoneNumber: z.string().min(3) }).strict(),
+
+  endCall: z.object({}).strict(),
+
+  // --- device configuration ---------------------------------------------
+
+  setSystemSetting: z
+    .object({
+      key: z.enum(WRITABLE_SYSTEM_SETTINGS),
+      /** A string because settings are stored as strings; numeric keys are coerced natively. */
+      value: z.string().min(1),
+    })
+    .strict(),
+
+  setRingerMode: z.object({ mode: z.enum(RINGER_MODES) }).strict(),
 } as const;
 
 export type ToolArgumentSchemas = typeof TOOL_ARGUMENT_SCHEMAS;

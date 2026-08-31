@@ -2,9 +2,11 @@ package com.mobileautomation.bridge
 
 import com.mobileautomation.accessibility.model.UiTree
 import com.mobileautomation.automation.AutomationRuntime
+import com.mobileautomation.automation.CallOutcome
 import com.mobileautomation.automation.ToolResult
 import com.mobileautomation.tools.model.Contact
 import com.mobileautomation.tools.model.InstalledApp
+import com.mobileautomation.tools.model.SmsMessage
 
 /**
  * The runtime, wrapped so every result is JSON and every failure is a [BridgeErrors.Rejection].
@@ -199,6 +201,42 @@ class AutomationBridge(
         guarding {
             runtime.adjustVolume(BridgeArguments.parseVolumeDirection(direction)).toUnitOutcome()
         }
+
+    // --- messaging and calls ----------------------------------------------
+
+    suspend fun sendSms(
+        phoneNumber: String,
+        body: String,
+    ): Outcome = runtime.sendSms(phoneNumber, body).toUnitOutcome()
+
+    suspend fun readSms(
+        limit: Int,
+        fromNumber: String,
+    ): Outcome =
+        runtime
+            .readSms(
+                limit = limit,
+                // Empty means "any number": the codegen spec cannot express an optional string, so the
+                // absence has to be encoded as a value.
+                fromNumber = fromNumber.takeIf { it.isNotBlank() },
+            ).toOutcome { messages: List<SmsMessage> -> BridgeResults.smsMessagesToJson(messages) }
+
+    suspend fun placeCall(phoneNumber: String): Outcome =
+        runtime.placeCall(phoneNumber).toOutcome { outcome: CallOutcome ->
+            BridgeResults.callOutcomeToJson(outcome)
+        }
+
+    suspend fun endCall(): Outcome = runtime.endCall().toUnitOutcome()
+
+    // --- device configuration ---------------------------------------------
+
+    suspend fun setSystemSetting(
+        key: String,
+        value: String,
+    ): Outcome = runtime.setSystemSetting(key, value).toUnitOutcome()
+
+    suspend fun setRingerMode(mode: String): Outcome =
+        guarding { runtime.setRingerMode(BridgeArguments.parseRingerMode(mode)).toUnitOutcome() }
 
     // --- helpers ----------------------------------------------------------
 

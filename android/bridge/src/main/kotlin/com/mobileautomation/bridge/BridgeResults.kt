@@ -3,11 +3,13 @@ package com.mobileautomation.bridge
 import com.mobileautomation.accessibility.model.Bounds
 import com.mobileautomation.accessibility.model.UiTree
 import com.mobileautomation.accessibility.serialization.UiTreeSerializer
+import com.mobileautomation.automation.CallOutcome
 import com.mobileautomation.automation.ResolvedElement
 import com.mobileautomation.screen.Screenshot
 import com.mobileautomation.tools.model.Contact
 import com.mobileautomation.tools.model.CurrentScreen
 import com.mobileautomation.tools.model.InstalledApp
+import com.mobileautomation.tools.model.SmsMessage
 
 /**
  * Serializes runtime results into the JSON the TypeScript wrapper parses.
@@ -92,6 +94,29 @@ object BridgeResults {
 
     fun contactsToJson(contacts: List<Contact>): String =
         contacts.joinToString(prefix = "[", postfix = "]") { contactToJson(it) }
+
+    fun smsMessageToJson(message: SmsMessage): String =
+        buildJson {
+            string("address", message.address)
+            string("body", message.body)
+            number("receivedAtEpochMs", message.receivedAtEpochMs)
+            boolean("isOutgoing", message.isOutgoing)
+        }
+
+    fun smsMessagesToJson(messages: List<SmsMessage>): String =
+        messages.joinToString(prefix = "[", postfix = "]") { smsMessageToJson(it) }
+
+    /**
+     * A call's outcome.
+     *
+     * An object rather than a bare string, so a field can be added later without changing the shape TS
+     * parses - and `outcome` is named rather than positional because "calling" and "dialer_opened" mean
+     * genuinely different things to the agent.
+     */
+    fun callOutcomeToJson(outcome: CallOutcome): String =
+        buildJson {
+            string("outcome", outcome.wireName)
+        }
 
     fun statusToJson(
         isReady: Boolean,

@@ -54,6 +54,12 @@ describe('tool-sdk', () => {
       'getSystemSetting',
       'controlMedia',
       'adjustVolume',
+      'sendSms',
+      'readSms',
+      'placeCall',
+      'endCall',
+      'setSystemSetting',
+      'setRingerMode',
     ]);
   });
 

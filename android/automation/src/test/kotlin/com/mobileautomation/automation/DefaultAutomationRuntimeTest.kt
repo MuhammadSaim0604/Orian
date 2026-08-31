@@ -16,11 +16,13 @@ import com.mobileautomation.screen.CaptureResult
 import com.mobileautomation.screen.Screenshot
 import com.mobileautomation.tools.IntentRequest
 import com.mobileautomation.tools.MediaCommand
+import com.mobileautomation.tools.RingerMode
 import com.mobileautomation.tools.SensitiveCapability
 import com.mobileautomation.tools.VolumeDirection
 import com.mobileautomation.tools.model.AlarmRequest
 import com.mobileautomation.tools.model.Contact
 import com.mobileautomation.tools.model.InstalledApp
+import com.mobileautomation.tools.model.SmsMessage
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -113,6 +115,10 @@ class DefaultAutomationRuntimeTest {
         val intents: FakeIntentTool,
         val settings: FakeSystemSettingsReader,
         val media: FakeMediaTool,
+        val sms: FakeSmsTool,
+        val phone: FakePhoneTool,
+        val settingsWriter: FakeSystemSettingsWriter,
+        val ringer: FakeRingerTool,
         val globalActions: RecordingGlobalActionPerformer,
         val runtime: DefaultAutomationRuntime,
     )
@@ -126,6 +132,11 @@ class DefaultAutomationRuntimeTest {
         missingContactsPermission: SensitiveCapability? = null,
         settings: Map<String, String> = emptyMap(),
         globalActionsSucceed: Boolean = true,
+        messages: List<SmsMessage> = emptyList(),
+        smsPermitted: Boolean = true,
+        phonePermitted: Boolean = true,
+        writeSettingsPermitted: Boolean = true,
+        ringerPermitted: Boolean = true,
     ): Harness {
         val reader = FakeScreenReader(isAvailable = serviceAvailable, tree = tree)
         val performer = FakeNodeActionPerformer()
@@ -139,6 +150,10 @@ class DefaultAutomationRuntimeTest {
         val intents = FakeIntentTool()
         val settingsReader = FakeSystemSettingsReader(settings)
         val media = FakeMediaTool()
+        val sms = FakeSmsTool(permitted = smsPermitted, messages = messages)
+        val phone = FakePhoneTool(permitted = phonePermitted)
+        val settingsWriter = FakeSystemSettingsWriter(permitted = writeSettingsPermitted)
+        val ringer = FakeRingerTool(permitted = ringerPermitted)
         val globalActions = RecordingGlobalActionPerformer(globalActionsSucceed)
 
         val runtime =
@@ -160,12 +175,17 @@ class DefaultAutomationRuntimeTest {
                 intentTool = intents,
                 systemSettingsReader = settingsReader,
                 mediaTool = media,
+                smsTool = sms,
+                phoneTool = phone,
+                systemSettingsWriter = settingsWriter,
+                ringerTool = ringer,
                 globalActionPerformer = globalActions,
             )
 
         return Harness(
             reader, performer, dispatcher, capture, appManager, contactsReader, clipboard,
-            alarms, notifications, intents, settingsReader, media, globalActions, runtime,
+            alarms, notifications, intents, settingsReader, media, sms, phone, settingsWriter,
+            ringer, globalActions, runtime,
         )
     }
 
@@ -1023,5 +1043,171 @@ class DefaultAutomationRuntimeTest {
             assertTrue(sent.isSuccess)
             assertEquals(listOf("0.1" to "On my way"), harness.performer.setTextCalls)
             assertEquals(listOf("0.2"), harness.performer.clickCalls)
+        }
+
+    // --- messaging and calls ----------------------------------------------
+
+    @Test
+    fun `sendSms sends rather than opening a compose screen`() =
+        runTest {
+            val harness = harness()
+
+            val result = harness.runtime.sendSms("+447700900123", "On my way")
+
+            assertTrue(result.isSuccess)
+            assertEquals(listOf("+447700900123" to "On my way"), harness.sms.sent)
+        }
+
+    @Test
+    fun `sendSms reports a missing permission as one, not as a failure`() =
+        runTest {
+            // The agent has to be able to tell "ask the user for SMS access" apart from "the message could
+            // not be sent", because only one of them is worth asking about.
+            val harness = harness(smsPermitted = false)
+
+            val result = harness.runtime.sendSms("+447700900123", "Hello")
+
+            assertEquals("permission_denied", result.errorOrNull?.code)
+            assertTrue(result.errorOrNull?.needsUserAction == true)
+        }
+
+    @Test
+    fun `sendSms reports a platform refusal as a tool failure`() =
+        runTest {
+            val harness = harness()
+            harness.sms.sendSucceeds = false
+
+            assertEquals("tool_failed", harness.runtime.sendSms("+447700900123", "Hi").errorOrNull?.code)
+        }
+
+    @Test
+    fun `readSms returns recent messages`() =
+        runTest {
+            val harness =
+                harness(
+                    messages =
+                        listOf(
+                            SmsMessage("+447700900123", "Your code is 123456", 1_700_000_000_000L),
+                        ),
+                )
+
+            val result = harness.runtime.readSms(limit = 5, fromNumber = "900123")
+
+            assertEquals(1, result.valueOrNull?.size)
+            assertEquals("Your code is 123456", result.valueOrNull?.first()?.body)
+            assertEquals(listOf(5 to "900123"), harness.sms.reads)
+        }
+
+    @Test
+    fun `placeCall dials when the permission is held`() =
+        runTest {
+            val harness = harness()
+
+            val result = harness.runtime.placeCall("+447700900123")
+
+            assertEquals(CallOutcome.CALLING, result.valueOrNull)
+            assertEquals(listOf("+447700900123"), harness.phone.calls)
+            assertTrue("must not also open the dialer", harness.phone.dialed.isEmpty())
+        }
+
+    @Test
+    fun `placeCall opens the dialer instead of failing when calling is not allowed`() =
+        runTest {
+            // The degradation is the point: one tap from done beats a refusal. What must not happen is
+            // reporting it as a placed call, which is why the outcome is an enum rather than a boolean.
+            val harness = harness(phonePermitted = false)
+
+            val result = harness.runtime.placeCall("+447700900123")
+
+            assertEquals(CallOutcome.DIALER_OPENED, result.valueOrNull)
+            assertEquals(listOf("+447700900123"), harness.phone.dialed)
+        }
+
+    @Test
+    fun `placeCall reports a device with no dialer as a failure`() =
+        runTest {
+            // A missing permission degrades; a device that cannot call at all does not. Hiding the second
+            // would have the agent believe a tablet had placed a call.
+            val harness = harness()
+            harness.phone.callSucceeds = false
+
+            assertEquals("tool_failed", harness.runtime.placeCall("+447700900123").errorOrNull?.code)
+        }
+
+    @Test
+    fun `placeCall keeps the permission error when the dialer cannot open either`() =
+        runTest {
+            val harness = harness(phonePermitted = false)
+            harness.phone.dialerSucceeds = false
+
+            assertEquals("permission_denied", harness.runtime.placeCall("+447700900123").errorOrNull?.code)
+        }
+
+    @Test
+    fun `endCall reports that it needs a newer Android rather than failing silently`() =
+        runTest {
+            val harness = harness()
+            harness.phone.endSucceeds = false
+
+            val result = harness.runtime.endCall()
+
+            assertEquals("tool_failed", result.errorOrNull?.code)
+            assertTrue(result.errorOrNull?.message?.contains("Android 9") == true)
+        }
+
+    // --- device configuration ---------------------------------------------
+
+    @Test
+    fun `setSystemSetting writes an allowed key`() =
+        runTest {
+            val harness = harness()
+
+            val result = harness.runtime.setSystemSetting("screen_brightness", "128")
+
+            assertTrue(result.isSuccess)
+            assertEquals(listOf("screen_brightness" to "128"), harness.settingsWriter.writes)
+        }
+
+    @Test
+    fun `setSystemSetting refuses a key outside the allowlist`() =
+        runTest {
+            // The writer throws for an unknown key, and the runtime has to turn that into a typed error
+            // rather than letting it escape as an IllegalArgumentException.
+            val harness = harness()
+
+            val result = harness.runtime.setSystemSetting("bluetooth_on", "1")
+
+            assertEquals("tool_failed", result.errorOrNull?.code)
+            assertTrue(harness.settingsWriter.writes.isEmpty())
+        }
+
+    @Test
+    fun `setSystemSetting refuses a blank key before reaching the writer`() =
+        runTest {
+            val harness = harness()
+
+            assertEquals("invalid_argument", harness.runtime.setSystemSetting("  ", "1").errorOrNull?.code)
+        }
+
+    @Test
+    fun `setRingerMode needs do not disturb access for silent`() =
+        runTest {
+            val harness = harness(ringerPermitted = false)
+
+            val result = harness.runtime.setRingerMode(RingerMode.SILENT)
+
+            assertEquals("permission_denied", result.errorOrNull?.code)
+        }
+
+    @Test
+    fun `setRingerMode returns the phone to normal without any permission`() =
+        runTest {
+            // Deliberate: putting a phone back to normal should never be the call that fails.
+            val harness = harness(ringerPermitted = false)
+
+            val result = harness.runtime.setRingerMode(RingerMode.NORMAL)
+
+            assertTrue(result.isSuccess)
+            assertEquals(listOf(RingerMode.NORMAL), harness.ringer.modes)
         }
 }
