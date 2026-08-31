@@ -9,3 +9,9 @@ require('@shopify/react-native-skia/jestSetup');
 
 // Reanimated ships a Jest mock; the canvas work in Phase 6 depends on it.
 require('react-native-reanimated').setUpTests?.();
+
+// react-native-svg 15 ships no Jest mock of its own (older versions did), and its components resolve through
+// `requireNativeComponent`, which the react-native preset already turns into an inert host component. So the
+// icons render as empty host views under test — enough for every assertion here, since none look at path
+// geometry, only at whether a labelled control is present. Recorded because the natural instinct on seeing an
+// icon render as nothing in a snapshot is to go hunting for a missing mock.

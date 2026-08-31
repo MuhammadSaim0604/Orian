@@ -1,5 +1,5 @@
-import { MenuIcon, SendIcon, StopIcon, useTheme } from '@mobile-automation/ui';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { ChevronDownIcon, MenuIcon, SendIcon, StopIcon, useTheme } from '@mobile-automation/ui';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -12,9 +12,12 @@ import {
 } from 'react-native';
 
 import { useAutomationStatus } from '../automation/useAutomationStatus';
+import { useActiveModelLabel } from '../providers/useActiveModelLabel';
 
 import { ChatMessageRow } from './ChatMessageRow';
 import { useSessionStore } from './sessionStore';
+import { taskListFrom } from './taskList';
+import { PinnedTaskCard } from './TaskTimeline';
 import { useAgentRun } from './useAgentRun';
 import { useActiveSession } from './useSessionViews';
 
@@ -51,10 +54,19 @@ export const AgentChatScreen = ({ onOpenSessions, onOpenModelPicker }: AgentChat
   const post = useSessionStore((state) => state.post);
   const activeSession = useActiveSession();
 
-  const { runState, currentTask, configError, timersHeld, start, stop } = useAgentRun();
+  const { runState, currentTask, configError, timersHeld, events, start, stop } = useAgentRun();
 
   const [draft, setDraft] = useState('');
   const scrollRef = useRef<ScrollView>(null);
+
+  /**
+   * The plan and how far through it the run is.
+   *
+   * Derived from the run's events rather than stored, so the pinned card, the transcript's plan card and the
+   * overlay cannot disagree — one function, no second copy to drift. Memoised because the event array is
+   * replaced on every event and the derivation walks all of it.
+   */
+  const tasks = useMemo(() => taskListFrom(events), [events]);
 
   /**
    * Whether to follow new messages.
@@ -103,6 +115,10 @@ export const AgentChatScreen = ({ onOpenSessions, onOpenModelPicker }: AgentChat
         running={running}
       />
 
+      {/* Pinned beneath the header, because the plan scrolls out of view the moment the agent starts working and
+          "what is it doing now" is the question a user asks continuously while watching their phone be driven. */}
+      {tasks !== null && <PinnedTaskCard list={tasks} />}
+
       {!status.isReady && (
         <Notice
           tone="warning"
@@ -128,7 +144,14 @@ export const AgentChatScreen = ({ onOpenSessions, onOpenModelPicker }: AgentChat
         ) : messages.length === 0 ? (
           <EmptyConversation />
         ) : (
-          messages.map((message) => <ChatMessageRow key={message.id} message={message} />)
+          messages.map((message) => (
+            <ChatMessageRow
+              key={message.id}
+              message={message}
+              liveTasks={tasks}
+              running={running}
+            />
+          ))
         )}
 
         {running && (
@@ -171,6 +194,7 @@ const ChatHeader = ({
   readonly running: boolean;
 }) => {
   const { theme } = useTheme();
+  const model = useActiveModelLabel();
 
   return (
     <View className="flex-row items-center gap-2 border-b border-border px-3 py-2">
@@ -191,34 +215,27 @@ const ChatHeader = ({
         {running && <Text className="text-xs text-success">Running</Text>}
       </View>
 
-      {/* The model, not settings. This is the one thing a person changes mid-conversation — settings moved into
-          the sidebar, where a screen you visit occasionally belongs. */}
+      {/* A labelled button, not an icon: the model in use is a fact worth seeing without pressing anything, and it
+          is the one setting a person changes mid-conversation. Settings moved into the sidebar, where a screen
+          visited occasionally belongs. */}
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="Choose a model"
+        accessibilityLabel={`Model: ${model}. Choose a different model`}
         onPress={onOpenModelPicker}
-        style={{ minHeight: MIN_TOUCH_TARGET, minWidth: MIN_TOUCH_TARGET }}
-        className="items-center justify-center rounded-lg border border-border"
+        style={{ minHeight: MIN_TOUCH_TARGET - 8, maxWidth: MODEL_BUTTON_MAX_WIDTH }}
+        className="flex-row items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 active:opacity-70"
       >
-        <ModelGlyph color={theme.colors.textSecondary} />
+        {/* Truncated rather than wrapped: a two-line header button would change the header's height as the model
+            changes, shifting the conversation beneath it. */}
+        <Text numberOfLines={1} className="text-xs font-medium text-text-secondary">
+          {model}
+        </Text>
+
+        <ChevronDownIcon size={12} color={theme.colors.textMuted} />
       </Pressable>
     </View>
   );
 };
-
-/**
- * Three stacked dots with a bar: a "list of choices" mark.
- *
- * Local rather than in the shared icon set, because it means "pick a model" only here — a shared icon named
- * after a concept this specific would be used wrongly elsewhere.
- */
-const ModelGlyph = ({ color }: { readonly color: string }) => (
-  <View style={{ gap: 3, alignItems: 'center' }}>
-    <View style={{ width: 12, height: 2, borderRadius: 1, backgroundColor: color }} />
-    <View style={{ width: 8, height: 2, borderRadius: 1, backgroundColor: color }} />
-    <View style={{ width: 4, height: 2, borderRadius: 1, backgroundColor: color }} />
-  </View>
-);
 
 const EmptyConversation = () => (
   <View className="items-center px-6 py-10">
@@ -336,6 +353,14 @@ const Composer = ({
 
 /** Android's minimum touch target. Below this a control is a coin toss to hit. */
 const MIN_TOUCH_TARGET = 48;
+
+/**
+ * A ceiling for the model button.
+ *
+ * Wide enough for a real name, narrow enough that it cannot squeeze the conversation title out of the header —
+ * and the title is how a person knows which conversation they are in.
+ */
+const MODEL_BUTTON_MAX_WIDTH = 128;
 
 /** Roughly five lines. Beyond that the composer would eat the conversation it belongs to. */
 const MAX_COMPOSER_HEIGHT = 120;

@@ -49,9 +49,13 @@ let mockRunState = {
   currentTask: '',
   configError: null as string | null,
   timersHeld: true,
+  events: [] as unknown[],
 };
 
 let mockStatus = { isReady: true, canCaptureScreen: true, canDrawOverlay: true, statusKnown: true };
+
+/** The model name the header button shows. Stable so the header's effect does not loop. */
+let mockModelLabel = 'Cheap';
 
 jest.mock('../sessionStore', () => ({
   useSessionStore: (selector: (state: unknown) => unknown) =>
@@ -81,6 +85,10 @@ jest.mock('../../automation/useAutomationStatus', () => ({
   useAutomationStatus: () => ({ status: mockStatus, bridgeAvailable: true, refresh: jest.fn() }),
 }));
 
+jest.mock('../../providers/useActiveModelLabel', () => ({
+  useActiveModelLabel: () => mockModelLabel,
+}));
+
 jest.mock('react-native/Libraries/Alert/Alert', () => ({
   alert: (...args: unknown[]) => mockAlert(...args),
 }));
@@ -97,8 +105,15 @@ const flush = async () => {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockModelLabel = 'Cheap';
   mockSessionState = { ...mockSessionState, messages: [], loading: false, sidebarOpen: false };
-  mockRunState = { runState: 'idle', currentTask: '', configError: null, timersHeld: true };
+  mockRunState = {
+    runState: 'idle',
+    currentTask: '',
+    configError: null,
+    timersHeld: true,
+    events: [],
+  };
   mockStatus = { isReady: true, canCaptureScreen: true, canDrawOverlay: true, statusKnown: true };
 });
 
@@ -228,6 +243,65 @@ describe('the chat', () => {
     expect(getByText('Opening WhatsApp')).toBeTruthy();
   });
 
+  it('names the model on its own button rather than hiding it behind an icon', async () => {
+    // Device testing asked for this directly: the model in use is a fact worth seeing without pressing anything,
+    // and a square icon button said nothing about which model was about to drive the phone.
+    const { getByLabelText } = renderWithTheme(
+      <AgentChatScreen onOpenSessions={jest.fn()} onOpenModelPicker={jest.fn()} />,
+    );
+    await flush();
+
+    expect(getByLabelText('Model: Cheap. Choose a different model')).toBeTruthy();
+  });
+
+  it('opens the picker from that button', async () => {
+    const onOpenModelPicker = jest.fn();
+
+    const { getByLabelText } = renderWithTheme(
+      <AgentChatScreen onOpenSessions={jest.fn()} onOpenModelPicker={onOpenModelPicker} />,
+    );
+    await flush();
+
+    fireEvent.press(getByLabelText('Model: Cheap. Choose a different model'));
+
+    expect(onOpenModelPicker).toHaveBeenCalled();
+  });
+
+  it('pins the current task once a plan exists', async () => {
+    // The plan scrolls out of view the moment the agent starts working, and "what is it doing now" is the question
+    // a user asks continuously while watching their phone be driven.
+    mockRunState = {
+      ...mockRunState,
+      runState: 'running',
+      events: [
+        {
+          type: 'planned',
+          runId: 'run_1',
+          timestampEpochMs: 1,
+          steps: ['Open WhatsApp', 'Find Robert'],
+          isReplan: false,
+        },
+      ],
+    };
+
+    const { getByLabelText } = renderWithTheme(
+      <AgentChatScreen onOpenSessions={jest.fn()} onOpenModelPicker={jest.fn()} />,
+    );
+    await flush();
+
+    expect(getByLabelText('Current task: Open WhatsApp. Expand the plan')).toBeTruthy();
+  });
+
+  it('does not pin an empty card before a plan exists', async () => {
+    // An empty shell while the model is still deciding would be worse than nothing.
+    const { queryByLabelText } = renderWithTheme(
+      <AgentChatScreen onOpenSessions={jest.fn()} onOpenModelPicker={jest.fn()} />,
+    );
+    await flush();
+
+    expect(queryByLabelText(/Expand the plan/)).toBeNull();
+  });
+
   it('warns before the user leaves when timers are unprotected', async () => {
     // Something they need to know beforehand, not after coming back to a stalled run.
     mockRunState = { ...mockRunState, runState: 'running', timersHeld: false };
@@ -341,5 +415,73 @@ describe('the sidebar', () => {
     await flush();
 
     expect(getByText('No conversations yet.')).toBeTruthy();
+  });
+
+  it('is titled Orion Agent, not Chats', async () => {
+    const { getByText } = renderWithTheme(
+      <SessionSidebar
+        onClose={jest.fn()}
+        onOpenOnboarding={jest.fn()}
+        onOpenSettings={jest.fn()}
+      />,
+    );
+    await flush();
+
+    // Two weights in one line, so the assertion is on the parts rather than one string.
+    expect(getByText('Orion')).toBeTruthy();
+    expect(getByText(' Agent')).toBeTruthy();
+  });
+
+  it('offers onboarding and settings above the conversations', async () => {
+    const { getByLabelText } = renderWithTheme(
+      <SessionSidebar
+        onClose={jest.fn()}
+        onOpenOnboarding={jest.fn()}
+        onOpenSettings={jest.fn()}
+      />,
+    );
+    await flush();
+
+    expect(getByLabelText('Onboarding. Permissions and setup')).toBeTruthy();
+    expect(getByLabelText('Settings. Model, tools, run limits')).toBeTruthy();
+  });
+
+  it('opens onboarding, closing itself first', async () => {
+    // The panel has to go before the screen slides in, or the sidebar would be sitting over it.
+    const onOpenOnboarding = jest.fn();
+    const onClose = jest.fn();
+
+    const { getByLabelText } = renderWithTheme(
+      <SessionSidebar
+        onClose={onClose}
+        onOpenOnboarding={onOpenOnboarding}
+        onOpenSettings={jest.fn()}
+      />,
+    );
+    await flush();
+
+    fireEvent.press(getByLabelText('Onboarding. Permissions and setup'));
+    await flush();
+
+    expect(onOpenOnboarding).toHaveBeenCalled();
+  });
+
+  it('opens settings from here rather than from the chat header', async () => {
+    // Moved deliberately: the header should hold what a person uses mid-conversation, and settings is not that.
+    const onOpenSettings = jest.fn();
+
+    const { getByLabelText } = renderWithTheme(
+      <SessionSidebar
+        onClose={jest.fn()}
+        onOpenOnboarding={jest.fn()}
+        onOpenSettings={onOpenSettings}
+      />,
+    );
+    await flush();
+
+    fireEvent.press(getByLabelText('Settings. Model, tools, run limits'));
+    await flush();
+
+    expect(onOpenSettings).toHaveBeenCalled();
   });
 });

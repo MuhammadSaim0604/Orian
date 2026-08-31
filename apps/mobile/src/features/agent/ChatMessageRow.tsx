@@ -1,7 +1,10 @@
-import { useTheme } from '@mobile-automation/ui';
+import { RefreshIcon, useTheme } from '@mobile-automation/ui';
 import { Text, View } from 'react-native';
 
 import { type ChatMessage, parseMessageDetail } from './sessionStorage';
+import { type TaskList, storedPlanFrom, taskListFromStored } from './taskList';
+import { TaskTimeline } from './TaskTimeline';
+import { ThinkingStrip } from './ThinkingStrip';
 
 /**
  * One message in the transcript.
@@ -20,6 +23,15 @@ import { type ChatMessage, parseMessageDetail } from './sessionStorage';
 
 export interface ChatMessageRowProps {
   readonly message: ChatMessage;
+  /**
+   * The live run's task list, when there is one.
+   *
+   * Passed in rather than subscribed to here, because a row renders inside a list and a per-row subscription
+   * would re-render every message on every event.
+   */
+  readonly liveTasks?: TaskList | null;
+  /** Whether a run is in flight, which decides whether the thinking strip pulses. */
+  readonly running?: boolean;
 }
 
 /**
@@ -36,7 +48,11 @@ type ToolDetail = {
   readonly step?: number;
 };
 
-export const ChatMessageRow = ({ message }: ChatMessageRowProps) => {
+export const ChatMessageRow = ({
+  message,
+  liveTasks = null,
+  running = false,
+}: ChatMessageRowProps) => {
   switch (message.role) {
     case 'user':
       return <UserMessage text={message.text} />;
@@ -48,7 +64,7 @@ export const ChatMessageRow = ({ message }: ChatMessageRowProps) => {
       return <ToolMessage message={message} />;
 
     case 'event':
-      return <EventMessage text={message.text} />;
+      return <EventMessage message={message} liveTasks={liveTasks} running={running} />;
   }
 };
 
@@ -98,12 +114,57 @@ const ToolMessage = ({ message }: { readonly message: ChatMessage }) => {
   );
 };
 
-const EventMessage = ({ text }: { readonly text: string }) => {
+/**
+ * Loop narration: a plan, a replan, or the model's reasoning.
+ *
+ * One role covering three shapes, discriminated by `detail.kind`. They share a role because they share the
+ * property that matters more than their appearance — none is speech, and all must be excludable from the prompt.
+ *
+ * A stored message with no `kind` falls through to plain muted text, which is exactly what it used to render as.
+ * Nothing in an existing conversation breaks because the renderer grew.
+ */
+const EventMessage = ({
+  message,
+  liveTasks,
+  running,
+}: {
+  readonly message: ChatMessage;
+  readonly liveTasks: TaskList | null;
+  readonly running: boolean;
+}) => {
   const { theme } = useTheme();
+  const detail = parseMessageDetail<{ kind?: string }>(message.detail);
+
+  const plan = storedPlanFrom(detail);
+
+  if (plan !== null) {
+    return (
+      <View className="py-2">
+        {/* A card, because a plan is a distinct object in the conversation rather than a remark. Bordered rather
+            than filled: a filled block at this width competes with the user's own bubbles. */}
+        <View className="rounded-xl border border-border bg-surface p-3">
+          <TaskTimeline list={taskListFromStored(plan, liveTasks)} />
+        </View>
+      </View>
+    );
+  }
+
+  if (detail?.kind === 'thinking') {
+    return <ThinkingStrip content={message.text} live={running} />;
+  }
+
+  if (detail?.kind === 'replan') {
+    return (
+      <View className="flex-row items-center gap-1.5 py-1">
+        <RefreshIcon size={13} color={theme.colors.warning} />
+        <Text className="flex-1 text-xs text-text-muted">{message.text}</Text>
+      </View>
+    );
+  }
 
   return (
     <View className="py-1" style={{ paddingLeft: theme.spacing[2] }}>
-      <Text className="text-xs text-text-muted">{text}</Text>
+      <Text className="text-xs text-text-muted">{message.text}</Text>
     </View>
   );
 };

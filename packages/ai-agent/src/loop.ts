@@ -269,6 +269,20 @@ export const runAgent = async (
         signal,
       });
 
+      // No tool call means the model considers the work finished or impossible. Its
+      // prose is the summary the user sees.
+      if (response.toolCalls.length === 0) {
+        outcome = 'succeeded';
+        summary = response.content?.trim() ?? 'The agent stopped without saying why.';
+        break;
+      }
+
+      // Emitted **only alongside an action**, and after the no-tool-call check above.
+      //
+      // When the model returns prose and no tool call, that prose *is* the final answer - it becomes `summary`
+      // and is delivered by `runFinished`. Emitting it as `thinking` first made the same text arrive twice, and
+      // a consumer persisting both showed the final response as two identical bubbles. Reasoning that
+      // accompanies a step is worth surfacing; reasoning that *is* the answer is the answer.
       if (response.content != null && response.content.trim() !== '') {
         events.emit({
           type: 'thinking',
@@ -277,14 +291,6 @@ export const runAgent = async (
           step: memory.stepCount + 1,
           content: response.content,
         });
-      }
-
-      // No tool call means the model considers the work finished or impossible. Its
-      // prose is the summary the user sees.
-      if (response.toolCalls.length === 0) {
-        outcome = 'succeeded';
-        summary = response.content?.trim() ?? 'The agent stopped without saying why.';
-        break;
       }
 
       // One at a time, deliberately. A model asked to act on a phone will sometimes

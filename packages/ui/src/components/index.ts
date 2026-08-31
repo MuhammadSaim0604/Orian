@@ -26,17 +26,25 @@ export {
 } from './Field';
 
 export {
+  AlertCircleIcon,
   BackIcon,
+  CheckCircleIcon,
+  CheckIcon,
   ChevronDownIcon,
   ChevronUpIcon,
+  CircleIcon,
   CloseIcon,
   DeleteIcon,
   ForwardIcon,
   IconBadge,
   MenuIcon,
   PlusIcon,
+  RefreshIcon,
   SearchIcon,
   SendIcon,
+  SettingsIcon,
+  ShieldCheckIcon,
+  SparkIcon,
   StopIcon,
   type IconProps,
 } from './Icon';

@@ -1,10 +1,11 @@
 import {
-  BackIcon,
-  ChevronDownIcon,
   DeleteIcon,
   ForwardIcon,
   IconBadge,
   PlusIcon,
+  SettingsIcon,
+  ShieldCheckIcon,
+  CloseIcon,
   useTheme,
 } from '@mobile-automation/ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -15,6 +16,7 @@ import {
   Easing,
   Pressable,
   ScrollView,
+  StatusBar,
   Text,
   View,
 } from 'react-native';
@@ -27,16 +29,16 @@ import { useGroupedSessions } from './useSessionViews';
 /**
  * The session sidebar.
  *
- * **Slides in from the left and covers part of the screen**, because that is what a sidebar is — the earlier
- * version rose from the bottom at full width, which is a sheet wearing a sidebar's name. Leaving the
- * conversation visible at the right edge is also what makes the scrim tappable to dismiss.
+ * Slides in from the left and covers part of the screen, because that is what a sidebar is.
  *
- * Two sections, in the order they are wanted:
+ * Two things device testing caught, both about the panel's edges rather than its contents:
  *
- * - **Actions.** Onboarding and settings. Settings lives here rather than in the chat header, because the header
- *   should hold what a person uses mid-conversation and settings is not that.
- * - **Recent chats**, grouped by age rather than stamped with dates — "3 days ago" is something a person has to
- *   decode while a heading they skim is not. Titles come from each conversation's first message.
+ * - **It ran under the status bar.** The panel is inside a `statusBarTranslucent` modal, so it draws behind the
+ *   clock and the notification icons unless it pads itself by the top inset. `SafeAreaView` would have worked for
+ *   the panel alone, but the padding has to be on the animated container, so the inset is applied directly.
+ * - **The dimmed strip beside it is gone.** A scrim is the usual way to say "this is temporary", but it was read
+ *   as a shadow rather than as an affordance. The uncovered strip is still tappable to dismiss — it just is not
+ *   tinted, so the boundary is the panel's own border.
  */
 
 export interface SessionSidebarProps {
@@ -51,7 +53,7 @@ export const SessionSidebar = ({
   onOpenOnboarding,
   onOpenSettings,
 }: SessionSidebarProps) => {
-  const { theme } = useTheme();
+  const { theme, scheme } = useTheme();
   const insets = useSafeAreaInsets();
 
   const groups = useGroupedSessions();
@@ -98,8 +100,8 @@ export const SessionSidebar = ({
   );
 
   const onNew = useCallback(async () => {
-    // Guarded because creating a session writes to the database and two taps would leave an empty conversation
-    // behind that the user then has to delete.
+    // Guarded because creating a session writes to the database, and two taps would leave an empty conversation
+    // behind for the user to delete.
     if (busy) return;
     setBusy(true);
 
@@ -114,9 +116,9 @@ export const SessionSidebar = ({
   /**
    * Deletes after confirming.
    *
-   * Confirmed because a conversation is not recoverable — its messages cascade with it — and because a mis-tap
-   * in a list is easy. The dialog names what is being deleted rather than saying "this item", so the user can
-   * tell they tapped the row they meant.
+   * A conversation is not recoverable — its messages cascade with it — and a mis-tap in a list is easy. The
+   * dialog names what is being deleted rather than saying "this item", so the user can tell they tapped the row
+   * they meant.
    */
   const onDelete = useCallback(
     (session: SessionSummary) => {
@@ -142,9 +144,18 @@ export const SessionSidebar = ({
 
   return (
     <View className="flex-1 flex-row">
+      {/* The modal is translucent over the status bar, so the bar's own content has to be legible against the
+          panel rather than against whatever was behind it. */}
+      <StatusBar
+        translucent
+        backgroundColor="transparent"
+        barStyle={scheme === 'dark' ? 'light-content' : 'dark-content'}
+      />
+
       <Animated.View
         style={{
           width,
+          // The fix for the overflow: without this the panel's header sits under the clock.
           paddingTop: insets.top + theme.spacing[2],
           transform: [
             { translateX: progress.interpolate({ inputRange: [0, 1], outputRange: [-width, 0] }) },
@@ -152,9 +163,18 @@ export const SessionSidebar = ({
         }}
         className="border-r border-border bg-background"
       >
-        <View className="flex-row items-center gap-2 border-b border-border px-3 pb-2">
+        <View className="flex-row items-center gap-2 border-b border-border px-3 pb-3">
           <View accessibilityRole="header" className="flex-1">
-            <Text className="text-base font-bold text-text-primary">Chats</Text>
+            {/* Two weights in one line rather than a single bold string: the product's name should read as a
+                wordmark, and "Orion" carrying the weight is what makes it one. */}
+            <Text className="text-lg tracking-tight text-text-primary">
+              <Text className="font-bold">Orion</Text>
+              <Text className="font-light text-text-secondary"> Agent</Text>
+            </Text>
+
+            <Text className="text-[10px] uppercase tracking-widest text-text-muted">
+              Automation
+            </Text>
           </View>
 
           <Pressable
@@ -164,7 +184,7 @@ export const SessionSidebar = ({
             style={{ minHeight: MIN_TOUCH_TARGET, minWidth: MIN_TOUCH_TARGET }}
             className="items-center justify-center"
           >
-            <BackIcon size={18} color={theme.colors.textSecondary} />
+            <CloseIcon size={18} color={theme.colors.textSecondary} />
           </Pressable>
         </View>
 
@@ -185,11 +205,11 @@ export const SessionSidebar = ({
                 close();
                 onOpenOnboarding();
               }}
-              // `textPrimary` against `background` is white-on-dark in dark mode and black-on-light in light,
-              // because the palette inverts between schemes. Naming the semantic roles rather than the colours is
-              // what makes one line correct in both (ADR 0004).
-              badgeBackground={theme.colors.textPrimary}
-              badgeForeground={theme.colors.background}
+              // A filled badge, and the trailing arrow: this row leads to a whole flow, which is what the arrow
+              // is for. Settings deliberately has neither, so the two do not read as the same kind of thing.
+              badge
+              trailingArrow
+              icon={(color) => <ShieldCheckIcon size={15} color={color} />}
             />
 
             <ActionRow
@@ -199,15 +219,14 @@ export const SessionSidebar = ({
                 close();
                 onOpenSettings();
               }}
-              badgeBackground={theme.colors.textPrimary}
-              badgeForeground={theme.colors.background}
+              icon={(color) => <SettingsIcon size={18} color={color} />}
             />
           </View>
 
           {/* Section two: the conversations. */}
           <View style={{ gap: theme.spacing[2] }}>
             <View className="flex-row items-center gap-2">
-              <Text className="flex-1 text-xs font-medium uppercase text-text-muted">
+              <Text className="flex-1 text-xs font-medium uppercase tracking-wide text-text-muted">
                 Recent chats
               </Text>
 
@@ -249,54 +268,76 @@ export const SessionSidebar = ({
         </ScrollView>
       </Animated.View>
 
-      {/* The remaining width. Tapping it dismisses, which is the standard way out of a sidebar and the reason it
-          must not cover the whole screen. */}
+      {/* The uncovered strip. Tappable to dismiss, and deliberately **untinted** — the dim overlay was read as a
+          shadow rather than as a boundary, and the panel's own border already draws the edge. */}
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Close the sidebar"
         onPress={close}
-        className="flex-1 bg-black/40"
+        className="flex-1"
       />
     </View>
   );
 };
 
+/**
+ * One action row.
+ *
+ * The badge and the trailing arrow are both optional and both meaningful. Onboarding gets the filled badge and the
+ * arrow because it opens a flow; settings gets a plain icon and no arrow because it is one screen. Giving them the
+ * same treatment would say they are the same kind of destination, which is the asymmetry device testing asked for.
+ */
 const ActionRow = ({
   label,
   hint,
   onPress,
-  badgeBackground,
-  badgeForeground,
+  icon,
+  badge = false,
+  trailingArrow = false,
 }: {
   readonly label: string;
   readonly hint: string;
   readonly onPress: () => void;
-  readonly badgeBackground: string;
-  readonly badgeForeground: string;
-}) => (
-  <Pressable
-    accessibilityRole="button"
-    accessibilityLabel={`${label}. ${hint}`}
-    onPress={onPress}
-    style={{ minHeight: MIN_TOUCH_TARGET }}
-    className="flex-row items-center gap-3 rounded-xl border border-border bg-surface px-2"
-  >
-    <IconBadge size={28} background={badgeBackground}>
-      <ChevronDownIcon size={14} color={badgeForeground} />
-    </IconBadge>
+  readonly icon: (color: string) => React.ReactElement;
+  readonly badge?: boolean;
+  readonly trailingArrow?: boolean;
+}) => {
+  const { theme } = useTheme();
 
-    <View className="flex-1 py-2">
-      <Text numberOfLines={1} className="text-sm text-text-primary">
-        {label}
-      </Text>
-      <Text numberOfLines={1} className="text-xs text-text-muted">
-        {hint}
-      </Text>
-    </View>
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${label}. ${hint}`}
+      onPress={onPress}
+      style={{ minHeight: MIN_TOUCH_TARGET }}
+      className="flex-row items-center gap-3 rounded-xl border border-border bg-surface px-2.5 active:opacity-70"
+    >
+      {badge ? (
+        // `textPrimary` on `background` is white-on-dark in dark mode and black-on-light in light, because the
+        // palette itself inverts between schemes. Naming the roles rather than the colours is what makes one
+        // expression correct in both (ADR 0004).
+        <IconBadge size={28} background={theme.colors.textPrimary}>
+          {icon(theme.colors.background)}
+        </IconBadge>
+      ) : (
+        <View className="h-7 w-7 items-center justify-center">
+          {icon(theme.colors.textSecondary)}
+        </View>
+      )}
 
-    <ForwardIcon size={14} color={badgeBackground} />
-  </Pressable>
-);
+      <View className="flex-1 py-2">
+        <Text numberOfLines={1} className="text-sm text-text-primary">
+          {label}
+        </Text>
+        <Text numberOfLines={1} className="text-xs text-text-muted">
+          {hint}
+        </Text>
+      </View>
+
+      {trailingArrow && <ForwardIcon size={15} color={theme.colors.textMuted} />}
+    </Pressable>
+  );
+};
 
 const SessionRow = ({
   session,
@@ -350,7 +391,7 @@ const SessionRow = ({
   );
 };
 
-/** Most of the width, but never all of it — the visible conversation is what makes the scrim discoverable. */
+/** Most of the width, but never all of it — the uncovered strip is how the panel is dismissed. */
 const WIDTH_FRACTION = 0.82;
 
 /** A ceiling for tablets, where 82% would be an absurdly wide column of chat titles. */

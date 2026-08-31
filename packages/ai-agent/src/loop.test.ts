@@ -635,6 +635,46 @@ describe('the recorder seam', () => {
       content: 'I need to open WhatsApp first.',
     });
   });
+
+  it('does not report the final answer as thinking as well', async () => {
+    // The duplication a device pass found: the response's prose was emitted as `thinking` before the loop checked
+    // for tool calls, and when there are none that same prose becomes the run's summary and is delivered again by
+    // `runFinished`. Any consumer persisting both showed the final answer twice.
+    //
+    // Reasoning that accompanies an action is worth surfacing. Reasoning that *is* the answer is the answer.
+    const events: AgentEvent[] = [];
+    const provider = scriptedProvider([plan('a'), prose('Everything is already done.')]);
+
+    const result = await runAgent(deps(provider, recordingDevice()), {
+      goal: 'x',
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(result.summary).toBe('Everything is already done.');
+    expect(events.filter((event) => event.type === 'thinking')).toHaveLength(0);
+  });
+
+  it('still reports thinking for a step that acts', async () => {
+    // Guarding the other half of the same change: moving the emit must not silence reasoning that accompanies a
+    // real action, which is the case it exists for.
+    const events: AgentEvent[] = [];
+    const provider = scriptedProvider([
+      plan('a'),
+      {
+        content: 'Tapping Send now.',
+        toolCalls: [{ id: 'c', name: 'pressHome', arguments: '{}' }],
+        finishReason: 'tool_calls',
+      },
+      prose('Done.'),
+    ]);
+
+    await runAgent(deps(provider, recordingDevice()), {
+      goal: 'x',
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(events.filter((event) => event.type === 'thinking')).toHaveLength(1);
+  });
 });
 
 describe('tool restriction', () => {

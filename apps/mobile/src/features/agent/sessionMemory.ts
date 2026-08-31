@@ -52,10 +52,13 @@ export const messageForEvent = (event: AgentEvent): PendingMessage | null => {
     case 'planned':
       return {
         role: 'event',
+        // Kept readable on its own, because this is what a screen reader announces and what an older build (or a
+        // future consumer with no timeline renderer) would show. The structured form in `detail` is what the
+        // timeline draws from.
         text: event.isReplan
           ? `New plan: ${event.steps.join(' → ')}`
           : `Plan: ${event.steps.join(' → ')}`,
-        detail: { steps: event.steps, isReplan: event.isReplan },
+        detail: { kind: 'plan', steps: event.steps, isReplan: event.isReplan },
       };
 
     case 'toolExecuted':
@@ -76,7 +79,11 @@ export const messageForEvent = (event: AgentEvent): PendingMessage | null => {
       };
 
     case 'replanning':
-      return { role: 'event', text: `Changing approach: ${event.reason}` };
+      return {
+        role: 'event',
+        text: `Changing approach: ${event.reason}`,
+        detail: { kind: 'replan' },
+      };
 
     case 'runFinished':
       return {
@@ -87,8 +94,14 @@ export const messageForEvent = (event: AgentEvent): PendingMessage | null => {
       };
 
     case 'thinking':
-      // Only when there is something to show. An empty thought is a blank bubble.
-      return event.content.trim() === '' ? null : { role: 'assistant', text: event.content };
+      // An `event` role, not `assistant`.
+      //
+      // Reasoning is not the agent's reply, and storing it as one was what put raw thinking into the chat as
+      // bubbles. As an event it renders as the collapsible Thinking strip, and it stays excludable from the
+      // prompt - feeding the model its own reasoning back would have it commenting on its commentary.
+      return event.content.trim() === ''
+        ? null
+        : { role: 'event', text: event.content, detail: { kind: 'thinking' } };
 
     // runStarted is the user's own message, already recorded by the composer. observed, toolCallProposed and
     // toolCallRejected are per-step churn: useful live in the event log, noise in a saved conversation.

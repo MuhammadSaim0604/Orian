@@ -1,330 +1,222 @@
 import { createElement, type ReactElement } from 'react';
-import { View, type ViewStyle } from 'react-native';
+import { View } from 'react-native';
+import Svg, { Circle, Path, Polyline, Rect } from 'react-native-svg';
 
 /**
  * The shared icon set.
  *
- * **Drawn from views, not a font or an SVG library.** Three reasons, in order of how much they cost when
- * ignored:
+ * **Real vector paths via `react-native-svg`**, not shapes assembled from `View`s. The previous version drew
+ * icons from rotated bars, and device testing was blunt about the result: a send "icon" that read as three
+ * lines, a filled circle with an arrow in it where a settings gear belonged. Bars can make an arrow; they
+ * cannot make a paper plane or a gear, and pretending otherwise produced glyphs nobody recognised.
  *
- * - A missing glyph is invisible until a user reports a blank square, and device testing already produced
- *   exactly that complaint about a hand-drawn stop button.
- * - An icon font is another asset to bundle and another thing that can fail to load in a release build while
- *   working in debug.
- * - `react-native-svg` is a native dependency, and adding one for arrows is not a trade worth making.
+ * The paths are drawn on a 24×24 grid — the convention every icon set uses, so a path lifted from one reads at
+ * the same weight as the others — and scaled by the `size` prop.
  *
- * Built with `createElement` rather than JSX, like `Button`, so this package needs no JSX transform of its own.
+ * Built with `createElement` rather than JSX, like the rest of this package, so it stays `.ts` throughout.
  *
- * Every icon takes a colour rather than choosing one. The theme decides appearance (ADR 0004), and an icon that
- * hardcoded a colour would be wrong in one of the two themes.
+ * Every icon takes its colour rather than choosing one. The theme decides appearance (ADR 0004), and an icon
+ * that hardcoded a colour would be wrong in one of the two schemes.
  */
 
 export type IconProps = {
-  /** Nominal box size in dp. The drawing is inset within it so icons of one size look the same weight. */
+  /** Rendered box in dp. The 24-unit viewBox scales to it. */
   readonly size?: number;
   readonly color: string;
-  /** Stroke thickness. Left alone unless an icon needs to read at a very small size. */
+  /** Stroke width in viewBox units. Raise it for an icon that must read at a very small size. */
   readonly thickness?: number;
 };
 
-const DEFAULT_SIZE = 20;
+const DEFAULT_SIZE = 22;
 const DEFAULT_THICKNESS = 2;
 
 /**
- * A chevron, built from two rotated bars.
+ * A stroked 24×24 canvas.
  *
- * The primitive behind back, forward, expand and collapse — all four are one shape at four rotations, so they
- * cannot drift apart visually.
+ * Round caps and joins throughout, because mitred corners at 2px on a phone produce visible spikes.
+ * `fill="none"` by default: these are line icons, and a stray fill on an open path renders as a filled blob.
  */
-const chevron = (rotation: number, { size, color, thickness }: IconProps): ReactElement => {
-  const box = size ?? DEFAULT_SIZE;
-  const bar = thickness ?? DEFAULT_THICKNESS;
-  const arm = box * 0.42;
-
-  const barStyle = (angle: number, offset: number): ViewStyle => ({
-    position: 'absolute',
-    width: bar,
-    height: arm,
-    borderRadius: bar / 2,
-    backgroundColor: color,
-    transform: [{ rotate: `${angle}deg` }, { translateY: offset }],
-  });
-
-  return createElement(
-    View,
+const stroked = (
+  { size, color, thickness }: IconProps,
+  ...children: ReactElement[]
+): ReactElement =>
+  createElement(
+    Svg,
     {
-      style: {
-        width: box,
-        height: box,
-        alignItems: 'center',
-        justifyContent: 'center',
-        transform: [{ rotate: `${rotation}deg` }],
-      },
+      width: size ?? DEFAULT_SIZE,
+      height: size ?? DEFAULT_SIZE,
+      viewBox: '0 0 24 24',
+      fill: 'none',
+      stroke: color,
+      strokeWidth: thickness ?? DEFAULT_THICKNESS,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
     },
-    createElement(View, { style: barStyle(45, -arm / 2 + bar / 2), key: 'upper' }),
-    createElement(View, { style: barStyle(-45, arm / 2 - bar / 2), key: 'lower' }),
+    ...children,
   );
-};
 
-/** Points left. The back affordance on every screen header. */
-export const BackIcon = (props: IconProps): ReactElement => chevron(0, props);
+/** A chevron pointing left. The back affordance on every screen header. */
+export const BackIcon = (props: IconProps): ReactElement =>
+  stroked(props, createElement(Polyline, { key: 'p', points: '15 18 9 12 15 6' }));
 
-/** Points right. Used on rows that lead somewhere. */
-export const ForwardIcon = (props: IconProps): ReactElement => chevron(180, props);
+/** A chevron pointing right. On a row, it means the row leads somewhere. */
+export const ForwardIcon = (props: IconProps): ReactElement =>
+  stroked(props, createElement(Polyline, { key: 'p', points: '9 18 15 12 9 6' }));
 
-/** Points down: a collapsed section that will expand. */
-export const ChevronDownIcon = (props: IconProps): ReactElement => chevron(-90, props);
+/** Pointing down: a collapsed section that will expand. */
+export const ChevronDownIcon = (props: IconProps): ReactElement =>
+  stroked(props, createElement(Polyline, { key: 'p', points: '6 9 12 15 18 9' }));
 
-/** Points up: an expanded section that will collapse. */
-export const ChevronUpIcon = (props: IconProps): ReactElement => chevron(90, props);
+/** Pointing up: an expanded section that will collapse. */
+export const ChevronUpIcon = (props: IconProps): ReactElement =>
+  stroked(props, createElement(Polyline, { key: 'p', points: '18 15 12 9 6 15' }));
 
 /**
- * A paper-plane send arrow.
+ * A paper plane.
  *
- * Two strokes meeting at a point, which is enough to read as "send" at composer size. A filled triangle would
- * need a border trick that renders differently across Android versions.
+ * The messaging-app send mark: an outline triangle with the fold line that makes it read as folded paper rather
+ * than as an arrowhead. Two paths, because the fold has to be a separate stroke.
  */
-export const SendIcon = ({ size, color, thickness }: IconProps): ReactElement => {
-  const box = size ?? DEFAULT_SIZE;
-  const bar = thickness ?? DEFAULT_THICKNESS;
-  const arm = box * 0.5;
-
-  return createElement(
-    View,
-    { style: { width: box, height: box, alignItems: 'center', justifyContent: 'center' } },
-    createElement(View, {
-      key: 'upper',
-      style: {
-        position: 'absolute',
-        width: bar,
-        height: arm,
-        borderRadius: bar / 2,
-        backgroundColor: color,
-        transform: [{ rotate: '35deg' }, { translateY: -arm / 2 + bar }],
-      },
-    }),
-    createElement(View, {
-      key: 'lower',
-      style: {
-        position: 'absolute',
-        width: bar,
-        height: arm,
-        borderRadius: bar / 2,
-        backgroundColor: color,
-        transform: [{ rotate: '-35deg' }, { translateY: arm / 2 - bar }],
-      },
-    }),
-    createElement(View, {
-      key: 'tail',
-      style: {
-        position: 'absolute',
-        width: box * 0.46,
-        height: bar,
-        borderRadius: bar / 2,
-        backgroundColor: color,
-        transform: [{ translateX: -box * 0.1 }],
-      },
-    }),
+export const SendIcon = (props: IconProps): ReactElement =>
+  stroked(
+    props,
+    createElement(Path, { key: 'body', d: 'M21.5 2.5 2 10.2l6.6 2.6L21.5 2.5Z' }),
+    createElement(Path, { key: 'fold', d: 'M21.5 2.5 8.6 12.8l1.9 7 2.8-4.4 8.2-12.9Z' }),
   );
-};
 
-/**
- * A wastebasket.
- *
- * A lid, a body, and two ribs. Recognisable at 20dp, which a more literal drawing would not be.
- */
-export const DeleteIcon = ({ size, color, thickness }: IconProps): ReactElement => {
-  const box = size ?? DEFAULT_SIZE;
-  const bar = thickness ?? DEFAULT_THICKNESS;
-  const bodyWidth = box * 0.62;
-  const bodyHeight = box * 0.6;
-
-  return createElement(
-    View,
-    { style: { width: box, height: box, alignItems: 'center', justifyContent: 'flex-start' } },
-    createElement(View, {
-      key: 'lid',
-      style: {
-        width: bodyWidth + bar * 2,
-        height: bar,
-        borderRadius: bar / 2,
-        backgroundColor: color,
-        marginTop: box * 0.14,
-      },
+/** A wastebasket: lid, body, and two ribs. */
+export const DeleteIcon = (props: IconProps): ReactElement =>
+  stroked(
+    props,
+    createElement(Polyline, { key: 'lid', points: '3 6 5 6 21 6' }),
+    createElement(Path, {
+      key: 'body',
+      d: 'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2',
     }),
-    createElement(
-      View,
-      {
-        key: 'body',
-        style: {
-          width: bodyWidth,
-          height: bodyHeight,
-          marginTop: bar,
-          borderWidth: bar,
-          borderColor: color,
-          borderTopWidth: 0,
-          borderBottomLeftRadius: bar,
-          borderBottomRightRadius: bar,
-          flexDirection: 'row',
-          justifyContent: 'space-evenly',
-          paddingVertical: bar,
-        },
-      },
-      createElement(View, {
-        key: 'rib-left',
-        style: { width: bar / 1.5, height: '100%', backgroundColor: color, borderRadius: bar },
-      }),
-      createElement(View, {
-        key: 'rib-right',
-        style: { width: bar / 1.5, height: '100%', backgroundColor: color, borderRadius: bar },
-      }),
-    ),
+    createElement(Path, { key: 'ribs', d: 'M10 11v6M14 11v6' }),
   );
-};
 
 /** An X. Dismiss, close, clear. */
-export const CloseIcon = ({ size, color, thickness }: IconProps): ReactElement => {
-  const box = size ?? DEFAULT_SIZE;
-  const bar = thickness ?? DEFAULT_THICKNESS;
+export const CloseIcon = (props: IconProps): ReactElement =>
+  stroked(props, createElement(Path, { key: 'p', d: 'M18 6 6 18M6 6l12 12' }));
 
-  const barStyle = (angle: number): ViewStyle => ({
-    position: 'absolute',
-    width: box * 0.74,
-    height: bar,
-    borderRadius: bar / 2,
-    backgroundColor: color,
-    transform: [{ rotate: `${angle}deg` }],
-  });
-
-  return createElement(
-    View,
-    { style: { width: box, height: box, alignItems: 'center', justifyContent: 'center' } },
-    createElement(View, { key: 'a', style: barStyle(45) }),
-    createElement(View, { key: 'b', style: barStyle(-45) }),
+/** A magnifier. */
+export const SearchIcon = (props: IconProps): ReactElement =>
+  stroked(
+    props,
+    createElement(Circle, { key: 'ring', cx: 11, cy: 11, r: 7 }),
+    createElement(Path, { key: 'handle', d: 'm21 21-4.3-4.3' }),
   );
-};
 
-/** A magnifier: a ring and a handle. */
-export const SearchIcon = ({ size, color, thickness }: IconProps): ReactElement => {
-  const box = size ?? DEFAULT_SIZE;
-  const bar = thickness ?? DEFAULT_THICKNESS;
-  const ring = box * 0.6;
+/** Three bars. "Show the list of conversations." */
+export const MenuIcon = (props: IconProps): ReactElement =>
+  stroked(props, createElement(Path, { key: 'p', d: 'M3 6h18M3 12h18M3 18h18' }));
 
-  return createElement(
-    View,
-    { style: { width: box, height: box, alignItems: 'center', justifyContent: 'center' } },
-    createElement(View, {
-      key: 'ring',
-      style: {
-        width: ring,
-        height: ring,
-        borderRadius: ring / 2,
-        borderWidth: bar,
-        borderColor: color,
-        transform: [{ translateX: -box * 0.06 }, { translateY: -box * 0.06 }],
-      },
-    }),
-    createElement(View, {
-      key: 'handle',
-      style: {
-        position: 'absolute',
-        width: box * 0.3,
-        height: bar,
-        borderRadius: bar / 2,
-        backgroundColor: color,
-        transform: [{ translateX: box * 0.24 }, { translateY: box * 0.24 }, { rotate: '45deg' }],
-      },
-    }),
+/** A filled rounded square. Stop, in the universal transport sense. */
+export const StopIcon = ({ size, color }: IconProps): ReactElement =>
+  createElement(
+    Svg,
+    { width: size ?? DEFAULT_SIZE, height: size ?? DEFAULT_SIZE, viewBox: '0 0 24 24' },
+    createElement(Rect, { x: 6, y: 6, width: 12, height: 12, rx: 2.5, fill: color }),
   );
-};
 
-/** Three bars. The affordance for "show the list of conversations". */
-export const MenuIcon = ({ size, color, thickness }: IconProps): ReactElement => {
-  const box = size ?? DEFAULT_SIZE;
-  const bar = thickness ?? DEFAULT_THICKNESS;
-
-  const barStyle: ViewStyle = {
-    width: box * 0.78,
-    height: bar,
-    borderRadius: bar / 2,
-    backgroundColor: color,
-  };
-
-  return createElement(
-    View,
-    {
-      style: {
-        width: box,
-        height: box,
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: bar + 1,
-      },
-    },
-    createElement(View, { key: 'a', style: barStyle }),
-    createElement(View, { key: 'b', style: barStyle }),
-    createElement(View, { key: 'c', style: barStyle }),
-  );
-};
-
-/** A square. Stop, in the universal transport sense. */
-export const StopIcon = ({ size, color }: IconProps): ReactElement => {
-  const box = size ?? DEFAULT_SIZE;
-
-  return createElement(
-    View,
-    { style: { width: box, height: box, alignItems: 'center', justifyContent: 'center' } },
-    createElement(View, {
-      style: {
-        width: box * 0.58,
-        height: box * 0.58,
-        borderRadius: 2,
-        backgroundColor: color,
-      },
-    }),
-  );
-};
+/** A plus. For "new": a plus reads as *add* where a document glyph reads as *open*. */
+export const PlusIcon = (props: IconProps): ReactElement =>
+  stroked(props, createElement(Path, { key: 'p', d: 'M12 5v14M5 12h14' }));
 
 /**
- * A plus.
+ * A gear.
  *
- * For "new conversation". A plus reads as *add* where an icon of a document reads as *open*.
+ * The settings mark everywhere, and specifically what device testing asked for. Drawn as a ring plus the
+ * eight-spoke tooth path rather than as a circle with something inside it.
  */
-export const PlusIcon = ({ size, color, thickness }: IconProps): ReactElement => {
-  const box = size ?? DEFAULT_SIZE;
-  const bar = thickness ?? DEFAULT_THICKNESS;
-
-  return createElement(
-    View,
-    { style: { width: box, height: box, alignItems: 'center', justifyContent: 'center' } },
-    createElement(View, {
-      key: 'h',
-      style: {
-        position: 'absolute',
-        width: box * 0.72,
-        height: bar,
-        borderRadius: bar / 2,
-        backgroundColor: color,
-      },
-    }),
-    createElement(View, {
-      key: 'v',
-      style: {
-        position: 'absolute',
-        width: bar,
-        height: box * 0.72,
-        borderRadius: bar / 2,
-        backgroundColor: color,
-      },
+export const SettingsIcon = (props: IconProps): ReactElement =>
+  stroked(
+    props,
+    createElement(Circle, { key: 'hub', cx: 12, cy: 12, r: 3 }),
+    createElement(Path, {
+      key: 'teeth',
+      d:
+        'M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 ' +
+        '1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 ' +
+        '0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 ' +
+        '0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 ' +
+        '1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 ' +
+        '2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 ' +
+        '0-1.51 1Z',
     }),
   );
-};
+
+/**
+ * A shield with a tick.
+ *
+ * Onboarding, which is a permission flow — so the mark is about protection and consent rather than about being
+ * a first step. A numbered-step or flag icon would suggest a tutorial.
+ */
+export const ShieldCheckIcon = (props: IconProps): ReactElement =>
+  stroked(
+    props,
+    createElement(Path, { key: 'shield', d: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z' }),
+    createElement(Polyline, { key: 'tick', points: '9 12 11.5 14.5 15.5 10' }),
+  );
+
+/**
+ * A spark.
+ *
+ * Reasoning, thinking, "the model is working". A four-point star rather than a lightbulb, because a bulb reads
+ * as *idea* and this is about effort in progress.
+ */
+export const SparkIcon = (props: IconProps): ReactElement =>
+  stroked(
+    props,
+    createElement(Path, { key: 'big', d: 'M12 3v4M12 17v4M5 12H1M23 12h-4' }),
+    createElement(Path, {
+      key: 'star',
+      d: 'M12 8.5 13.3 11l2.7 1-2.7 1L12 15.5 10.7 13 8 12l2.7-1L12 8.5Z',
+    }),
+  );
+
+/** An empty ring: a task not started. */
+export const CircleIcon = (props: IconProps): ReactElement =>
+  stroked(props, createElement(Circle, { key: 'r', cx: 12, cy: 12, r: 8 }));
+
+/** A ring with a tick: a task done. */
+export const CheckCircleIcon = (props: IconProps): ReactElement =>
+  stroked(
+    props,
+    createElement(Circle, { key: 'r', cx: 12, cy: 12, r: 8 }),
+    createElement(Polyline, { key: 'tick', points: '8.5 12.2 11 14.7 15.5 9.5' }),
+  );
+
+/** A bare tick, for a compact confirmation. */
+export const CheckIcon = (props: IconProps): ReactElement =>
+  stroked(props, createElement(Polyline, { key: 'p', points: '20 6 9 17 4 12' }));
+
+/** A ring with an exclamation: a task that failed. */
+export const AlertCircleIcon = (props: IconProps): ReactElement =>
+  stroked(
+    props,
+    createElement(Circle, { key: 'r', cx: 12, cy: 12, r: 8 }),
+    createElement(Path, { key: 'bang', d: 'M12 8v4.5' }),
+    createElement(Circle, { key: 'dot', cx: 12, cy: 16, r: 0.6, fill: props.color }),
+  );
+
+/** Two arrows curving into a loop: the agent changed its approach. */
+export const RefreshIcon = (props: IconProps): ReactElement =>
+  stroked(
+    props,
+    createElement(Path, { key: 'a', d: 'M21 12a9 9 0 0 1-9 9 9 9 0 0 1-8.5-6' }),
+    createElement(Path, { key: 'b', d: 'M3 12a9 9 0 0 1 9-9 9 9 0 0 1 8.5 6' }),
+    createElement(Polyline, { key: 'c', points: '3 7 3.5 12 8 11.5' }),
+    createElement(Polyline, { key: 'd', points: '21 17 20.5 12 16 12.5' }),
+  );
 
 /**
  * A filled circle holding another icon.
  *
- * The leading mark on an action row — white in dark mode, black in light, which is why the colours are given
- * rather than chosen here.
+ * The leading mark on an action row. The background and foreground are passed in rather than derived, so a
+ * caller can invert it against the scheme by naming `textPrimary` on `background` — one expression that is
+ * correct in both themes because the palette itself inverts.
  */
 export const IconBadge = ({
   size,
