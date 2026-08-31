@@ -4,7 +4,7 @@ Living record of what has been implemented, what is complete, and what remains. 
 
 Authoritative plan: `Development_Plan/`. It was restructured from **phases** to **steps** after device testing (commit `b0c1c60`); phases 0–9 are complete and everything since is a numbered step. See `Development_Plan/03_Issue_Register.md` for the defect IDs each step closes.
 
-Last updated: after the third Step 4 device pass, with both CI workflows green on `main` (Android CI run `33363313376`, TypeScript CI run `33363313355`).
+Last updated: after the tools-page rebuild and the tool-wiring bug sweep, with both CI workflows green on `main` (Android CI run `33391387254`, TypeScript CI run `33391387303`).
 
 ---
 
@@ -1839,6 +1839,59 @@ Fixed at both ends deliberately: `packages/ai-agent` emits `planned` only when t
 - **The sidebar's bare plus is a labelled "New chat" button**, with search in the section header. Search **replaces** that header rather than appearing above it, so the list does not shift down under the finger that just tapped, and empty groups are dropped so a search never leaves a bare "Today" with nothing under it.
 
 Totals now 490 app Jest tests across 29 suites, 116 in `ai-agent`, 600 Kotlin.
+
+---
+
+## Tools page rebuild, and eight tool-wiring bugs (all fixed)
+
+Two halves, from one request: rebuild the tools screen around permissions, and find the tool bugs **by reading the code** rather than by testing, since none of them can be reproduced on this machine. Commits `3e12518` and `4a94982`; Android CI `33391387254`, TypeScript CI `33391387303`, both green.
+
+### The page
+
+One card per permission, not one row per tool. A permission is the unit of consent, so it is the unit of the page — the old version answered "is this tool on" when the question a user actually has is "what have I allowed this app to do".
+
+Each card carries a chevron immediately **left** of the toggle, each its own touch target so opening a card and granting a permission are never the same press. Expanding shows the tools that permission enables, with a checkbox each and names only.
+
+**The two controls look different on purpose**, and this is the part worth remembering:
+
+- The card's toggle is a **state of the device**. Only Android can change it, so it is terminal — there is no API to revoke a permission from inside the app, and a switch that appeared to turn one off would be lying about what it did.
+- A tool's checkbox is the **user's own choice**, stored locally, revocable freely.
+
+A checkbox that behaved like a permission, or the reverse, would make one of them feel broken. A tool can still be ticked while its permission is missing: the choice is theirs to record now and grant later, and a disabled checkbox would have the page argue with them.
+
+`features/permissions/toolCapabilities.ts` maps every tool to the capability it needs, typed as `Record<ToolName, CapabilityId | null>` so **adding a tool does not compile until the decision is made**. Nine tools map to null, and that turned out to be the substantive part — see bug 1.
+
+### The eight bugs
+
+Ordered by how much they broke.
+
+**1. Fourteen of twenty-four tools were unreachable.** `bridgeOrNull` returned null whenever the accessibility service was off, and `AutomationModule.dispatch` then rejected _every_ call with `accessibility_unavailable`. But `takeScreenshot`, `openApp`, `openAppByName`, `listApps`, `getContacts`, `findContacts`, `createAlarm`, both clipboard tools, `sendNotification`, `launchIntent`, `getSystemSetting`, `controlMedia` and `adjustVolume` do not use accessibility at all. The error sent the user to enable something that would not have fixed anything.
+
+The runtime is now always built and degrades per capability: no screen reader, an `UnavailableGestureDispatcher`, global actions returning false. `DefaultAutomationRuntime` already mapped each of those to `AccessibilityUnavailable` for exactly the tools that need it — so the pre-check was not only wrong, it was redundant.
+
+The general lesson, and the second time this shape of bug has appeared here: **a gate in front of a dispatcher applies to everything behind it.** Issue E1 was the same mistake in a status object. Whether a capability is required is the business of the thing that needs it.
+
+**2. Taps landed on the wrong row, and reported success.** `SelectorResolver` built each structural path from the child's position in the **parsed** list, while `UiAutomationAccessibilityService.withLiveNode` re-walks that path with `getChild(index)` against the **live** hierarchy. `UiTreeWalker` skips invisible children, so on any screen with a hidden sibling — which is most lists — the node that was resolved and the node that was acted on were different.
+
+No symptom pointed at it: the resolver matched correctly, the tap succeeded, and something else happened. Paths now use the recorded live index, and the rule lives in one place (`StructuralPath`) because the resolver writes paths and the runtime now walks them back down. A second copy would drift silently, which is precisely how this behaved.
+
+**3. `getUiTree` could succeed with nothing in it.** The walker dropped any node reporting `isVisibleToUser = false`, including the root — and a window root frequently reports false, because the flag describes its own drawn area and a full-screen container often has none. The result was an empty tree with no error: the model was handed a blank screen, and every selector then failed for reasons that pointed at the resolver. The root is now visited unconditionally; children are still filtered, which is where the filter earns its keep.
+
+**4. `openAppByName` could not find any preinstalled app.** It searched `includeSystem = false`, so Settings, Clock, Phone, Messages, Camera and the browser were invisible to it — precisely the apps a spoken goal names.
+
+This is also where the CI round trip came from. My first fix moved the launcher-entry filter into `listApps` unconditionally, which made `listApps(includeSystem = true)` drop the instrumentation test package and failed `ownPackageIsVisibleWhenSystemAppsAreIncluded` on both API levels. The test was right and I had collapsed two different jobs: **`listApps(includeSystem = true)` is an inventory** answering "is this package present", while **`findApps` returns candidates about to be opened**. The filter belongs in the second.
+
+Ranking moved to a pure `AppRanking` with its own tests, because "open the clock" matching _Alarm Clock_ is a real failure with a real cause and should be provable off a device. Tiers: exact label, then starts-with, then user-installed over preinstalled, then shorter label, then package name — that last one added after a test proved the order depended on whatever sequence the package manager returned.
+
+**5. `openApp` reported success without opening anything.** It returned true as soon as `startActivity` did not throw — but a background activity start is blocked outright on API 29+, and **the system reports that by ignoring the call, not by throwing**. So the agent went looking for elements on a screen it had never reached. Now polls the foreground package briefly. When the foreground cannot be read at all the launch is trusted, because the service being off is not evidence the app failed to open.
+
+**6. `click` tapped labels instead of buttons.** A selector by visible text almost always matches a `TextView`, and in real layouts the `TextView` is not clickable — its parent row is. The old code checked only the resolved node and fell through to a coordinate tap, which works often enough to look correct and fails exactly where it matters: a zero-area label, a node covered by another view, or the service being off so nothing can be dispatched. Now walks to the nearest clickable ancestor, bounded at three levels — beyond that the "ancestor" is the screen, whose click action has nothing to do with what the user pointed at.
+
+**7. `typeText` refused fields it was pointed at.** Any non-editable target was rejected outright with "target is not a text field", so a selector written against a field's label or container — which is what a hint or `contentDescription` usually belongs to — failed even though the field was one node away. Now finds the **single** editable descendant. Single, because two means the selector did not say which, and typing into the first would be a guess with the user's data.
+
+**8. Two smaller ones.** `findContacts` matched `DISPLAY_NAME` only, though the tool promises name-or-number search — so a lookup by number read as "no such contact". It now also matches `NORMALIZED_NUMBER`, which matters because the stored number carries the user's formatting: `(555) 010-1234` never contains the digits `5550101234`. And `createAlarm` set `EXTRA_SKIP_UI` without `com.android.alarm.permission.SET_ALARM` declared — the extra is honoured only for callers holding it, so the clock app opened pre-filled and waited for a tap, which for a backgrounded agent means the alarm was never set while the tool reported success.
+
+Totals now 512 app Jest tests across 30 suites, 116 in `ai-agent`, 625 Kotlin.
 
 ---
 
