@@ -49,17 +49,30 @@ export type PendingMessage = {
  */
 export const messageForEvent = (event: AgentEvent): PendingMessage | null => {
   switch (event.type) {
-    case 'planned':
+    case 'planned': {
+      /**
+       * A plan with no steps is not worth a message.
+       *
+       * The reported symptom was a stray bare `Plan:` line in the conversation — no card, no steps, just the label.
+       * Asking the agent something conversational ("hi") gives the model nothing to plan, so it returns an empty
+       * step list, and the joined text collapses to the prefix alone.
+       *
+       * Dropped here rather than filtered at render time, because it should not be *stored* either: a transcript
+       * reopened tomorrow would show the same empty line, and `taskListFrom` would have to keep guarding against
+       * a plan that never had content.
+       */
+      const steps = event.steps.map((step) => step.trim()).filter((step) => step !== '');
+      if (steps.length === 0) return null;
+
       return {
         role: 'event',
         // Kept readable on its own, because this is what a screen reader announces and what an older build (or a
         // future consumer with no timeline renderer) would show. The structured form in `detail` is what the
         // timeline draws from.
-        text: event.isReplan
-          ? `New plan: ${event.steps.join(' → ')}`
-          : `Plan: ${event.steps.join(' → ')}`,
-        detail: { kind: 'plan', steps: event.steps, isReplan: event.isReplan },
+        text: event.isReplan ? `New plan: ${steps.join(' → ')}` : `Plan: ${steps.join(' → ')}`,
+        detail: { kind: 'plan', steps, isReplan: event.isReplan },
       };
+    }
 
     case 'toolExecuted':
       return {

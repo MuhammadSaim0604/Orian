@@ -55,6 +55,33 @@ describe('the final response is the agent speaking', () => {
 });
 
 describe('a plan is a structured object', () => {
+  it('is dropped entirely when it has no steps', () => {
+    // The reported symptom: a bare "Plan:" line in the conversation, no card and no steps. A conversational
+    // message gives the model nothing to plan, and the joined text collapses to the label alone. Dropped here as
+    // well as at the emit site, so it is never *stored* — a transcript reopened tomorrow would show it again.
+    expect(messageForEvent({ ...base, type: 'planned', steps: [], isReplan: false })).toBeNull();
+  });
+
+  it('is dropped when every step is blank', () => {
+    expect(
+      messageForEvent({ ...base, type: 'planned', steps: ['', '   '], isReplan: false }),
+    ).toBeNull();
+  });
+
+  it('keeps the real steps when only some are blank', () => {
+    const message = messageForEvent({
+      ...base,
+      type: 'planned',
+      steps: ['Open WhatsApp', '  ', 'Find Robert'],
+      isReplan: false,
+    });
+
+    expect((message?.detail as { steps?: string[] }).steps).toEqual([
+      'Open WhatsApp',
+      'Find Robert',
+    ]);
+  });
+
   it('stores the steps, not just the joined sentence', () => {
     // The timeline needs the steps individually. Storing only the arrow-joined text is what forced the paragraph
     // rendering the device pass objected to.

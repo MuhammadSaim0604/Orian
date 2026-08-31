@@ -484,4 +484,77 @@ describe('the sidebar', () => {
 
     expect(onOpenSettings).toHaveBeenCalled();
   });
+
+  it('offers New chat as a labelled button, not a bare plus', async () => {
+    // The primary action in the panel should be the most legible thing in it, and an icon alone made it the least.
+    const { getByText } = renderWithTheme(
+      <SessionSidebar
+        onClose={jest.fn()}
+        onOpenOnboarding={jest.fn()}
+        onOpenSettings={jest.fn()}
+      />,
+    );
+    await flush();
+
+    expect(getByText('New chat')).toBeTruthy();
+  });
+
+  it('replaces the header row with a search field rather than adding one above it', async () => {
+    // Pushing the list down would move it under the finger that just tapped search.
+    const { getByLabelText, queryByText } = renderWithTheme(
+      <SessionSidebar
+        onClose={jest.fn()}
+        onOpenOnboarding={jest.fn()}
+        onOpenSettings={jest.fn()}
+      />,
+    );
+    await flush();
+
+    fireEvent.press(getByLabelText('Search conversations'));
+    await flush();
+
+    expect(queryByText('Recent chats')).toBeNull();
+    expect(queryByText('New chat')).toBeNull();
+  });
+
+  it('filters the conversations as you type', async () => {
+    const { getAllByLabelText, getByLabelText, queryByText } = renderWithTheme(
+      <SessionSidebar
+        onClose={jest.fn()}
+        onOpenOnboarding={jest.fn()}
+        onOpenSettings={jest.fn()}
+      />,
+    );
+    await flush();
+
+    fireEvent.press(getByLabelText('Search conversations'));
+    await flush();
+
+    // Two nodes carry this label once search is open — the icon button is gone, but the field and its own
+    // container both announce it — so the field is taken from the list rather than by an exact lookup.
+    const field = getAllByLabelText('Search conversations').at(-1)!;
+    fireEvent.changeText(field, 'nothing-like-this');
+    await flush();
+
+    expect(queryByText(/Nothing matches/)).toBeTruthy();
+  });
+
+  it('restores the header when search is dismissed', async () => {
+    const { getByLabelText, queryByText } = renderWithTheme(
+      <SessionSidebar
+        onClose={jest.fn()}
+        onOpenOnboarding={jest.fn()}
+        onOpenSettings={jest.fn()}
+      />,
+    );
+    await flush();
+
+    fireEvent.press(getByLabelText('Search conversations'));
+    await flush();
+
+    fireEvent.press(getByLabelText('Stop searching'));
+    await flush();
+
+    expect(queryByText('Recent chats')).toBeTruthy();
+  });
 });

@@ -181,13 +181,18 @@ export const runAgent = async (
       const plan = await makePlan(dependencies, options.goal, toolDefinitions, signal);
       memory.setPlan(plan);
 
-      events.emit({
-        type: 'planned',
-        runId,
-        timestampEpochMs: now(),
-        steps: plan,
-        isReplan: false,
-      });
+      // Only when there is a plan. `makePlan` returns an empty list when planning fails or when the goal is
+      // conversational enough that the model has nothing to plan — and an empty `planned` event is not
+      // information, it is a header with nothing under it. Consumers rendering it produced a bare "Plan:" line.
+      if (plan.length > 0) {
+        events.emit({
+          type: 'planned',
+          runId,
+          timestampEpochMs: now(),
+          steps: plan,
+          isReplan: false,
+        });
+      }
     }
 
     // Bounded on steps **taken**, not on total memory. Seeded history from earlier in the conversation
@@ -242,13 +247,17 @@ export const runAgent = async (
 
         memory.setPlan(plan);
 
-        events.emit({
-          type: 'planned',
-          runId,
-          timestampEpochMs: now(),
-          steps: plan,
-          isReplan: true,
-        });
+        // As above: an empty replan is not worth announcing. The `replanning` event already told the user the
+        // approach changed, which is the part that explains the pause.
+        if (plan.length > 0) {
+          events.emit({
+            type: 'planned',
+            runId,
+            timestampEpochMs: now(),
+            steps: plan,
+            isReplan: true,
+          });
+        }
       }
 
       const response = await dependencies.provider.complete({

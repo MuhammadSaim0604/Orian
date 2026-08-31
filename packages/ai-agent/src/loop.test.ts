@@ -636,6 +636,35 @@ describe('the recorder seam', () => {
     });
   });
 
+  it('does not announce a plan it could not make', async () => {
+    // The reported symptom was a bare "Plan:" line in the conversation — a label with nothing after it. A
+    // conversational message ("hi") gives the model nothing to plan, so `makePlan` returns an empty list, and
+    // emitting that as a `planned` event is a header with no content. Consumers persist events, so it also ended
+    // up in the stored transcript.
+    const events: AgentEvent[] = [];
+    const provider = scriptedProvider([prose('not json at all'), prose('Nothing to do.')]);
+
+    await runAgent(deps(provider, recordingDevice()), {
+      goal: 'hi',
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(events.filter((event) => event.type === 'planned')).toHaveLength(0);
+  });
+
+  it('still announces a plan that has steps', async () => {
+    // The other half: suppressing an empty plan must not suppress a real one.
+    const events: AgentEvent[] = [];
+    const provider = scriptedProvider([plan('open the app', 'find the contact'), prose('Done.')]);
+
+    await runAgent(deps(provider, recordingDevice()), {
+      goal: 'message Robert',
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(events.filter((event) => event.type === 'planned')).toHaveLength(1);
+  });
+
   it('does not report the final answer as thinking as well', async () => {
     // The duplication a device pass found: the response's prose was emitted as `thinking` before the loop checked
     // for tool calls, and when there are none that same prose becomes the run's summary and is delivered again by

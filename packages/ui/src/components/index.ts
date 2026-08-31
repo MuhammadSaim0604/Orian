@@ -35,6 +35,7 @@ export {
   CircleIcon,
   CloseIcon,
   DeleteIcon,
+  EditIcon,
   ForwardIcon,
   IconBadge,
   MenuIcon,

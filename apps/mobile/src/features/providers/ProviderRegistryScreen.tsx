@@ -1,4 +1,4 @@
-import { BackIcon, DeleteIcon, useTheme } from '@mobile-automation/ui';
+import { BackIcon, DeleteIcon, EditIcon, useTheme } from '@mobile-automation/ui';
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, Pressable, Text, TextInput, View } from 'react-native';
 
@@ -67,13 +67,13 @@ export const ProviderRegistryScreen = () => {
 
   return (
     <View style={{ gap: theme.spacing[3] }}>
-      <View>
-        <Text className="text-base font-semibold text-text-primary">AI providers</Text>
-        <Text className="mt-1 text-xs text-text-secondary">
-          Any OpenAI-compatible endpoint, including one running on your own machine. Shared by both
-          modes.
-        </Text>
-      </View>
+      {/* No heading here. The card this sits in already provides one, and rendering a second produced two
+          identical "AI providers" titles stacked on the screen. The description stays, because it says something
+          the title does not. */}
+      <Text className="text-xs text-text-secondary">
+        Any OpenAI-compatible endpoint, including one running on your own machine. Shared by both
+        modes.
+      </Text>
 
       {loading && providers.length === 0 ? (
         <Text className="text-xs text-text-muted">Loading…</Text>
@@ -166,12 +166,17 @@ const ProviderRow = ({
       </View>
 
       <View className="mt-2 flex-row items-center gap-2">
+        {/* Both actions are labelled buttons of the same shape. A bare icon square beside a labelled rectangle
+            read as two different kinds of control, and delete is the one that most needs its consequence spelled
+            out rather than inferred from a glyph. */}
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={`Edit ${provider.label}`}
           onPress={onEdit}
-          className="rounded-md border border-border px-3 py-2"
+          style={{ minHeight: MIN_TOUCH_TARGET }}
+          className="flex-1 flex-row items-center justify-center gap-1.5 rounded-md border border-border active:opacity-70"
         >
+          <EditIcon size={15} color={theme.colors.textSecondary} />
           <Text className="text-xs font-medium text-text-secondary">Edit</Text>
         </Pressable>
 
@@ -179,10 +184,11 @@ const ProviderRow = ({
           accessibilityRole="button"
           accessibilityLabel={`Remove ${provider.label}`}
           onPress={onDelete}
-          style={{ minHeight: MIN_TOUCH_TARGET, minWidth: MIN_TOUCH_TARGET }}
-          className="items-center justify-center rounded-md border border-danger"
+          style={{ minHeight: MIN_TOUCH_TARGET }}
+          className="flex-1 flex-row items-center justify-center gap-1.5 rounded-md border border-danger active:opacity-70"
         >
-          <DeleteIcon size={18} color={theme.colors.danger} />
+          <DeleteIcon size={15} color={theme.colors.danger} />
+          <Text className="text-xs font-medium text-danger">Delete</Text>
         </Pressable>
       </View>
     </View>

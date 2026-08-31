@@ -10,6 +10,7 @@ import {
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAutomationStatus } from '../automation/useAutomationStatus';
 import { useActiveModelLabel } from '../providers/useActiveModelLabel';
@@ -47,6 +48,7 @@ export interface AgentChatScreenProps {
 
 export const AgentChatScreen = ({ onOpenSessions, onOpenModelPicker }: AgentChatScreenProps) => {
   const { theme } = useTheme();
+  const insets = useSafeAreaInsets();
   const { status } = useAutomationStatus();
 
   const messages = useSessionStore((state) => state.messages);
@@ -108,12 +110,17 @@ export const AgentChatScreen = ({ onOpenSessions, onOpenModelPicker }: AgentChat
 
   return (
     <View className="flex-1">
-      <ChatHeader
-        title={activeSession?.title ?? 'Agent'}
-        onOpenSessions={onOpenSessions}
-        onOpenModelPicker={onOpenModelPicker}
-        running={running}
-      />
+      {/* Insets applied here rather than with a `SafeAreaView` wrapper, because the composer needs the bottom inset
+          on its own padding - a wrapper would inset the whole screen and leave a strip of background below the
+          composer instead of the composer sitting against the navigation bar. */}
+      <View style={{ paddingTop: insets.top }}>
+        <ChatHeader
+          title={activeSession?.title ?? 'Agent'}
+          onOpenSessions={onOpenSessions}
+          onOpenModelPicker={onOpenModelPicker}
+          running={running}
+        />
+      </View>
 
       {/* Pinned beneath the header, because the plan scrolls out of view the moment the agent starts working and
           "what is it doing now" is the question a user asks continuously while watching their phone be driven. */}
@@ -177,6 +184,7 @@ export const AgentChatScreen = ({ onOpenSessions, onOpenModelPicker }: AgentChat
         onStop={stop}
         canSend={canSend}
         running={running}
+        bottomInset={insets.bottom}
       />
     </View>
   );
@@ -288,6 +296,7 @@ const Composer = ({
   onStop,
   canSend,
   running,
+  bottomInset,
 }: {
   readonly value: string;
   readonly onChange: (value: string) => void;
@@ -295,15 +304,20 @@ const Composer = ({
   readonly onStop: () => void;
   readonly canSend: boolean;
   readonly running: boolean;
+  /** The navigation-bar inset, so the field sits above the buttons rather than under them. */
+  readonly bottomInset: number;
 }) => {
   const { theme } = useTheme();
 
   return (
-    <View className="border-t border-border px-3 py-2">
+    <View
+      className="border-t border-border px-3 pt-2"
+      style={{ paddingBottom: bottomInset + theme.spacing[2] }}
+    >
       {/* The field is the row: a bordered container holding the input and the action, so the action reads as part
           of the field rather than as a separate button that happens to sit nearby. */}
       <View
-        className="flex-row items-end rounded-xl border border-border bg-surface pl-3 pr-1"
+        className="flex-row items-end rounded-xl border border-border bg-surface pl-3 pr-1.5"
         style={{ minHeight: MIN_TOUCH_TARGET }}
       >
         <TextInput
@@ -324,10 +338,12 @@ const Composer = ({
             accessibilityLabel="Stop the agent"
             accessibilityHint="Ends the current task within a step"
             onPress={onStop}
-            style={{ minHeight: MIN_TOUCH_TARGET - 8, minWidth: MIN_TOUCH_TARGET - 8 }}
-            className="mb-1 items-center justify-center rounded-lg active:opacity-70"
+            style={{ width: ACTION_DIAMETER, height: ACTION_DIAMETER, marginBottom: 5 }}
+            className="items-center justify-center rounded-full bg-danger active:opacity-70"
           >
-            <StopIcon size={20} color={theme.colors.danger} />
+            {/* On the filled circle, so the glyph is the background's contrast colour rather than the danger
+                colour it now sits on. */}
+            <StopIcon size={15} color={theme.colors.textOnPrimary} />
           </Pressable>
         ) : (
           <Pressable
@@ -336,13 +352,19 @@ const Composer = ({
             accessibilityState={{ disabled: !canSend }}
             disabled={!canSend}
             onPress={onSend}
-            style={{ minHeight: MIN_TOUCH_TARGET - 8, minWidth: MIN_TOUCH_TARGET - 8 }}
-            className="mb-1 items-center justify-center rounded-lg active:opacity-70"
+            style={{ width: ACTION_DIAMETER, height: ACTION_DIAMETER, marginBottom: 5 }}
+            // A filled round background, as asked. It also solves a real problem: a bare outline glyph inside a
+            // bordered field has two competing edges, and the send action should be the one thing in the composer
+            // that reads as a button.
+            className={`items-center justify-center rounded-full ${
+              canSend ? 'bg-primary active:opacity-70' : 'bg-surface-muted'
+            }`}
           >
             <SendIcon
-              size={20}
-              // Muted when it would do nothing, so the disabled state is visible rather than only announced.
-              color={canSend ? theme.colors.primary : theme.colors.textMuted}
+              size={17}
+              // White on the filled circle; muted against the flat disabled fill, so the disabled state is visible
+              // rather than only announced.
+              color={canSend ? theme.colors.textOnPrimary : theme.colors.textMuted}
             />
           </Pressable>
         )}
@@ -364,6 +386,14 @@ const MODEL_BUTTON_MAX_WIDTH = 128;
 
 /** Roughly five lines. Beyond that the composer would eat the conversation it belongs to. */
 const MAX_COMPOSER_HEIGHT = 120;
+
+/**
+ * The send and stop circle.
+ *
+ * 36dp rather than the full 48: it sits inside the field, and a 48dp circle in a 48dp-tall row leaves no room for
+ * the border. The row itself is the touch target, and the circle is centred in the padding it has.
+ */
+const ACTION_DIAMETER = 36;
 
 /** Within this many pixels of the bottom counts as "following the conversation". */
 const BOTTOM_THRESHOLD = 80;

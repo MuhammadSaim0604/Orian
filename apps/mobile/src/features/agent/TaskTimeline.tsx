@@ -10,6 +10,7 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import { Animated, Easing, Pressable, Text, View } from 'react-native';
 
+import { animateNextLayout } from './animateLayout';
 import { type Task, type TaskList, currentTask, taskPositionLabel } from './taskList';
 
 /**
@@ -194,20 +195,23 @@ export const PinnedTaskCard = ({ list }: PinnedTaskCardProps) => {
   const [expanded, setExpanded] = useState(false);
 
   const active = currentTask(list);
-  const reveal = useRef(new Animated.Value(0)).current;
 
-  useEffect(() => {
-    Animated.timing(reveal, {
-      toValue: expanded ? 1 : 0,
-      duration: EXPAND_MS,
-      easing: Easing.out(Easing.cubic),
-      // Height cannot be driven natively, and animating opacity alone would leave the card at full height while
-      // apparently empty.
-      useNativeDriver: false,
-    }).start();
-  }, [expanded, reveal]);
+  /**
+   * Expanded by mounting, with the platform animating the surrounding layout.
+   *
+   * Not an animated `maxHeight`, which is what this used to be and what made the conversation jitter: the content
+   * lays out at full height immediately while the clamp grows, so the scroll view's content size jumps in one frame
+   * and everything below shifts. `maxHeight` also cannot use the native driver, so every frame was a JS-thread
+   * layout pass — during a run, on the thread driving the phone.
+   */
+  const toggle = () => {
+    animateNextLayout(EXPAND_MS);
+    setExpanded((current) => !current);
+  };
 
   return (
+    // `overflow-hidden` sits on the card, whose height changes only when the platform animates it — it is here to
+    // keep the progress rail inside the rounded corners.
     <View className="mx-3 mt-2 overflow-hidden rounded-xl border border-border bg-surface">
       <Pressable
         accessibilityRole="button"
@@ -217,7 +221,7 @@ export const PinnedTaskCard = ({ list }: PinnedTaskCardProps) => {
             : `Current task: ${active.text}. ${expanded ? 'Collapse' : 'Expand'} the plan`
         }
         accessibilityState={{ expanded }}
-        onPress={() => setExpanded((current) => !current)}
+        onPress={toggle}
         style={{ minHeight: MIN_TOUCH_TARGET }}
         className="flex-row items-center gap-2 px-3"
       >
@@ -249,16 +253,11 @@ export const PinnedTaskCard = ({ list }: PinnedTaskCardProps) => {
         />
       </View>
 
-      <Animated.View
-        style={{
-          maxHeight: reveal.interpolate({ inputRange: [0, 1], outputRange: [0, MAX_EXPANDED] }),
-          opacity: reveal,
-        }}
-      >
+      {expanded && (
         <View style={{ padding: theme.spacing[3] }}>
           <TaskTimeline list={list} compact />
         </View>
-      </Animated.View>
+      )}
     </View>
   );
 };
@@ -288,8 +287,5 @@ const toneFor = (
 const PULSE_MS = 700;
 
 const EXPAND_MS = 220;
-
-/** A ceiling, so a twelve-step plan cannot cover the conversation it is describing. */
-const MAX_EXPANDED = 260;
 
 const MIN_TOUCH_TARGET = 48;

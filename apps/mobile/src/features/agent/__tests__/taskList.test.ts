@@ -62,6 +62,20 @@ describe('deriving the list', () => {
     expect(taskListFrom([planned([])])).toBeNull();
   });
 
+  it('is null for a plan whose steps are all blank', () => {
+    // Same defect from the other side: a whitespace-only plan must not produce a card with blank rows.
+    expect(taskListFrom([planned(['', '  '])])).toBeNull();
+  });
+
+  it('ignores an empty plan that follows a real one', () => {
+    // A failed replan returns an empty list. Letting it through would wipe out the plan the agent is still working
+    // to, so the card would empty mid-run.
+    const list = taskListFrom([planned(['Open WhatsApp', 'Find Robert']), planned([], true)]);
+
+    expect(list?.tasks).toHaveLength(2);
+    expect(list?.isReplan).toBe(false);
+  });
+
   it('marks the first task active on a fresh plan', () => {
     const list = taskListFrom([planned(['Open WhatsApp', 'Find Robert'])]);
 

@@ -62,12 +62,19 @@ export const taskListFrom = (events: readonly AgentEvent[]): TaskList | null => 
 
   for (const event of events) {
     switch (event.type) {
-      case 'planned':
-        steps = event.steps;
+      case 'planned': {
+        // Blank entries dropped, and an all-blank plan ignored entirely. A model given a conversational message
+        // has nothing to plan and returns an empty list; treating that as a plan produced an empty card and, in
+        // the transcript, a bare "Plan:" line with nothing after it.
+        const cleaned = event.steps.map((step) => step.trim()).filter((step) => step !== '');
+        if (cleaned.length === 0) break;
+
+        steps = cleaned;
         isReplan = event.isReplan;
         toolCallsSincePlan = 0;
         abandonedFrom = null;
         break;
+      }
 
       case 'toolExecuted':
         // Only successful calls advance the list. A failed tap means the agent is still on the same task and

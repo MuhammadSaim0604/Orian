@@ -1,14 +1,15 @@
 import {
+  CloseIcon,
   DeleteIcon,
   ForwardIcon,
   IconBadge,
   PlusIcon,
+  SearchIcon,
   SettingsIcon,
   ShieldCheckIcon,
-  CloseIcon,
   useTheme,
 } from '@mobile-automation/ui';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
@@ -16,11 +17,11 @@ import {
   Easing,
   Pressable,
   ScrollView,
-  StatusBar,
   Text,
+  TextInput,
   View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { type SessionSummary } from './sessionStorage';
 import { useSessionStore } from './sessionStore';
@@ -31,14 +32,12 @@ import { useGroupedSessions } from './useSessionViews';
  *
  * Slides in from the left and covers part of the screen, because that is what a sidebar is.
  *
- * Two things device testing caught, both about the panel's edges rather than its contents:
- *
- * - **It ran under the status bar.** The panel is inside a `statusBarTranslucent` modal, so it draws behind the
- *   clock and the notification icons unless it pads itself by the top inset. `SafeAreaView` would have worked for
- *   the panel alone, but the padding has to be on the animated container, so the inset is applied directly.
- * - **The dimmed strip beside it is gone.** A scrim is the usual way to say "this is temporary", but it was read
- *   as a shadow rather than as an affordance. The uncovered strip is still tappable to dismiss — it just is not
- *   tinted, so the boundary is the panel's own border.
+ * **Its modal is not `statusBarTranslucent`, and that matters.** That prop applies the flag to the host
+ * activity's window rather than to the modal alone, so the whole app went edge-to-edge while the sidebar was
+ * open — the panel ran under the clock, the chat behind it jumped up, and closing it dropped everything back.
+ * Three reported symptoms, one cause. Without the flag the modal starts below the status bar, which is where a
+ * panel belongs, and `SafeAreaView` handles the bottom edge so the last conversation is not sitting under the
+ * navigation buttons.
  */
 
 export interface SessionSidebarProps {
@@ -53,8 +52,7 @@ export const SessionSidebar = ({
   onOpenOnboarding,
   onOpenSettings,
 }: SessionSidebarProps) => {
-  const { theme, scheme } = useTheme();
-  const insets = useSafeAreaInsets();
+  const { theme } = useTheme();
 
   const groups = useGroupedSessions();
   const activeSessionId = useSessionStore((state) => state.activeSessionId);
@@ -64,10 +62,39 @@ export const SessionSidebar = ({
 
   const [busy, setBusy] = useState(false);
 
+  /**
+   * Search, when the user asks for it.
+   *
+   * Not a permanently visible field: with a handful of conversations it would be dead weight above the list it
+   * filters. Opening it replaces the section's header row rather than pushing it down, so the list does not move
+   * under the finger that just tapped.
+   */
+  const [searching, setSearching] = useState(false);
+  const [query, setQuery] = useState('');
+
   const width = Math.min(
     Math.round(Dimensions.get('window').width * WIDTH_FRACTION),
     MAX_SIDEBAR_WIDTH,
   );
+
+  /**
+   * The groups the list actually shows.
+   *
+   * Filtered here rather than in `useGroupedSessions`, because the grouping hook is shared and a search term is
+   * this panel's concern. Empty groups are dropped, so a search never leaves a bare "Today" heading with nothing
+   * under it.
+   */
+  const visibleGroups = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (needle === '') return groups;
+
+    return groups
+      .map((group) => ({
+        ...group,
+        sessions: group.sessions.filter((session) => session.title.toLowerCase().includes(needle)),
+      }))
+      .filter((group) => group.sessions.length > 0);
+  }, [groups, query]);
 
   /** Slid in on mount. Mounted only while open, so this runs exactly when the panel appears. */
   const progress = useRef(new Animated.Value(0)).current;
@@ -144,128 +171,171 @@ export const SessionSidebar = ({
 
   return (
     <View className="flex-1 flex-row">
-      {/* The modal is translucent over the status bar, so the bar's own content has to be legible against the
-          panel rather than against whatever was behind it. */}
-      <StatusBar
-        translucent
-        backgroundColor="transparent"
-        barStyle={scheme === 'dark' ? 'light-content' : 'dark-content'}
-      />
-
       <Animated.View
         style={{
           width,
-          // The fix for the overflow: without this the panel's header sits under the clock.
-          paddingTop: insets.top + theme.spacing[2],
           transform: [
             { translateX: progress.interpolate({ inputRange: [0, 1], outputRange: [-width, 0] }) },
           ],
         }}
         className="border-r border-border bg-background"
       >
-        <View className="flex-row items-center gap-2 border-b border-border px-3 pb-3">
-          <View accessibilityRole="header" className="flex-1">
-            {/* Two weights in one line rather than a single bold string: the product's name should read as a
+        {/* `edges` names top and bottom explicitly: the panel is flush to the left screen edge, and asking for a
+            left inset would indent it away from that edge on a device with a cutout there. */}
+        <SafeAreaView edges={['top', 'bottom']} className="flex-1">
+          <View className="flex-row items-center gap-2 border-b border-border px-3 pb-3 pt-2">
+            <View accessibilityRole="header" className="flex-1">
+              {/* Two weights in one line rather than a single bold string: the product's name should read as a
                 wordmark, and "Orion" carrying the weight is what makes it one. */}
-            <Text className="text-lg tracking-tight text-text-primary">
-              <Text className="font-bold">Orion</Text>
-              <Text className="font-light text-text-secondary"> Agent</Text>
-            </Text>
-
-            <Text className="text-[10px] uppercase tracking-widest text-text-muted">
-              Automation
-            </Text>
-          </View>
-
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Close the sidebar"
-            onPress={close}
-            style={{ minHeight: MIN_TOUCH_TARGET, minWidth: MIN_TOUCH_TARGET }}
-            className="items-center justify-center"
-          >
-            <CloseIcon size={18} color={theme.colors.textSecondary} />
-          </Pressable>
-        </View>
-
-        <ScrollView
-          contentContainerStyle={{
-            paddingBottom: insets.bottom + theme.spacing[6],
-            paddingHorizontal: theme.spacing[3],
-            paddingTop: theme.spacing[3],
-            gap: theme.spacing[4],
-          }}
-        >
-          {/* Section one: what the app can do for you, as opposed to what you have already asked it. */}
-          <View style={{ gap: theme.spacing[1] }}>
-            <ActionRow
-              label="Onboarding"
-              hint="Permissions and setup"
-              onPress={() => {
-                close();
-                onOpenOnboarding();
-              }}
-              // A filled badge, and the trailing arrow: this row leads to a whole flow, which is what the arrow
-              // is for. Settings deliberately has neither, so the two do not read as the same kind of thing.
-              badge
-              trailingArrow
-              icon={(color) => <ShieldCheckIcon size={15} color={color} />}
-            />
-
-            <ActionRow
-              label="Settings"
-              hint="Model, tools, run limits"
-              onPress={() => {
-                close();
-                onOpenSettings();
-              }}
-              icon={(color) => <SettingsIcon size={18} color={color} />}
-            />
-          </View>
-
-          {/* Section two: the conversations. */}
-          <View style={{ gap: theme.spacing[2] }}>
-            <View className="flex-row items-center gap-2">
-              <Text className="flex-1 text-xs font-medium uppercase tracking-wide text-text-muted">
-                Recent chats
+              <Text className="text-lg tracking-tight text-text-primary">
+                <Text className="font-bold">Orion</Text>
+                <Text className="font-light text-text-secondary"> Agent</Text>
               </Text>
 
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Start a new conversation"
-                accessibilityState={{ disabled: busy }}
-                disabled={busy}
-                onPress={() => void onNew()}
-                style={{ minHeight: MIN_TOUCH_TARGET, minWidth: MIN_TOUCH_TARGET }}
-                className="items-center justify-center"
-              >
-                <PlusIcon size={18} color={busy ? theme.colors.textMuted : theme.colors.primary} />
-              </Pressable>
+              <Text className="text-[10px] uppercase tracking-widest text-text-muted">
+                Automation
+              </Text>
             </View>
 
-            {groups.length === 0 ? (
-              <Text className="py-4 text-center text-xs text-text-muted">
-                No conversations yet.
-              </Text>
-            ) : (
-              groups.map((group) => (
-                <View key={group.label} style={{ gap: theme.spacing[1] }}>
-                  <Text className="text-xs text-text-muted">{group.label}</Text>
-
-                  {group.sessions.map((session) => (
-                    <SessionRow
-                      key={session.id}
-                      session={session}
-                      active={session.id === activeSessionId}
-                      onSelect={() => void onSelect(session.id)}
-                      onDelete={() => onDelete(session)}
-                    />
-                  ))}
-                </View>
-              ))
-            )}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Close the sidebar"
+              onPress={close}
+              style={{ minHeight: MIN_TOUCH_TARGET, minWidth: MIN_TOUCH_TARGET }}
+              className="items-center justify-center"
+            >
+              <CloseIcon size={18} color={theme.colors.textSecondary} />
+            </Pressable>
           </View>
-        </ScrollView>
+
+          <ScrollView
+            contentContainerStyle={{
+              paddingBottom: theme.spacing[6],
+              paddingHorizontal: theme.spacing[3],
+              paddingTop: theme.spacing[3],
+              gap: theme.spacing[4],
+            }}
+          >
+            {/* Section one: what the app can do for you, as opposed to what you have already asked it. */}
+            <View style={{ gap: theme.spacing[1] }}>
+              <ActionRow
+                label="Onboarding"
+                hint="Permissions and setup"
+                onPress={() => {
+                  close();
+                  onOpenOnboarding();
+                }}
+                // A filled badge, and the trailing arrow: this row leads to a whole flow, which is what the arrow
+                // is for. Settings deliberately has neither, so the two do not read as the same kind of thing.
+                badge
+                trailingArrow
+                icon={(color) => <ShieldCheckIcon size={15} color={color} />}
+              />
+
+              <ActionRow
+                label="Settings"
+                hint="Model, tools, run limits"
+                onPress={() => {
+                  close();
+                  onOpenSettings();
+                }}
+                icon={(color) => <SettingsIcon size={18} color={color} />}
+              />
+            </View>
+
+            {/* Section two: the conversations. */}
+            <View style={{ gap: theme.spacing[2] }}>
+              {searching ? (
+                /* The search field replaces the header row rather than appearing above it, so opening search does not
+                 push the list down under the finger that just tapped. */
+                <View className="flex-row items-center gap-2 rounded-xl border border-border bg-surface px-2.5">
+                  <SearchIcon size={15} color={theme.colors.textMuted} />
+
+                  <TextInput
+                    accessibilityLabel="Search conversations"
+                    autoFocus
+                    className="flex-1 py-2 text-sm text-text-primary"
+                    style={{ minHeight: MIN_TOUCH_TARGET - 8 }}
+                    value={query}
+                    onChangeText={setQuery}
+                    placeholder="Search chats"
+                    placeholderTextColor={theme.colors.textMuted}
+                  />
+
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Stop searching"
+                    onPress={() => {
+                      setSearching(false);
+                      setQuery('');
+                    }}
+                    style={{ minHeight: MIN_TOUCH_TARGET - 8, minWidth: 32 }}
+                    className="items-center justify-center"
+                  >
+                    <CloseIcon size={15} color={theme.colors.textSecondary} />
+                  </Pressable>
+                </View>
+              ) : (
+                <View style={{ gap: theme.spacing[2] }}>
+                  <View className="flex-row items-center gap-2">
+                    <Text className="flex-1 text-xs font-medium uppercase tracking-wide text-text-muted">
+                      Recent chats
+                    </Text>
+
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Search conversations"
+                      onPress={() => setSearching(true)}
+                      style={{ minHeight: MIN_TOUCH_TARGET, minWidth: MIN_TOUCH_TARGET }}
+                      className="items-center justify-center"
+                    >
+                      <SearchIcon size={17} color={theme.colors.textSecondary} />
+                    </Pressable>
+                  </View>
+
+                  {/* A labelled button rather than a bare plus. "New chat" is the most common action in this panel,
+                    and an icon alone made the primary action the least legible thing in it. */}
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Start a new conversation"
+                    accessibilityState={{ disabled: busy }}
+                    disabled={busy}
+                    onPress={() => void onNew()}
+                    style={{ minHeight: MIN_TOUCH_TARGET }}
+                    className={`flex-row items-center justify-center gap-2 rounded-xl border border-primary ${
+                      busy ? 'opacity-50' : 'active:opacity-70'
+                    }`}
+                  >
+                    <PlusIcon size={16} color={theme.colors.primary} />
+                    <Text className="text-sm font-semibold text-primary">New chat</Text>
+                  </Pressable>
+                </View>
+              )}
+
+              {visibleGroups.length === 0 ? (
+                <Text className="py-4 text-center text-xs text-text-muted">
+                  {query.trim() === '' ? 'No conversations yet.' : `Nothing matches “${query}”.`}
+                </Text>
+              ) : (
+                visibleGroups.map((group) => (
+                  <View key={group.label} style={{ gap: theme.spacing[1] }}>
+                    <Text className="text-xs text-text-muted">{group.label}</Text>
+
+                    {group.sessions.map((session) => (
+                      <SessionRow
+                        key={session.id}
+                        session={session}
+                        active={session.id === activeSessionId}
+                        onSelect={() => void onSelect(session.id)}
+                        onDelete={() => onDelete(session)}
+                      />
+                    ))}
+                  </View>
+                ))
+              )}
+            </View>
+          </ScrollView>
+        </SafeAreaView>
       </Animated.View>
 
       {/* The uncovered strip. Tappable to dismiss, and deliberately **untinted** — the dim overlay was read as a

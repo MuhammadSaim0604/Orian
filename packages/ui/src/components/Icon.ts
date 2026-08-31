@@ -72,16 +72,45 @@ export const ChevronUpIcon = (props: IconProps): ReactElement =>
   stroked(props, createElement(Polyline, { key: 'p', points: '18 15 12 9 6 15' }));
 
 /**
- * A paper plane.
+ * A paper plane, flying level.
  *
- * The messaging-app send mark: an outline triangle with the fold line that makes it read as folded paper rather
- * than as an arrowhead. Two paths, because the fold has to be a separate stroke.
+ * Device testing was precise about what was wrong with the first attempt: too narrow, and tilted 45°. A send mark
+ * should read as horizontal motion, so this one is drawn across the full width of the viewBox on a shallow rake,
+ * with an open tail notch — the notch is what distinguishes a paper plane from an arrowhead.
+ *
+ * Filled rather than stroked, because at 17dp inside a round button a 2px outline is most of the glyph and reads
+ * as a wireframe. `fill` is the colour and there is no stroke, which is also why it keeps its weight when the
+ * button behind it is filled.
  */
-export const SendIcon = (props: IconProps): ReactElement =>
+export const SendIcon = ({ size, color }: IconProps): ReactElement =>
+  createElement(
+    Svg,
+    {
+      width: size ?? DEFAULT_SIZE,
+      height: size ?? DEFAULT_SIZE,
+      viewBox: '0 0 24 24',
+      fill: 'none',
+    },
+    createElement(Path, {
+      key: 'plane',
+      // Nose at the right edge, tail at the left with a notch cut into it, and the body slightly deeper below the
+      // centre line than above — which is what makes it look like it is travelling rather than pointing.
+      d: 'M2.2 4.6 21.4 12 2.2 19.4l2.6-6.2 9.4-1.2-9.4-1.2-2.6-6.2Z',
+      fill: color,
+    }),
+  );
+
+/**
+ * A pencil.
+ *
+ * Edit. Paired with `DeleteIcon` on the provider card, so it is a line icon of the same weight rather than a
+ * filled glyph — two buttons side by side with different icon weights look like a mistake.
+ */
+export const EditIcon = (props: IconProps): ReactElement =>
   stroked(
     props,
-    createElement(Path, { key: 'body', d: 'M21.5 2.5 2 10.2l6.6 2.6L21.5 2.5Z' }),
-    createElement(Path, { key: 'fold', d: 'M21.5 2.5 8.6 12.8l1.9 7 2.8-4.4 8.2-12.9Z' }),
+    createElement(Path, { key: 'body', d: 'M4 20h4L20 8a2.83 2.83 0 0 0-4-4L4 16v4Z' }),
+    createElement(Path, { key: 'nib', d: 'm14.5 5.5 4 4' }),
   );
 
 /** A wastebasket: lid, body, and two ribs. */

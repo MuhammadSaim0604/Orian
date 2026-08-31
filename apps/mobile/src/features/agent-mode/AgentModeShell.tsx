@@ -95,15 +95,15 @@ export const AgentModeShell = () => {
 
       {/* Transparent, so the sidebar covers part of the screen and the rest stays tappable to dismiss.
           `animationType="none"` because the panel animates itself; letting the modal slide too would produce two
-          competing motions. `statusBarTranslucent` so the panel can pad itself by the top inset and draw its own
-          header there rather than being pushed below the clock. */}
-      <Modal
-        visible={sidebarOpen}
-        transparent
-        animationType="none"
-        onRequestClose={closeSidebar}
-        statusBarTranslucent
-      >
+          competing motions.
+
+          **No `statusBarTranslucent`.** That prop does not only affect the modal — React Native applies the flag to
+          the host activity's *window*, so the whole app went edge-to-edge the moment the sidebar mounted and the
+          chat behind it jumped up under the clock, then dropped back on close. It was the cause of three separate
+          reported symptoms: the sidebar overflowing the status bar, the chat overflowing behind it, and the
+          status-bar-height jolt when opening settings or onboarding. The app's own theme sets a solid
+          `statusBarColor`, so nothing here needs the flag at all. */}
+      <Modal visible={sidebarOpen} transparent animationType="none" onRequestClose={closeSidebar}>
         <SessionSidebar
           onClose={closeSidebar}
           onOpenOnboarding={() => setOnboardingOpen(true)}

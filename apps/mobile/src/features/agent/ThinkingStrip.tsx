@@ -2,6 +2,8 @@ import { ChevronDownIcon, ChevronUpIcon, SparkIcon, useTheme } from '@mobile-aut
 import { useEffect, useRef, useState } from 'react';
 import { Animated, Easing, Pressable, Text, View } from 'react-native';
 
+import { animateNextLayout } from './animateLayout';
+
 /**
  * The agent's reasoning, out of the way until asked for.
  *
@@ -13,6 +15,17 @@ import { Animated, Easing, Pressable, Text, View } from 'react-native';
  * that word** rather than pushed to the far right, because the chevron belongs to the label it expands and a
  * right-aligned one reads as a row action. Expanded, the reasoning appears in a bordered section rather than a
  * bubble — a left rule says "this is quoted material, not speech".
+ *
+ * ## Why the expansion is not an animated height
+ *
+ * The first version animated `maxHeight` from zero, and that is what caused the reported jitter. The content is
+ * laid out at full height immediately while the container's clamp grows, so the scroll view's content size jumps
+ * in a single frame and every message above it shifts, then settles. `maxHeight` also cannot be driven natively,
+ * so each frame was a JS-thread layout pass — on the same thread that drives the phone during a run.
+ *
+ * `LayoutAnimation` instead: the content mounts, and the platform interpolates the surrounding layout on the UI
+ * thread. One configuration call, no per-frame JS, and the messages above move calmly rather than snapping. See
+ * `animateLayout.ts`.
  */
 
 export interface ThinkingStripProps {
@@ -30,17 +43,12 @@ export const ThinkingStrip = ({ content, live = false }: ThinkingStripProps) => 
   const { theme } = useTheme();
   const [expanded, setExpanded] = useState(false);
 
-  const reveal = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    Animated.timing(reveal, {
-      toValue: expanded ? 1 : 0,
-      duration: EXPAND_MS,
-      easing: Easing.out(Easing.cubic),
-      // Height is not a native-driver property, and fading alone would leave a full-height gap.
-      useNativeDriver: false,
-    }).start();
-  }, [expanded, reveal]);
+  const toggle = () => {
+    // Called immediately before the state change: `LayoutAnimation` animates the *next* layout pass, so this has to
+    // be the call right before the render that changes the tree.
+    animateNextLayout(EXPAND_MS);
+    setExpanded((current) => !current);
+  };
 
   return (
     <View className="py-1">
@@ -49,7 +57,7 @@ export const ThinkingStrip = ({ content, live = false }: ThinkingStripProps) => 
           accessibilityRole="button"
           accessibilityLabel={expanded ? 'Hide the reasoning' : 'Show the reasoning'}
           accessibilityState={{ expanded }}
-          onPress={() => setExpanded((current) => !current)}
+          onPress={toggle}
           // Padded to the touch minimum without stretching: a full-width target here would swallow taps meant
           // for the messages around it.
           hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
@@ -67,22 +75,25 @@ export const ThinkingStrip = ({ content, live = false }: ThinkingStripProps) => 
         </Pressable>
       </View>
 
-      <Animated.View
-        style={{
-          maxHeight: reveal.interpolate({ inputRange: [0, 1], outputRange: [0, MAX_REVEALED] }),
-          opacity: reveal,
-          overflow: 'hidden',
-        }}
-      >
-        {/* A left rule and no background: quoted material rather than a message. The border colour is the muted
-            one deliberately - reasoning should be legible when looked for and invisible when not. */}
+      {/* Mounted rather than height-clamped. A left rule and no background: quoted material rather than a message,
+          with the muted border so reasoning is legible when looked for and invisible when not. */}
+      {expanded && (
         <View
           className="ml-1 mt-1 border-l-2 border-border pl-3"
           style={{ paddingVertical: theme.spacing[1] }}
         >
-          <Text className="text-xs leading-4 text-text-secondary">{content}</Text>
+          {/* Truncated by line count rather than by a container height. A `maxHeight` would clip mid-line and, on a
+              mounted block, would need `overflow: hidden` on something the scroll view is already measuring — which
+              is how the jitter started. Model reasoning can run to hundreds of words and must not bury the
+              conversation, so a generous ceiling with an ellipsis is the honest compromise. */}
+          <Text
+            numberOfLines={MAX_REASONING_LINES}
+            className="text-xs leading-4 text-text-secondary"
+          >
+            {content}
+          </Text>
         </View>
-      </Animated.View>
+      )}
     </View>
   );
 };
@@ -137,5 +148,10 @@ const DIM_OPACITY = 0.35;
 
 const EXPAND_MS = 200;
 
-/** A ceiling. Model reasoning can run to hundreds of words, and it must not bury the conversation. */
-const MAX_REVEALED = 220;
+/**
+ * A ceiling on the reasoning shown.
+ *
+ * Roughly fourteen lines: enough to read the argument, few enough that it does not push the conversation off the
+ * screen. Lines rather than pixels, so the limit holds at any font scale.
+ */
+const MAX_REASONING_LINES = 14;
