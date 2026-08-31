@@ -16,7 +16,15 @@ jest.mock('react-native', () => ({
   NativeModules: {},
 }));
 
-import { discoverModels, isModelCacheStale, type Provider } from '../providerRegistry';
+import {
+  changeModelId,
+  discoverModels,
+  isModelCacheStale,
+  mergeModels,
+  removeModel,
+  renameModel,
+  type Provider,
+} from '../providerRegistry';
 
 beforeEach(() => {
   mockFetch.mockReset();
@@ -35,7 +43,14 @@ describe('parsing the model list', () => {
 
     const result = await discoverModels('https://api.openai.com/v1', 'sk-test');
 
-    expect(result).toEqual({ ok: true, models: ['gpt-4o', 'gpt-4o-mini'] });
+    // Name seeded from the id, because that is all a provider gives us. It becomes the user's to edit.
+    expect(result).toEqual({
+      ok: true,
+      models: [
+        { id: 'gpt-4o', name: 'gpt-4o' },
+        { id: 'gpt-4o-mini', name: 'gpt-4o-mini' },
+      ],
+    });
   });
 
   it('reads a bare array of objects', async () => {
@@ -43,7 +58,7 @@ describe('parsing the model list', () => {
 
     const result = await discoverModels('http://localhost:1234/v1', null);
 
-    expect(result).toEqual({ ok: true, models: ['llama-3'] });
+    expect(result).toEqual({ ok: true, models: [{ id: 'llama-3', name: 'llama-3' }] });
   });
 
   it('reads a bare array of strings', async () => {
@@ -51,7 +66,13 @@ describe('parsing the model list', () => {
 
     const result = await discoverModels('http://localhost:1234/v1', null);
 
-    expect(result).toEqual({ ok: true, models: ['mistral-7b', 'phi-3'] });
+    expect(result).toEqual({
+      ok: true,
+      models: [
+        { id: 'mistral-7b', name: 'mistral-7b' },
+        { id: 'phi-3', name: 'phi-3' },
+      ],
+    });
   });
 
   it('sorts, so a long list is scannable', async () => {
@@ -59,7 +80,7 @@ describe('parsing the model list', () => {
 
     const result = await discoverModels('https://example.com/v1', null);
 
-    expect(result).toEqual({ ok: true, models: ['alpha', 'zeta'] });
+    expect(result.ok && result.models.map((model) => model.id)).toEqual(['alpha', 'zeta']);
   });
 
   it('de-duplicates, since some gateways alias one model several times', async () => {
@@ -67,7 +88,7 @@ describe('parsing the model list', () => {
 
     const result = await discoverModels('https://example.com/v1', null);
 
-    expect(result).toEqual({ ok: true, models: ['gpt-4o'] });
+    expect(result.ok && result.models).toHaveLength(1);
   });
 
   it('ignores rows with no usable id', async () => {
@@ -75,7 +96,7 @@ describe('parsing the model list', () => {
 
     const result = await discoverModels('https://example.com/v1', null);
 
-    expect(result).toEqual({ ok: true, models: ['good'] });
+    expect(result.ok && result.models.map((model) => model.id)).toEqual(['good']);
   });
 });
 
@@ -177,7 +198,7 @@ describe('the cache', () => {
     label: 'OpenAI',
     baseUrl: 'https://api.openai.com/v1',
     model: 'gpt-4o-mini',
-    models: ['gpt-4o-mini'],
+    models: [{ id: 'gpt-4o-mini', name: 'gpt-4o-mini' }],
     modelsFetchedAtEpochMs: Date.now(),
     isActive: true,
     createdAtEpochMs: 1,
@@ -199,5 +220,79 @@ describe('the cache', () => {
     const twoDays = Date.now() - 2 * 24 * 60 * 60 * 1000;
 
     expect(isModelCacheStale(provider({ modelsFetchedAtEpochMs: twoDays }))).toBe(true);
+  });
+});
+
+describe('merging a fetched list into what is stored', () => {
+  const model = (id: string, name = id) => ({ id, name });
+
+  it('keeps a name the user wrote', () => {
+    // The rule that matters most. Re-fetching is routine — the cache has a TTL — so a rename that did not
+    // survive it would be lost by the user simply tapping Fetch models again.
+    const merged = mergeModels([model('m1', 'cheap and fast')], [model('m1')]);
+
+    expect(merged).toEqual([model('m1', 'cheap and fast')]);
+  });
+
+  it('adds newly discovered models', () => {
+    const merged = mergeModels([model('m1', 'mine')], [model('m1'), model('m2')]);
+
+    expect(merged.map((entry) => entry.id)).toEqual(['m1', 'm2']);
+  });
+
+  it('keeps a manually entered model that discovery does not list', () => {
+    // A provider may return a partial list, and silently deleting something the user typed would look like the
+    // app forgetting rather than the provider being incomplete.
+    const merged = mergeModels([model('typed-by-hand')], [model('discovered')]);
+
+    expect(merged.map((entry) => entry.id)).toEqual(['discovered', 'typed-by-hand']);
+  });
+
+  it('takes the discovered name for a model that is new', () => {
+    const merged = mergeModels([], [model('m1', 'm1')]);
+
+    expect(merged).toEqual([model('m1', 'm1')]);
+  });
+});
+
+describe('editing models', () => {
+  const model = (id: string, name = id) => ({ id, name });
+
+  it('renames without touching the id', () => {
+    // The id is the provider's. A rename that changed it would produce a model that does not exist, and the
+    // failure would arrive mid-run rather than in settings.
+    const renamed = renameModel([model('gpt-4o-mini')], 'gpt-4o-mini', 'cheap');
+
+    expect(renamed).toEqual([model('gpt-4o-mini', 'cheap')]);
+  });
+
+  it('falls back to the id when a name is emptied', () => {
+    // A model with no label cannot be picked out of a list.
+    const renamed = renameModel([model('m1', 'was named')], 'm1', '   ');
+
+    expect(renamed).toEqual([model('m1', 'm1')]);
+  });
+
+  it('changes an id, keeping the name', () => {
+    const changed = changeModelId([model('typo', 'Fast')], 'typo', 'correct');
+
+    expect(changed).toEqual([{ id: 'correct', name: 'Fast' }]);
+  });
+
+  it('refuses an id that would collide', () => {
+    // Two rows with one id makes the selected-model check ambiguous.
+    const models = [model('a'), model('b')];
+
+    expect(changeModelId(models, 'a', 'b')).toEqual(models);
+  });
+
+  it('refuses an empty id', () => {
+    const models = [model('a')];
+
+    expect(changeModelId(models, 'a', '  ')).toEqual(models);
+  });
+
+  it('removes a model', () => {
+    expect(removeModel([model('a'), model('b')], 'a')).toEqual([model('b')]);
   });
 });

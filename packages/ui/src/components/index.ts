@@ -24,3 +24,19 @@ export {
   type TextFieldProps,
   type ToggleProps,
 } from './Field';
+
+export {
+  BackIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  CloseIcon,
+  DeleteIcon,
+  ForwardIcon,
+  IconBadge,
+  MenuIcon,
+  PlusIcon,
+  SearchIcon,
+  SendIcon,
+  StopIcon,
+  type IconProps,
+} from './Icon';

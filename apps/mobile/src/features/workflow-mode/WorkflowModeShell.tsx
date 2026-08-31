@@ -1,5 +1,5 @@
 import { type ExecutionTrace } from '@mobile-automation/execution-recorder';
-import { Button, Card, useTheme } from '@mobile-automation/ui';
+import { BackIcon, Button, Card, useTheme } from '@mobile-automation/ui';
 import { type Workflow } from '@mobile-automation/workflow-schema';
 import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
@@ -139,9 +139,10 @@ const CanvasRoute = () => {
           accessibilityRole="button"
           accessibilityLabel="Back to workflows"
           onPress={() => navigate({ kind: 'list' })}
-          className="px-2 py-1"
+          style={{ minHeight: 48, minWidth: 48 }}
+          className="items-center justify-center"
         >
-          <Text className="text-sm text-primary">Back</Text>
+          <BackIcon size={20} color={theme.colors.primary} />
         </Pressable>
 
         <View className="flex-1" />
@@ -290,14 +291,15 @@ const WorkflowSettingsScreen = () => {
           gap: theme.spacing[4],
         }}
       >
-        <View className="flex-row items-center gap-3">
+        <View className="flex-row items-center gap-2">
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Back to workflows"
             onPress={() => navigate({ kind: 'list' })}
-            className="px-1 py-1"
+            style={{ minHeight: 48, minWidth: 48 }}
+            className="items-center justify-center"
           >
-            <Text className="text-sm text-primary">Back</Text>
+            <BackIcon size={20} color={theme.colors.primary} />
           </Pressable>
 
           <View accessibilityRole="header" className="flex-1">

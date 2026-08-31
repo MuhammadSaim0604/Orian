@@ -1,5 +1,5 @@
 import { TOOL_DEFINITIONS, type ToolName } from '@mobile-automation/tool-sdk';
-import { useTheme } from '@mobile-automation/ui';
+import { BackIcon, useTheme } from '@mobile-automation/ui';
 import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -69,6 +69,25 @@ export const AgentToolsScreen = ({ onBack }: AgentToolsScreenProps) => {
     void refreshCapabilities();
   }, [refreshCapabilities]);
 
+  /**
+   * Asks for the permission a tool needs, if it needs one and does not have it.
+   *
+   * Declared before the toggle that uses it, because it is reachable two ways: switching a tool on, and tapping
+   * Grant on a row that is already on but unusable. Device testing found the second case — every tool read "On"
+   * from a fresh install regardless of its permission, so the only way to trigger a request was to switch a
+   * tool off and on again, which nobody would think to do.
+   */
+  const requestFor = useCallback(
+    async (name: ToolName) => {
+      const capabilityId = TOOL_CAPABILITIES[name];
+      if (capabilityId === undefined) return;
+
+      const capability = capabilities.find((candidate) => candidate.id === capabilityId);
+      if (capability !== undefined && !capability.granted) await request(capabilityId);
+    },
+    [capabilities, request],
+  );
+
   const onToggle = useCallback(
     async (name: ToolName, enabled: boolean) => {
       const disabled = toggleTool(settings, name, enabled);
@@ -83,13 +102,9 @@ export const AgentToolsScreen = ({ onBack }: AgentToolsScreenProps) => {
       // moment the agent tries to use it mid-run.
       if (!enabled) return;
 
-      const capabilityId = TOOL_CAPABILITIES[name];
-      if (capabilityId === undefined) return;
-
-      const capability = capabilities.find((candidate) => candidate.id === capabilityId);
-      if (capability !== undefined && !capability.granted) await request(capabilityId);
+      await requestFor(name);
     },
-    [capabilities, request, settings],
+    [settings, requestFor],
   );
 
   return (
@@ -102,14 +117,15 @@ export const AgentToolsScreen = ({ onBack }: AgentToolsScreenProps) => {
           gap: theme.spacing[4],
         }}
       >
-        <View className="flex-row items-center gap-3">
+        <View className="flex-row items-center gap-2">
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Back to the agent"
+            accessibilityLabel="Back to settings"
             onPress={onBack}
-            className="px-1 py-1"
+            style={{ minHeight: MIN_TOUCH_TARGET, minWidth: MIN_TOUCH_TARGET }}
+            className="items-center justify-center"
           >
-            <Text className="text-sm text-primary">Back</Text>
+            <BackIcon size={20} color={theme.colors.primary} />
           </Pressable>
 
           <View accessibilityRole="header" className="flex-1">
@@ -146,6 +162,7 @@ export const AgentToolsScreen = ({ onBack }: AgentToolsScreenProps) => {
                     permissionMissing={capability !== undefined && !capability.granted}
                     permissionLabel={capability?.title ?? null}
                     onToggle={(enabled) => void onToggle(name, enabled)}
+                    onGrant={() => void requestFor(name)}
                   />
                 );
               })}
@@ -167,17 +184,34 @@ const ToolRow = ({
   permissionMissing,
   permissionLabel,
   onToggle,
+  onGrant,
 }: {
   readonly name: ToolName;
   readonly enabled: boolean;
   readonly permissionMissing: boolean;
   readonly permissionLabel: string | null;
   readonly onToggle: (enabled: boolean) => void;
+  readonly onGrant: () => void;
 }) => {
   const definition = TOOL_DEFINITIONS[name];
 
+  /**
+   * On, but unusable.
+   *
+   * The state device testing exposed. Every tool reads On from a fresh install — which is right, because the
+   * stored set is the *disabled* one so a new tool is never silently missing — but a tool whose permission has
+   * not been granted cannot actually run. The row said "On" and nothing else, and the only way to trigger a
+   * request was to switch it off and on again.
+   *
+   * So the row states the truth in three parts: the toggle reflects the user's choice, the label says whether
+   * it can act on that choice, and Grant is offered from the row itself.
+   */
+  const blocked = enabled && permissionMissing;
+
   return (
-    <View className="rounded-lg border border-border bg-surface p-3">
+    <View
+      className={`rounded-lg border bg-surface p-3 ${blocked ? 'border-warning' : 'border-border'}`}
+    >
       <View className="flex-row items-start gap-3">
         <View className="flex-1">
           <Text className="text-sm font-medium text-text-primary">{name}</Text>
@@ -189,8 +223,28 @@ const ToolRow = ({
             {definition.description}
           </Text>
 
-          {permissionMissing && (
-            <Text className="mt-1 text-xs text-warning">
+          {blocked && (
+            <View className="mt-2 flex-row items-center gap-2">
+              <Text className="flex-1 text-xs leading-4 text-warning">
+                On, but {permissionLabel ?? 'its permission'} is not granted yet — the agent cannot
+                use it.
+              </Text>
+
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Grant the permission ${name} needs`}
+                onPress={onGrant}
+                style={{ minHeight: MIN_TOUCH_TARGET, justifyContent: 'center' }}
+                className="rounded-md border border-warning px-3"
+              >
+                <Text className="text-xs font-semibold text-warning">Grant</Text>
+              </Pressable>
+            </View>
+          )}
+
+          {/* Off and unpermitted: worth mentioning, but not as a problem — nothing is broken until they want it. */}
+          {!enabled && permissionMissing && (
+            <Text className="mt-1 text-xs text-text-muted">
               Needs {permissionLabel ?? 'a permission'} — switching this on will ask for it.
             </Text>
           )}
@@ -200,17 +254,23 @@ const ToolRow = ({
             state is stated in words here, which a screen reader can read without inferring from a track. */}
         <Pressable
           accessibilityRole="switch"
-          accessibilityLabel={`${name}, ${enabled ? 'on' : 'off'}`}
+          accessibilityLabel={`${name}, ${enabled ? 'on' : 'off'}${
+            blocked ? ', permission not granted' : ''
+          }`}
           accessibilityState={{ checked: enabled }}
           onPress={() => onToggle(!enabled)}
           style={{ minHeight: MIN_TOUCH_TARGET, minWidth: 64 }}
           className={`items-center justify-center rounded-full border px-3 ${
-            enabled ? 'border-primary bg-primary' : 'border-border bg-surface-muted'
+            blocked
+              ? 'border-warning bg-surface-muted'
+              : enabled
+                ? 'border-primary bg-primary'
+                : 'border-border bg-surface-muted'
           }`}
         >
           <Text
             className={`text-xs font-semibold ${
-              enabled ? 'text-text-on-primary' : 'text-text-muted'
+              blocked ? 'text-warning' : enabled ? 'text-text-on-primary' : 'text-text-muted'
             }`}
           >
             {enabled ? 'On' : 'Off'}

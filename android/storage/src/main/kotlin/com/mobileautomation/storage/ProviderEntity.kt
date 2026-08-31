@@ -49,11 +49,27 @@ data class StoredProvider(
     val label: String,
     val baseUrl: String,
     val model: String?,
-    /** Discovered or manually entered model ids. */
-    val models: List<String>,
+    /** Discovered or manually entered models, each with an id and a display name. */
+    val models: List<StoredModel>,
     val modelsFetchedAtEpochMs: Long?,
     val isActive: Boolean,
     val createdAtEpochMs: Long,
+)
+
+/**
+ * A model the user can choose.
+ *
+ * Two fields rather than one string, because they answer different questions. The **id** is what goes in the
+ * request and is not negotiable — `gpt-4o-mini-2024-07-18` is what the provider expects. The **name** is what
+ * a person picks from a list, and they should be able to write "cheap and fast" if that is how they think
+ * about it.
+ *
+ * Discovery seeds both from the id, so nothing is worse than before for a user who never edits them, and the
+ * name becomes useful the moment they do.
+ */
+data class StoredModel(
+    val id: String,
+    val name: String,
 )
 
 @Dao

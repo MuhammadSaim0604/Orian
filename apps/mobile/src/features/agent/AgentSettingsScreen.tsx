@@ -1,10 +1,12 @@
-import { useTheme } from '@mobile-automation/ui';
+import { BackIcon, useTheme } from '@mobile-automation/ui';
 import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BackgroundExecutionCard } from '../agent-mode/BackgroundExecutionCard';
 import { AutomationStatusPanel } from '../automation/AutomationStatusPanel';
+import { ModelPickerSheet } from '../providers/ModelPickerSheet';
+import { type Provider } from '../providers/providerRegistry';
 import { useProviderStore } from '../providers/providerStore';
 import { ModeSettingsFooter } from '../shell/ModeSettingsFooter';
 
@@ -35,7 +37,6 @@ import {
 export interface AgentSettingsScreenProps {
   readonly onBack: () => void;
   readonly onOpenTools: () => void;
-  readonly onOpenProviders: () => void;
 }
 
 /**
@@ -49,15 +50,12 @@ const STEP_CHOICES = [10, 20, DEFAULT_MAX_STEPS, 80] as const;
 /** Wall-clock ceilings, in minutes. A step is not a fixed cost — a wait can take thirty seconds. */
 const DEADLINE_CHOICES_MINUTES = [2, 5, 10, 30] as const;
 
-export const AgentSettingsScreen = ({
-  onBack,
-  onOpenTools,
-  onOpenProviders,
-}: AgentSettingsScreenProps) => {
+export const AgentSettingsScreen = ({ onBack, onOpenTools }: AgentSettingsScreenProps) => {
   const { theme } = useTheme();
   const insets = useSafeAreaInsets();
 
   const [settings, setSettings] = useState<AgentSettings>(readAgentSettings);
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
 
   const providers = useProviderStore((state) => state.providers);
   const refreshProviders = useProviderStore((state) => state.refresh);
@@ -96,14 +94,15 @@ export const AgentSettingsScreen = ({
           gap: theme.spacing[4],
         }}
       >
-        <View className="flex-row items-center gap-3">
+        <View className="flex-row items-center gap-2">
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Back to the agent"
             onPress={onBack}
-            className="px-1 py-1"
+            style={{ minHeight: MIN_TOUCH_TARGET, minWidth: MIN_TOUCH_TARGET }}
+            className="items-center justify-center"
           >
-            <Text className="text-sm text-primary">Back</Text>
+            <BackIcon size={20} color={theme.colors.primary} />
           </Pressable>
 
           <View accessibilityRole="header" className="flex-1">
@@ -112,14 +111,14 @@ export const AgentSettingsScreen = ({
           </View>
         </View>
 
-        {/* The model in use, and a route to change it. The registry itself lives in root settings because both
-            modes share it — showing it twice would invite two screens disagreeing. */}
+        {/* Changed from the same picker the chat header opens, so there is one way to choose a model rather than
+            two that could disagree. The registry itself lives in root settings because both modes share it. */}
         <Section title="Model">
           <Row
             label={active?.label ?? 'No provider configured'}
-            detail={active?.model ?? 'Choose one in provider settings'}
-            actionLabel="Providers"
-            onPress={onOpenProviders}
+            detail={activeModelLabel(active)}
+            actionLabel="Change"
+            onPress={() => setModelPickerOpen(true)}
           />
         </Section>
 
@@ -201,8 +200,26 @@ export const AgentSettingsScreen = ({
 
         <ModeSettingsFooter mode="agent" />
       </ScrollView>
+
+      <ModelPickerSheet visible={modelPickerOpen} onClose={() => setModelPickerOpen(false)} />
     </View>
   );
+};
+
+/**
+ * The active provider's model, named for a person.
+ *
+ * The user's name for it if they gave one, with the id only when the two differ — repeating an unedited id twice
+ * would be noise, and hiding the id entirely would remove the one thing worth checking when a run fails.
+ */
+const activeModelLabel = (provider: Provider | null): string => {
+  if (provider === null) return 'Add a provider in settings';
+
+  const selected = provider.models.find((model) => model.id === provider.model) ?? null;
+
+  if (selected === null) return 'No model chosen';
+
+  return selected.name === selected.id ? selected.id : `${selected.name} · ${selected.id}`;
 };
 
 const Section = ({

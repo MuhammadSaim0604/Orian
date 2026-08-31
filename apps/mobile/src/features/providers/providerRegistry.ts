@@ -18,15 +18,30 @@ import { NativeModules } from 'react-native';
  * that rule forbids, so the type makes it impossible rather than discouraged.
  */
 
+/**
+ * A model the user can choose.
+ *
+ * Two fields, because they answer different questions. The **id** is what the request must carry and comes from
+ * the provider — `gpt-4o-mini-2024-07-18` is not negotiable. The **name** is what a person picks out of a list,
+ * and they should be able to write "cheap and fast" if that is how they think about it.
+ *
+ * Discovery seeds both from the id, so nothing is worse for a user who never edits them, and the name becomes
+ * useful the moment they do.
+ */
+export type ProviderModel = {
+  readonly id: string;
+  readonly name: string;
+};
+
 export type Provider = {
   readonly id: string;
   /** What the user calls it: "OpenAI", "my laptop". */
   readonly label: string;
   readonly baseUrl: string;
-  /** The chosen model, or null when none has been picked yet. A real state the UI must handle. */
+  /** The chosen model **id**, or null when none has been picked yet. A real state the UI must handle. */
   readonly model: string | null;
-  /** Discovered or manually entered model ids. */
-  readonly models: readonly string[];
+  /** Discovered or manually entered models. */
+  readonly models: readonly ProviderModel[];
   readonly modelsFetchedAtEpochMs: number | null;
   readonly isActive: boolean;
   readonly createdAtEpochMs: number;
@@ -40,7 +55,7 @@ type ProviderRegistryNative = {
   save: (id: string, label: string, baseUrl: string, model: string | null) => Promise<Provider>;
   setActive: (id: string) => Promise<void>;
   remove: (id: string) => Promise<void>;
-  setModels: (id: string, models: readonly string[]) => Promise<void>;
+  setModels: (id: string, models: readonly ProviderModel[]) => Promise<void>;
   setModel: (id: string, model: string) => Promise<void>;
   setKey: (id: string, apiKey: string | null) => Promise<boolean>;
   hasKey: (id: string) => Promise<boolean>;
@@ -146,7 +161,10 @@ export const setProviderModel = async (id: string, model: string): Promise<void>
   }
 };
 
-export const setProviderModels = async (id: string, models: readonly string[]): Promise<void> => {
+export const setProviderModels = async (
+  id: string,
+  models: readonly ProviderModel[],
+): Promise<void> => {
   try {
     await native?.setModels(id, models);
   } catch {
@@ -200,7 +218,7 @@ export const readActiveApiKey = async (): Promise<string | null> => {
  * The key is read here at call time and used only for this request. It is not returned, stored, or logged.
  */
 export type DiscoveryResult =
-  | { readonly ok: true; readonly models: readonly string[] }
+  | { readonly ok: true; readonly models: readonly ProviderModel[] }
   | { readonly ok: false; readonly reason: string };
 
 export const discoverModels = async (
@@ -230,7 +248,7 @@ export const discoverModels = async (
       };
     }
 
-    const models = extractModelIds(await response.json());
+    const models = extractModels(await response.json());
 
     if (models.length === 0) {
       return { ok: false, reason: 'The provider returned no models. Enter a model name instead.' };
@@ -252,13 +270,16 @@ export const discoverModels = async (
 };
 
 /**
- * Pulls model ids out of whatever shape came back.
+ * Pulls models out of whatever shape came back.
  *
  * Three shapes tolerated because all three exist in the wild: the OpenAI `{ data: [{ id }] }`, a bare array
  * of objects, and a bare array of strings. Being lenient here is the difference between a local gateway
  * working and the user being told to type model names by hand for no good reason.
+ *
+ * The name is seeded from the id, because that is all a provider gives us. It becomes the user's to edit, and
+ * {@link mergeModels} is what stops a re-fetch from overwriting that edit.
  */
-const extractModelIds = (payload: unknown): readonly string[] => {
+const extractModels = (payload: unknown): readonly ProviderModel[] => {
   const rows = Array.isArray(payload)
     ? payload
     : typeof payload === 'object' &&
@@ -283,8 +304,79 @@ const extractModelIds = (payload: unknown): readonly string[] => {
 
   // Sorted, because provider order is arbitrary and a user scanning for "gpt-4o" in a list of two hundred
   // wants it findable. De-duplicated because some gateways list a model under several aliases.
-  return [...new Set(ids)].sort((left, right) => left.localeCompare(right));
+  return [...new Set(ids)]
+    .sort((left, right) => left.localeCompare(right))
+    .map((id) => ({ id, name: id }));
 };
+
+/**
+ * Merges a freshly discovered list into what is already stored.
+ *
+ * **Existing names win.** A user who renamed `gpt-4o-mini-2024-07-18` to "cheap and fast" must not lose that
+ * because they tapped Fetch models again — which they will, since the whole point of caching with a TTL is that
+ * re-fetching is routine.
+ *
+ * Manually entered models are kept even when discovery does not list them. A provider that does not implement
+ * `/models` properly may return a partial list, and silently deleting a model the user typed would look like
+ * the app forgetting.
+ */
+export const mergeModels = (
+  existing: readonly ProviderModel[],
+  discovered: readonly ProviderModel[],
+): readonly ProviderModel[] => {
+  const names = new Map(existing.map((model) => [model.id, model.name]));
+
+  const merged = discovered.map((model) => ({
+    id: model.id,
+    name: names.get(model.id) ?? model.name,
+  }));
+
+  const discoveredIds = new Set(discovered.map((model) => model.id));
+
+  return [...merged, ...existing.filter((model) => !discoveredIds.has(model.id))];
+};
+
+/**
+ * Renames one model, leaving its id alone.
+ *
+ * The id is the provider's and must not be editable through this path — a rename that changed the id would
+ * produce a model that no longer exists, and the failure would arrive mid-run rather than in settings.
+ */
+export const renameModel = (
+  models: readonly ProviderModel[],
+  id: string,
+  name: string,
+): readonly ProviderModel[] => {
+  const trimmed = name.trim();
+
+  return models.map((model) =>
+    model.id === id
+      ? // An emptied name falls back to the id rather than being stored blank: a model with no label cannot be
+        // picked out of a list.
+        { ...model, name: trimmed === '' ? model.id : trimmed }
+      : model,
+  );
+};
+
+/** Changes a model's id, keeping its name. For a user correcting a typo in something they typed. */
+export const changeModelId = (
+  models: readonly ProviderModel[],
+  currentId: string,
+  nextId: string,
+): readonly ProviderModel[] => {
+  const trimmed = nextId.trim();
+  if (trimmed === '') return models;
+
+  // Refused if it would collide, because two rows with one id makes the selected-model check ambiguous.
+  if (models.some((model) => model.id === trimmed && model.id !== currentId)) return models;
+
+  return models.map((model) => (model.id === currentId ? { ...model, id: trimmed } : model));
+};
+
+export const removeModel = (
+  models: readonly ProviderModel[],
+  id: string,
+): readonly ProviderModel[] => models.filter((model) => model.id !== id);
 
 const describeStatus = (status: number): string => {
   if (status === 401 || status === 403) return 'Check the API key.';

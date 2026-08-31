@@ -1,4 +1,4 @@
-import { useTheme } from '@mobile-automation/ui';
+import { MenuIcon, SendIcon, StopIcon, useTheme } from '@mobile-automation/ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -27,7 +27,7 @@ import { useActiveSession } from './useSessionViews';
  *
  * Three things it has to get right, because this is where a user hands control of their phone to a model:
  *
- * - **Stop is always reachable**, beside the composer rather than at the end of a scrolling log. Someone who
+ * - **Stop is always reachable**, inside the composer rather than at the end of a scrolling log. Someone who
  *   wants to stop an agent wants to stop it now.
  * - **Every step is narrated.** An agent acting silently is alarming; the transcript is the reassurance that
  *   it is doing what was asked.
@@ -38,11 +38,11 @@ import { useActiveSession } from './useSessionViews';
 export interface AgentChatScreenProps {
   /** Opens the sidebar. Passed in because the shell owns layout, not this screen. */
   readonly onOpenSessions: () => void;
-  /** Opens Agent Mode's settings. The only route to them from the mode's home. */
-  readonly onOpenSettings: () => void;
+  /** Opens the model picker. The one setting a person changes mid-conversation. */
+  readonly onOpenModelPicker: () => void;
 }
 
-export const AgentChatScreen = ({ onOpenSessions, onOpenSettings }: AgentChatScreenProps) => {
+export const AgentChatScreen = ({ onOpenSessions, onOpenModelPicker }: AgentChatScreenProps) => {
   const { theme } = useTheme();
   const { status } = useAutomationStatus();
 
@@ -99,7 +99,7 @@ export const AgentChatScreen = ({ onOpenSessions, onOpenSettings }: AgentChatScr
       <ChatHeader
         title={activeSession?.title ?? 'Agent'}
         onOpenSessions={onOpenSessions}
-        onOpenSettings={onOpenSettings}
+        onOpenModelPicker={onOpenModelPicker}
         running={running}
       />
 
@@ -162,44 +162,61 @@ export const AgentChatScreen = ({ onOpenSessions, onOpenSettings }: AgentChatScr
 const ChatHeader = ({
   title,
   onOpenSessions,
-  onOpenSettings,
+  onOpenModelPicker,
   running,
 }: {
   readonly title: string;
   readonly onOpenSessions: () => void;
-  readonly onOpenSettings: () => void;
+  readonly onOpenModelPicker: () => void;
   readonly running: boolean;
-}) => (
-  <View className="flex-row items-center gap-3 border-b border-border px-4 py-2">
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel="Show conversations"
-      onPress={onOpenSessions}
-      className="rounded-md border border-border px-3 py-2"
-    >
-      {/* Three bars drawn as views rather than a glyph, so there is no icon font to go missing. */}
-      <View style={{ gap: 3 }}>
-        <View className="h-0.5 w-4 rounded-full bg-text-secondary" />
-        <View className="h-0.5 w-4 rounded-full bg-text-secondary" />
-        <View className="h-0.5 w-4 rounded-full bg-text-secondary" />
+}) => {
+  const { theme } = useTheme();
+
+  return (
+    <View className="flex-row items-center gap-2 border-b border-border px-3 py-2">
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Show conversations"
+        onPress={onOpenSessions}
+        style={{ minHeight: MIN_TOUCH_TARGET, minWidth: MIN_TOUCH_TARGET }}
+        className="items-center justify-center"
+      >
+        <MenuIcon size={20} color={theme.colors.textSecondary} />
+      </Pressable>
+
+      <View className="flex-1">
+        <Text numberOfLines={1} className="text-base font-semibold text-text-primary">
+          {title}
+        </Text>
+        {running && <Text className="text-xs text-success">Running</Text>}
       </View>
-    </Pressable>
 
-    <View className="flex-1">
-      <Text numberOfLines={1} className="text-base font-semibold text-text-primary">
-        {title}
-      </Text>
-      {running && <Text className="text-xs text-success">Running</Text>}
+      {/* The model, not settings. This is the one thing a person changes mid-conversation — settings moved into
+          the sidebar, where a screen you visit occasionally belongs. */}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Choose a model"
+        onPress={onOpenModelPicker}
+        style={{ minHeight: MIN_TOUCH_TARGET, minWidth: MIN_TOUCH_TARGET }}
+        className="items-center justify-center rounded-lg border border-border"
+      >
+        <ModelGlyph color={theme.colors.textSecondary} />
+      </Pressable>
     </View>
+  );
+};
 
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel="Agent settings"
-      onPress={onOpenSettings}
-      className="rounded-md border border-border px-3 py-2"
-    >
-      <Text className="text-xs font-medium text-text-secondary">Settings</Text>
-    </Pressable>
+/**
+ * Three stacked dots with a bar: a "list of choices" mark.
+ *
+ * Local rather than in the shared icon set, because it means "pick a model" only here — a shared icon named
+ * after a concept this specific would be used wrongly elsewhere.
+ */
+const ModelGlyph = ({ color }: { readonly color: string }) => (
+  <View style={{ gap: 3, alignItems: 'center' }}>
+    <View style={{ width: 12, height: 2, borderRadius: 1, backgroundColor: color }} />
+    <View style={{ width: 8, height: 2, borderRadius: 1, backgroundColor: color }} />
+    <View style={{ width: 4, height: 2, borderRadius: 1, backgroundColor: color }} />
   </View>
 );
 
@@ -240,9 +257,12 @@ const Notice = ({
 /**
  * The composer.
  *
- * Send becomes Stop while a run is in flight rather than sitting beside it. One control in one place: a
- * disabled Send next to an active Stop invites tapping the wrong one, and the only thing anyone wants during
- * a run is to stop it.
+ * **The action sits inside the field**, at its right edge, rather than beside it — that is where a phone user
+ * reaches for send, and it leaves the field the full width of the screen.
+ *
+ * Send becomes Stop while a run is in flight rather than sitting next to it. One control in one place: a
+ * disabled Send beside an active Stop invites tapping the wrong one, and during a run stop is the only thing
+ * anyone wants.
  */
 const Composer = ({
   value,
@@ -262,52 +282,54 @@ const Composer = ({
   const { theme } = useTheme();
 
   return (
-    <View className="flex-row items-end gap-2 border-t border-border px-4 py-2">
-      <TextInput
-        accessibilityLabel="What should the agent do?"
-        className="flex-1 rounded-2xl border border-border bg-surface px-3 py-2 text-sm text-text-primary"
-        style={{ maxHeight: MAX_COMPOSER_HEIGHT, minHeight: MIN_TOUCH_TARGET }}
-        placeholder={running ? 'Running…' : 'Ask the agent to do something'}
-        placeholderTextColor={theme.colors.textMuted}
-        value={value}
-        onChangeText={onChange}
-        editable={!running}
-        multiline
-      />
+    <View className="border-t border-border px-3 py-2">
+      {/* The field is the row: a bordered container holding the input and the action, so the action reads as part
+          of the field rather than as a separate button that happens to sit nearby. */}
+      <View
+        className="flex-row items-end rounded-xl border border-border bg-surface pl-3 pr-1"
+        style={{ minHeight: MIN_TOUCH_TARGET }}
+      >
+        <TextInput
+          accessibilityLabel="What should the agent do?"
+          className="flex-1 py-2 text-sm text-text-primary"
+          style={{ maxHeight: MAX_COMPOSER_HEIGHT, minHeight: MIN_TOUCH_TARGET - 8 }}
+          placeholder={running ? 'Running…' : 'Ask the agent to do something'}
+          placeholderTextColor={theme.colors.textMuted}
+          value={value}
+          onChangeText={onChange}
+          editable={!running}
+          multiline
+        />
 
-      {running ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Stop the agent"
-          accessibilityHint="Ends the current task within a step"
-          onPress={onStop}
-          style={{ minHeight: MIN_TOUCH_TARGET, minWidth: MIN_TOUCH_TARGET }}
-          className="flex-row items-center justify-center rounded-full bg-danger px-4 active:opacity-80"
-        >
-          {/* A square, the universal stop glyph, drawn rather than fetched. */}
-          <View className="h-3 w-3 rounded-sm bg-text-on-primary" />
-        </Pressable>
-      ) : (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Send to the agent"
-          accessibilityState={{ disabled: !canSend }}
-          disabled={!canSend}
-          onPress={onSend}
-          style={{ minHeight: MIN_TOUCH_TARGET, minWidth: MIN_TOUCH_TARGET }}
-          className={`items-center justify-center rounded-full px-4 ${
-            canSend ? 'bg-primary active:opacity-80' : 'bg-surface-muted'
-          }`}
-        >
-          <Text
-            className={`text-sm font-semibold ${
-              canSend ? 'text-text-on-primary' : 'text-text-muted'
-            }`}
+        {running ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Stop the agent"
+            accessibilityHint="Ends the current task within a step"
+            onPress={onStop}
+            style={{ minHeight: MIN_TOUCH_TARGET - 8, minWidth: MIN_TOUCH_TARGET - 8 }}
+            className="mb-1 items-center justify-center rounded-lg active:opacity-70"
           >
-            Send
-          </Text>
-        </Pressable>
-      )}
+            <StopIcon size={20} color={theme.colors.danger} />
+          </Pressable>
+        ) : (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Send to the agent"
+            accessibilityState={{ disabled: !canSend }}
+            disabled={!canSend}
+            onPress={onSend}
+            style={{ minHeight: MIN_TOUCH_TARGET - 8, minWidth: MIN_TOUCH_TARGET - 8 }}
+            className="mb-1 items-center justify-center rounded-lg active:opacity-70"
+          >
+            <SendIcon
+              size={20}
+              // Muted when it would do nothing, so the disabled state is visible rather than only announced.
+              color={canSend ? theme.colors.primary : theme.colors.textMuted}
+            />
+          </Pressable>
+        )}
+      </View>
     </View>
   );
 };

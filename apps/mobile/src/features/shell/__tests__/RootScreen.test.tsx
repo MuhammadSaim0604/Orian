@@ -101,7 +101,9 @@ describe('RootScreen', () => {
 
     const { getByLabelText } = await renderShell();
 
-    await waitFor(() => expect(getByLabelText('Agent settings')).toBeTruthy());
+    // The composer, which only Agent Mode has. Previously this asserted on a settings button in the chat header;
+    // that moved into the sidebar, so the mode is now identified by the thing that defines it.
+    await waitFor(() => expect(getByLabelText('What should the agent do?')).toBeTruthy());
   });
 
   it('renders Workflow Mode', async () => {
@@ -123,7 +125,7 @@ describe('RootScreen', () => {
 
     setRoute({ onboardingComplete: true, route: { kind: 'mode', mode: 'workflow' } });
     const workflow = await renderShell();
-    expect(workflow.queryByLabelText('Agent settings')).toBeNull();
+    expect(workflow.queryByLabelText('What should the agent do?')).toBeNull();
   });
 
   it('has no Status tab', async () => {

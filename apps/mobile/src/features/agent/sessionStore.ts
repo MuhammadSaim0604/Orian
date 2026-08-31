@@ -11,6 +11,7 @@ import {
   deleteSession,
   listSessions,
   loadMessages,
+  onMessageAppended,
   renameSession,
   titleFromMessage,
 } from './sessionStorage';
@@ -60,6 +61,8 @@ export type SessionActions = {
     /** Overrides the target, for a run persisting into a session the user has since navigated away from. */
     readonly sessionId?: string;
   }) => Promise<void>;
+  /** Re-reads the open session's transcript from storage. */
+  reloadMessages: () => Promise<void>;
   setSidebarOpen: (open: boolean) => void;
   /** Test seam. Module state outlives a test, so tests need a way back to a known state. */
   resetForTests: () => void;
@@ -184,12 +187,8 @@ export const useSessionStore = create<SessionState & SessionActions>((set, get) 
     // recover: the messages have nowhere to go and the run carries on.
     if (!stored) return;
 
-    // Only re-read when the message belongs to what is on screen. A run persisting into a background
-    // session must not replace the transcript the user is reading.
-    if (target === get().activeSessionId) {
-      const messages = await loadMessages(target);
-      if (get().activeSessionId === target) set({ messages });
-    }
+    // No re-read here: `appendMessage` notifies, and the module-level subscription below reloads the open
+    // transcript. Doing it in both places would read twice for every message.
 
     // The first thing the user says becomes the title, so the sidebar reads as a list of tasks. Only from a
     // user message: titling a conversation after the agent's first tool call would be meaningless.
@@ -206,8 +205,43 @@ export const useSessionStore = create<SessionState & SessionActions>((set, get) 
 
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
 
+  reloadMessages: async () => {
+    const sessionId = get().activeSessionId;
+    if (sessionId === null) return;
+
+    const messages = await loadMessages(sessionId);
+
+    // Guarded, because the read is async and the user may have switched conversation while it was in flight —
+    // writing these into the new one would show the wrong transcript under the right title.
+    if (get().activeSessionId !== sessionId) return;
+
+    set({ messages });
+  },
+
   resetForTests: () => set({ ...INITIAL }),
 }));
+
+/**
+ * Keeps the open transcript current while a run writes into it.
+ *
+ * **This is the fix for the defect device testing found.** The run controller persists the agent's replies and
+ * tool rows through `sessionStorage` directly; the store only re-read inside `post()` and `open()`. So the
+ * messages were being stored correctly and the chat simply never looked again — the user saw their own message
+ * and nothing else until they left the screen and came back, because reopening calls `open()`.
+ *
+ * Subscribed at module scope rather than in a component effect, deliberately. The run outlives any screen
+ * (ADR 0016), and a subscription that came and went with a mount would miss exactly the messages written while
+ * the user was elsewhere — which is most of them.
+ *
+ * The listener is never removed. It should live as long as the process, like the store it updates.
+ */
+onMessageAppended(({ sessionId }) => {
+  // Only for the conversation on screen. A run persisting into a background session must not replace the
+  // transcript the user is reading.
+  if (sessionId !== useSessionStore.getState().activeSessionId) return;
+
+  void useSessionStore.getState().reloadMessages();
+});
 
 /** Identity-stable selectors only. Anything that builds a collection belongs in a hook. */
 export const selectActiveSessionId = (state: SessionState): string | null => state.activeSessionId;

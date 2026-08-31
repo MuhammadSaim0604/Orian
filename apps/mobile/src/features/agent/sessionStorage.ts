@@ -204,11 +204,44 @@ export const loadRecentMessages = async (
 };
 
 /**
+ * Told when a message has been stored, so a reader can re-read.
+ *
+ * This exists because of a device-testing bug worth stating plainly: the run controller wrote its messages
+ * here directly, and the chat store only re-read inside `post()` and `open()`. So an agent's replies and tool
+ * rows **were** being saved and the transcript simply never looked again — the chat showed only what the user
+ * had typed until they left the screen and came back, because reopening calls `open()`.
+ *
+ * The fix belongs at this layer rather than at either end. `sessionStorage` is the one module both the run
+ * controller and the store already import, so a notifier here creates no new dependency; having the controller
+ * call the store would invert the direction, and having the store poll would be guesswork about timing.
+ */
+type MessageListener = (event: { readonly sessionId: string; readonly role: MessageRole }) => void;
+
+const messageListeners = new Set<MessageListener>();
+
+/**
+ * Subscribes to stored messages.
+ *
+ * The payload carries only what a listener needs to decide whether to act — which conversation, and what kind
+ * of message. Deliberately not the message itself: a listener that rendered from this would be maintaining a
+ * second copy of the transcript, and the database is the one that is authoritative.
+ */
+export const onMessageAppended = (listener: MessageListener): (() => void) => {
+  messageListeners.add(listener);
+  return () => {
+    messageListeners.delete(listener);
+  };
+};
+
+/**
  * Appends a message.
  *
  * Resolves **false** when the session is gone. That is a real case rather than an error: the user can delete
  * a conversation while a run is still working in it, and the run must carry on rather than crash. The caller
  * stops persisting to that session and nothing else changes.
+ *
+ * Notifies listeners **only after a successful write**, so nothing re-reads for a message that was never
+ * stored.
  */
 export const appendMessage = async (input: {
   readonly sessionId: string;
@@ -220,7 +253,7 @@ export const appendMessage = async (input: {
   if (native === undefined) return false;
 
   try {
-    return await native.appendMessage(
+    const stored = await native.appendMessage(
       newId('msg'),
       input.sessionId,
       input.role,
@@ -228,8 +261,32 @@ export const appendMessage = async (input: {
       input.detail === undefined ? null : JSON.stringify(input.detail),
       input.runId ?? null,
     );
+
+    if (stored) notifyMessageAppended({ sessionId: input.sessionId, role: input.role });
+
+    return stored;
   } catch {
     return false;
+  }
+};
+
+/**
+ * Fans the notification out.
+ *
+ * A listener that throws must not fail the write or stop the other listeners: the message is already stored,
+ * and this is happening in the middle of an agent run. Same reasoning as `AgentEventBus` and the run
+ * controller's `publish`.
+ */
+const notifyMessageAppended = (event: {
+  readonly sessionId: string;
+  readonly role: MessageRole;
+}): void => {
+  for (const listener of messageListeners) {
+    try {
+      listener(event);
+    } catch {
+      // Deliberately ignored — see above.
+    }
   }
 };
 

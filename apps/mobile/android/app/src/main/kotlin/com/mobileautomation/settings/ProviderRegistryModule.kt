@@ -7,6 +7,7 @@ import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.WritableNativeArray
 import com.facebook.react.bridge.WritableNativeMap
 import com.mobileautomation.storage.ProviderRegistryStore
+import com.mobileautomation.storage.StoredModel
 import com.mobileautomation.storage.StoredProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -130,7 +131,13 @@ class ProviderRegistryModule(
         }
     }
 
-    /** Records a discovered or manually entered model list. */
+    /**
+     * Records a discovered or manually entered model list.
+     *
+     * Each entry carries an id and a name. The **id** is what a request must name and comes from the provider;
+     * the **name** is what the user picks from a list and is theirs to change. Passing both rather than deriving
+     * the name here is what lets a rename survive a re-fetch.
+     */
     @ReactMethod
     fun setModels(
         id: String,
@@ -139,13 +146,20 @@ class ProviderRegistryModule(
     ) {
         scope.launch {
             try {
-                val names = mutableListOf<String>()
+                val parsed = mutableListOf<StoredModel>()
 
                 for (index in 0 until models.size()) {
-                    models.getString(index)?.takeIf { it.isNotBlank() }?.let { names.add(it) }
+                    val entry = models.getMap(index) ?: continue
+                    val modelId = entry.getString("id")?.trim()?.takeIf { it.isNotEmpty() } ?: continue
+
+                    // A blank name falls back to the id rather than being stored empty: a model with no label
+                    // cannot be picked out of a list.
+                    val name = entry.getString("name")?.trim()?.takeIf { it.isNotEmpty() } ?: modelId
+
+                    parsed.add(StoredModel(id = modelId, name = name))
                 }
 
-                registry.putModels(id, names)
+                registry.putModels(id, parsed)
                 promise.resolve(null)
             } catch (error: Exception) {
                 promise.reject("provider_write_failed", error.message, error)
@@ -228,7 +242,12 @@ class ProviderRegistryModule(
         map.putString("model", model)
 
         val modelArray = WritableNativeArray()
-        for (name in models) modelArray.pushString(name)
+        for (entry in models) {
+            val modelMap = WritableNativeMap()
+            modelMap.putString("id", entry.id)
+            modelMap.putString("name", entry.name)
+            modelArray.pushMap(modelMap)
+        }
         map.putArray("models", modelArray)
 
         // A double because the bridge has no 64-bit integer and epoch milliseconds truncate as an Int.

@@ -1,4 +1,4 @@
-import { Button, Card, useTheme } from '@mobile-automation/ui';
+import { BackIcon, Button, Card, useTheme } from '@mobile-automation/ui';
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -39,14 +39,15 @@ export const RootSettingsScreen = () => {
           gap: theme.spacing[4],
         }}
       >
-        <View className="flex-row items-center gap-3">
+        <View className="flex-row items-center gap-2">
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Back to home"
             onPress={goToSwitcher}
-            className="px-1 py-1"
+            style={{ minHeight: 48, minWidth: 48 }}
+            className="items-center justify-center"
           >
-            <Text className="text-sm text-primary">Back</Text>
+            <BackIcon size={20} color={theme.colors.primary} />
           </Pressable>
 
           <View accessibilityRole="header" className="flex-1">

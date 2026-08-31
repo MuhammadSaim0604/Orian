@@ -1,8 +1,8 @@
-import { useTheme } from '@mobile-automation/ui';
+import { BackIcon, DeleteIcon, useTheme } from '@mobile-automation/ui';
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { Alert, Pressable, Text, TextInput, View } from 'react-native';
 
-import { type Provider, DEFAULT_BASE_URL } from './providerRegistry';
+import { type Provider, type ProviderModel, DEFAULT_BASE_URL } from './providerRegistry';
 import { useProviderStore } from './providerStore';
 
 /**
@@ -27,7 +27,7 @@ export const ProviderRegistryScreen = () => {
   const activate = useProviderStore((state) => state.activate);
   const remove = useProviderStore((state) => state.remove);
 
-  const [editing, setEditing] = useState<Provider | 'new' | null>(null);
+  const [editingId, setEditingId] = useState<string | 'new' | null>(null);
 
   useEffect(() => {
     void refresh();
@@ -53,9 +53,15 @@ export const ProviderRegistryScreen = () => {
     [remove],
   );
 
-  if (editing !== null) {
+  if (editingId !== null) {
     return (
-      <ProviderForm provider={editing === 'new' ? null : editing} onDone={() => setEditing(null)} />
+      <ProviderForm
+        // Looked up by id rather than held as an object, so the form re-renders with a freshly fetched model
+        // list instead of the snapshot it was opened with.
+        providerId={editingId === 'new' ? null : editingId}
+        onDone={() => setEditingId(null)}
+        onCreated={(id) => setEditingId(id)}
+      />
     );
   }
 
@@ -81,7 +87,7 @@ export const ProviderRegistryScreen = () => {
             key={provider.id}
             provider={provider}
             onActivate={() => void activate(provider.id)}
-            onEdit={() => setEditing(provider)}
+            onEdit={() => setEditingId(provider.id)}
             onDelete={() => onDelete(provider)}
           />
         ))
@@ -90,7 +96,7 @@ export const ProviderRegistryScreen = () => {
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Add an AI provider"
-        onPress={() => setEditing('new')}
+        onPress={() => setEditingId('new')}
         style={{ minHeight: MIN_TOUCH_TARGET }}
         className="items-center justify-center rounded-lg border border-primary active:opacity-80"
       >
@@ -110,64 +116,78 @@ const ProviderRow = ({
   readonly onActivate: () => void;
   readonly onEdit: () => void;
   readonly onDelete: () => void;
-}) => (
-  <View
-    className={`rounded-lg border bg-surface p-3 ${
-      provider.isActive ? 'border-primary' : 'border-border'
-    }`}
-  >
-    <View className="flex-row items-center gap-2">
-      <View className="flex-1">
-        <Text className="text-sm font-medium text-text-primary">{provider.label}</Text>
-        <Text numberOfLines={1} className="mt-0.5 text-xs text-text-muted">
-          {provider.baseUrl}
+}) => {
+  const { theme } = useTheme();
+  const selected = provider.models.find((model) => model.id === provider.model) ?? null;
+
+  return (
+    <View
+      className={`rounded-lg border bg-surface p-3 ${
+        provider.isActive ? 'border-primary' : 'border-border'
+      }`}
+    >
+      <View className="flex-row items-center gap-2">
+        <View className="flex-1">
+          <Text className="text-sm font-medium text-text-primary">{provider.label}</Text>
+          <Text numberOfLines={1} className="mt-0.5 text-xs text-text-muted">
+            {provider.baseUrl}
+          </Text>
+        </View>
+
+        {provider.isActive ? (
+          <Text className="text-xs font-medium uppercase text-primary">Active</Text>
+        ) : (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Use ${provider.label}`}
+            onPress={onActivate}
+            className="rounded-md border border-border px-3 py-2"
+          >
+            <Text className="text-xs font-medium text-text-secondary">Use</Text>
+          </Pressable>
+        )}
+      </View>
+
+      <View className="mt-2 flex-row items-center gap-3">
+        {/* The name if the user gave one, since that is what they recognise. The id underneath, because that is
+            what actually goes in the request and a wrong one is worth spotting here. */}
+        <Text className="flex-1 text-xs text-text-secondary">
+          {selected === null
+            ? 'No model chosen'
+            : selected.name === selected.id
+              ? selected.id
+              : `${selected.name} · ${selected.id}`}
+        </Text>
+
+        {/* Whether a key exists, never the key. This is the whole of what a screen may know about it. */}
+        <Text className={`text-xs ${provider.hasApiKey ? 'text-success' : 'text-warning'}`}>
+          {provider.hasApiKey ? 'Key saved' : 'No key'}
         </Text>
       </View>
 
-      {provider.isActive ? (
-        <Text className="text-xs font-medium uppercase text-primary">Active</Text>
-      ) : (
+      <View className="mt-2 flex-row items-center gap-2">
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`Use ${provider.label}`}
-          onPress={onActivate}
+          accessibilityLabel={`Edit ${provider.label}`}
+          onPress={onEdit}
           className="rounded-md border border-border px-3 py-2"
         >
-          <Text className="text-xs font-medium text-text-secondary">Use</Text>
+          <Text className="text-xs font-medium text-text-secondary">Edit</Text>
         </Pressable>
-      )}
+
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Remove ${provider.label}`}
+          onPress={onDelete}
+          style={{ minHeight: MIN_TOUCH_TARGET, minWidth: MIN_TOUCH_TARGET }}
+          className="items-center justify-center rounded-md border border-danger"
+        >
+          <DeleteIcon size={18} color={theme.colors.danger} />
+        </Pressable>
+      </View>
     </View>
-
-    <View className="mt-2 flex-row items-center gap-3">
-      <Text className="text-xs text-text-secondary">{provider.model ?? 'No model chosen'}</Text>
-
-      {/* Whether a key exists, never the key. This is the whole of what a screen may know about it. */}
-      <Text className={`text-xs ${provider.hasApiKey ? 'text-success' : 'text-warning'}`}>
-        {provider.hasApiKey ? 'Key saved' : 'No key'}
-      </Text>
-    </View>
-
-    <View className="mt-2 flex-row gap-2">
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`Edit ${provider.label}`}
-        onPress={onEdit}
-        className="rounded-md border border-border px-3 py-2"
-      >
-        <Text className="text-xs font-medium text-text-secondary">Edit</Text>
-      </Pressable>
-
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`Remove ${provider.label}`}
-        onPress={onDelete}
-        className="rounded-md border border-danger px-3 py-2"
-      >
-        <Text className="text-xs font-medium text-danger">Remove</Text>
-      </Pressable>
-    </View>
-  </View>
-);
+  );
+};
 
 /**
  * Add or edit a provider.
@@ -177,68 +197,107 @@ const ProviderRow = ({
  * is where it would end up in a crash report or a devtools snapshot.
  */
 const ProviderForm = ({
-  provider,
+  providerId,
   onDone,
+  onCreated,
 }: {
-  readonly provider: Provider | null;
+  readonly providerId: string | null;
   readonly onDone: () => void;
+  readonly onCreated: (id: string) => void;
 }) => {
   const { theme } = useTheme();
 
+  const providers = useProviderStore((state) => state.providers);
   const save = useProviderStore((state) => state.save);
   const discover = useProviderStore((state) => state.discover);
   const chooseModel = useProviderStore((state) => state.chooseModel);
-  const addModelManually = useProviderStore((state) => state.addModelManually);
+  const addModel = useProviderStore((state) => state.addModel);
+  const renameModel = useProviderStore((state) => state.renameModel);
+  const editModelId = useProviderStore((state) => state.editModelId);
+  const deleteModel = useProviderStore((state) => state.deleteModel);
   const discovery = useProviderStore((state) => state.discovery);
-  const providers = useProviderStore((state) => state.providers);
 
-  const [label, setLabel] = useState(provider?.label ?? '');
-  const [baseUrl, setBaseUrl] = useState(provider?.baseUrl ?? DEFAULT_BASE_URL);
+  const current = providers.find((candidate) => candidate.id === providerId) ?? null;
+
+  const [label, setLabel] = useState(current?.label ?? '');
+  const [baseUrl, setBaseUrl] = useState(current?.baseUrl ?? DEFAULT_BASE_URL);
   const [apiKey, setApiKey] = useState('');
-  const [manualModel, setManualModel] = useState('');
+  const [newModelId, setNewModelId] = useState('');
+  const [newModelName, setNewModelName] = useState('');
   const [saving, setSaving] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
 
-  // Re-read from the store rather than the captured prop, so a discovered model list appears without the form
-  // being closed and reopened.
-  const current =
-    provider === null ? null : (providers.find((p) => p.id === provider.id) ?? provider);
+  const persist = useCallback(
+    async (key: string): Promise<string | null> => {
+      if (label.trim() === '' || baseUrl.trim() === '') {
+        setProblem('A name and a base URL are both needed.');
+        return null;
+      }
 
-  const onSave = useCallback(async () => {
-    if (label.trim() === '' || baseUrl.trim() === '') {
-      setProblem('A name and a base URL are both needed.');
-      return;
-    }
+      setSaving(true);
+      setProblem(null);
 
-    setSaving(true);
-    setProblem(null);
+      const result = await save({
+        id: current?.id,
+        label,
+        baseUrl,
+        model: current?.model ?? null,
+        apiKey: key === '' ? undefined : key,
+      });
 
-    const result = await save({
-      id: provider?.id,
-      label,
-      baseUrl,
-      model: current?.model ?? null,
-      apiKey: apiKey === '' ? undefined : apiKey,
-    });
+      setSaving(false);
 
-    setSaving(false);
+      if (!result.ok) {
+        setProblem('The provider could not be saved.');
+        return null;
+      }
 
-    if (!result.ok) {
-      setProblem('The provider could not be saved.');
-      return;
-    }
+      if (!result.keyStored) {
+        setProblem('The provider was saved but the key could not be stored on this device.');
+      }
 
-    // Cleared immediately whether or not the write worked. The key must not sit in component state a moment
-    // longer than the request that stores it.
+      return result.id;
+    },
+    [baseUrl, current?.id, current?.model, label, save],
+  );
+
+  /**
+   * Saves the key and fetches models the moment the key field loses focus.
+   *
+   * Because the sequence otherwise takes four deliberate steps — type the key, save, reopen, tap Fetch — and
+   * the user's intent after typing a key is obvious. The manual **Fetch models** button stays: this is a
+   * shortcut for the common case, not a replacement for asking again later when a provider adds a model.
+   *
+   * Nothing happens without a key typed, so leaving the field untouched costs nothing.
+   */
+  const onKeyBlur = useCallback(async () => {
+    const typed = apiKey.trim();
+    if (typed === '') return;
+
+    const savedId = await persist(typed);
+
+    // Cleared whether or not the write worked. The key must not sit in component state a moment longer than the
+    // request that stores it.
     setApiKey('');
 
-    if (!result.keyStored) {
-      setProblem('The provider was saved but the key could not be stored on this device.');
-      return;
-    }
+    if (savedId === null) return;
 
+    if (current === null) onCreated(savedId);
+
+    const provider = useProviderStore
+      .getState()
+      .providers.find((candidate) => candidate.id === savedId);
+
+    if (provider !== undefined) await discover(provider);
+  }, [apiKey, current, discover, onCreated, persist]);
+
+  const onSave = useCallback(async () => {
+    const savedId = await persist(apiKey);
+    setApiKey('');
+
+    if (savedId === null) return;
     onDone();
-  }, [apiKey, baseUrl, current?.model, label, onDone, provider?.id, save]);
+  }, [apiKey, onDone, persist]);
 
   const fetching = discovery.kind === 'fetching' && discovery.providerId === current?.id;
   const unavailable =
@@ -248,21 +307,22 @@ const ProviderForm = ({
 
   return (
     <View style={{ gap: theme.spacing[3] }}>
-      <View className="flex-row items-center gap-3">
+      <View className="flex-row items-center gap-2">
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Back to providers"
           onPress={onDone}
-          className="px-1 py-1"
+          style={{ minHeight: MIN_TOUCH_TARGET, minWidth: MIN_TOUCH_TARGET }}
+          className="items-center justify-center"
         >
-          <Text className="text-sm text-primary">Back</Text>
+          <BackIcon size={20} color={theme.colors.primary} />
         </Pressable>
 
         <Text
           accessibilityRole="header"
           className="flex-1 text-base font-semibold text-text-primary"
         >
-          {provider === null ? 'Add a provider' : provider.label}
+          {current === null ? 'Add a provider' : current.label}
         </Text>
       </View>
 
@@ -300,8 +360,8 @@ const ProviderForm = ({
         label="API key"
         hint={
           current?.hasApiKey === true
-            ? 'A key is saved on this device. Type a new one to replace it.'
-            : 'Stored encrypted on this device and never shown again.'
+            ? 'A key is saved on this device. Type a new one to replace it — models are fetched when you leave the field.'
+            : 'Stored encrypted on this device and never shown again. Models are fetched when you leave the field.'
         }
       >
         <TextInput
@@ -310,6 +370,7 @@ const ProviderForm = ({
           style={{ minHeight: MIN_TOUCH_TARGET }}
           value={apiKey}
           onChangeText={setApiKey}
+          onBlur={() => void onKeyBlur()}
           autoCapitalize="none"
           autoCorrect={false}
           secureTextEntry
@@ -320,12 +381,8 @@ const ProviderForm = ({
 
       {current !== null && (
         <View style={{ gap: theme.spacing[2] }}>
-          <Text className="text-sm font-medium text-text-primary">Model</Text>
-
           <View className="flex-row items-center gap-2">
-            <Text className="flex-1 text-xs text-text-secondary">
-              {current.model ?? 'None chosen'}
-            </Text>
+            <Text className="flex-1 text-sm font-medium text-text-primary">Models</Text>
 
             <Pressable
               accessibilityRole="button"
@@ -341,78 +398,78 @@ const ProviderForm = ({
             </Pressable>
           </View>
 
-          {/* Stated as information, not as an error. Discovery failing is ordinary — plenty of providers do
-              not implement /models — and manual entry below is a first-class path rather than a consolation. */}
+          <Text className="text-xs text-text-muted">
+            The id is what the provider expects; the name is yours. Tap a row to use that model.
+          </Text>
+
+          {/* Stated as information, not as an error. Discovery failing is ordinary — plenty of providers do not
+              implement /models — and manual entry below is a first-class path rather than a consolation. */}
           {unavailable != null && (
             <Text className="text-xs text-text-secondary">{unavailable}</Text>
           )}
 
-          {current.models.length > 0 && (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={{ gap: theme.spacing[2] }}
-            >
-              {current.models.map((model) => (
-                <Pressable
-                  key={model}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Use ${model}`}
-                  accessibilityState={{ selected: model === current.model }}
-                  onPress={() => void chooseModel(current.id, model)}
-                  className={`rounded-full border px-3 py-2 ${
-                    model === current.model
-                      ? 'border-primary bg-surface'
-                      : 'border-border bg-surface'
-                  }`}
-                >
-                  <Text
-                    className={`text-xs ${
-                      model === current.model ? 'font-semibold text-primary' : 'text-text-secondary'
-                    }`}
-                  >
-                    {model}
-                  </Text>
-                </Pressable>
-              ))}
-            </ScrollView>
-          )}
-
-          <View className="flex-row items-center gap-2">
-            <TextInput
-              accessibilityLabel="Model name"
-              className="flex-1 rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text-primary"
-              style={{ minHeight: MIN_TOUCH_TARGET }}
-              value={manualModel}
-              onChangeText={setManualModel}
-              autoCapitalize="none"
-              autoCorrect={false}
-              placeholder="Or type a model name"
-              placeholderTextColor={theme.colors.textMuted}
+          {current.models.map((model) => (
+            <ModelRow
+              key={model.id}
+              model={model}
+              selected={model.id === current.model}
+              onSelect={() => void chooseModel(current.id, model.id)}
+              onRename={(name) => void renameModel(current.id, model.id, name)}
+              onChangeId={(nextId) => void editModelId(current.id, model.id, nextId)}
+              onDelete={() => void deleteModel(current.id, model.id)}
             />
+          ))}
 
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Use this model name"
-              accessibilityState={{ disabled: manualModel.trim() === '' }}
-              disabled={manualModel.trim() === ''}
-              onPress={() => {
-                void addModelManually(current.id, manualModel);
-                setManualModel('');
-              }}
-              style={{ minHeight: MIN_TOUCH_TARGET }}
-              className={`items-center justify-center rounded-lg px-3 ${
-                manualModel.trim() === '' ? 'bg-surface-muted' : 'bg-primary active:opacity-80'
-              }`}
-            >
-              <Text
-                className={`text-xs font-semibold ${
-                  manualModel.trim() === '' ? 'text-text-muted' : 'text-text-on-primary'
+          <View className="rounded-lg border border-dashed border-border bg-surface p-2">
+            <Text className="mb-1 text-xs font-medium text-text-secondary">Add a model</Text>
+
+            <View style={{ gap: theme.spacing[2] }}>
+              <TextInput
+                accessibilityLabel="New model id"
+                className="rounded-md border border-border bg-background px-2 py-2 text-xs text-text-primary"
+                style={{ minHeight: MIN_TOUCH_TARGET }}
+                value={newModelId}
+                onChangeText={setNewModelId}
+                autoCapitalize="none"
+                autoCorrect={false}
+                placeholder="Model id, e.g. gpt-4o-mini"
+                placeholderTextColor={theme.colors.textMuted}
+              />
+
+              <TextInput
+                accessibilityLabel="New model name"
+                className="rounded-md border border-border bg-background px-2 py-2 text-xs text-text-primary"
+                style={{ minHeight: MIN_TOUCH_TARGET }}
+                value={newModelName}
+                onChangeText={setNewModelName}
+                placeholder="Name (optional)"
+                placeholderTextColor={theme.colors.textMuted}
+              />
+
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Add this model"
+                accessibilityState={{ disabled: newModelId.trim() === '' }}
+                disabled={newModelId.trim() === ''}
+                onPress={() => {
+                  void addModel(current.id, { id: newModelId, name: newModelName });
+                  setNewModelId('');
+                  setNewModelName('');
+                }}
+                style={{ minHeight: MIN_TOUCH_TARGET }}
+                className={`items-center justify-center rounded-md ${
+                  newModelId.trim() === '' ? 'bg-surface-muted' : 'bg-primary active:opacity-80'
                 }`}
               >
-                Use
-              </Text>
-            </Pressable>
+                <Text
+                  className={`text-xs font-semibold ${
+                    newModelId.trim() === '' ? 'text-text-muted' : 'text-text-on-primary'
+                  }`}
+                >
+                  Add
+                </Text>
+              </Pressable>
+            </View>
           </View>
         </View>
       )}
@@ -436,12 +493,105 @@ const ProviderForm = ({
           {saving ? 'Saving…' : 'Save'}
         </Text>
       </Pressable>
+    </View>
+  );
+};
 
-      {provider === null && (
-        <Text className="text-xs text-text-muted">
-          Save first, then fetch the model list — discovery needs the saved base URL and key.
+/**
+ * One model: two editable fields and a delete.
+ *
+ * Two fields stacked rather than side by side, because a model id is long — `gpt-4o-mini-2024-07-18` in half a
+ * phone's width ellipsizes to nothing useful, and the id is the part that has to be exactly right.
+ *
+ * Each field commits on blur rather than on every keystroke. A per-keystroke write would persist `gpt-4`,
+ * `gpt-4o`, `gpt-4o-` on the way to a valid id, and each intermediate value would be a real stored model.
+ */
+const ModelRow = ({
+  model,
+  selected,
+  onSelect,
+  onRename,
+  onChangeId,
+  onDelete,
+}: {
+  readonly model: ProviderModel;
+  readonly selected: boolean;
+  readonly onSelect: () => void;
+  readonly onRename: (name: string) => void;
+  readonly onChangeId: (id: string) => void;
+  readonly onDelete: () => void;
+}) => {
+  const { theme } = useTheme();
+
+  const [name, setName] = useState(model.name);
+  const [id, setId] = useState(model.id);
+
+  // Re-synced when the stored value changes underneath — a fetch merges names, and a rejected id edit leaves the
+  // old value, which the field must go back to showing rather than keeping text that was not saved.
+  useEffect(() => setName(model.name), [model.name]);
+  useEffect(() => setId(model.id), [model.id]);
+
+  return (
+    <View
+      className={`rounded-lg border bg-surface p-2 ${selected ? 'border-primary' : 'border-border'}`}
+    >
+      <View className="flex-row items-center gap-2">
+        <Pressable
+          accessibilityRole="radio"
+          accessibilityLabel={`Use ${model.name}`}
+          accessibilityState={{ selected }}
+          onPress={onSelect}
+          style={{ minHeight: MIN_TOUCH_TARGET, minWidth: 32 }}
+          className="items-center justify-center"
+        >
+          {/* A filled ring rather than a tick, so selection reads at a glance down a column of rows. */}
+          <View
+            className={`h-4 w-4 rounded-full border-2 ${
+              selected ? 'border-primary bg-primary' : 'border-border'
+            }`}
+          />
+        </Pressable>
+
+        <Text className="flex-1 text-xs font-medium text-text-secondary">
+          {selected ? 'In use' : 'Tap to use'}
         </Text>
-      )}
+
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Delete ${model.name}`}
+          onPress={onDelete}
+          style={{ minHeight: MIN_TOUCH_TARGET, minWidth: MIN_TOUCH_TARGET }}
+          className="items-center justify-center"
+        >
+          <DeleteIcon size={18} color={theme.colors.danger} />
+        </Pressable>
+      </View>
+
+      <View style={{ gap: theme.spacing[1], marginTop: theme.spacing[1] }}>
+        <TextInput
+          accessibilityLabel={`Name for ${model.id}`}
+          className="rounded-md border border-border bg-background px-2 py-2 text-xs text-text-primary"
+          style={{ minHeight: MIN_TOUCH_TARGET }}
+          value={name}
+          onChangeText={setName}
+          onBlur={() => onRename(name)}
+          placeholder="Name"
+          placeholderTextColor={theme.colors.textMuted}
+        />
+
+        <TextInput
+          accessibilityLabel={`Model id for ${model.name}`}
+          className="rounded-md border border-border bg-background px-2 py-2 text-xs text-text-secondary"
+          style={{ minHeight: MIN_TOUCH_TARGET }}
+          value={id}
+          onChangeText={setId}
+          onBlur={() => onChangeId(id)}
+          autoCapitalize="none"
+          autoCorrect={false}
+          placeholder="Model id"
+          placeholderTextColor={theme.colors.textMuted}
+        />
+      </View>
     </View>
   );
 };

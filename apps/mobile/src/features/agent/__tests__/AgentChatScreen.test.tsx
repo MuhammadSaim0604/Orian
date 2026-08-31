@@ -105,7 +105,7 @@ beforeEach(() => {
 describe('the chat', () => {
   it('shows the conversation title', async () => {
     const { getByText } = renderWithTheme(
-      <AgentChatScreen onOpenSessions={jest.fn()} onOpenSettings={jest.fn()} />,
+      <AgentChatScreen onOpenSessions={jest.fn()} onOpenModelPicker={jest.fn()} />,
     );
     await flush();
 
@@ -115,7 +115,7 @@ describe('the chat', () => {
   it('suggests what to type when the conversation is empty', async () => {
     // An empty chat with no prompt is the commonest way a good feature goes unused.
     const { getByText } = renderWithTheme(
-      <AgentChatScreen onOpenSessions={jest.fn()} onOpenSettings={jest.fn()} />,
+      <AgentChatScreen onOpenSessions={jest.fn()} onOpenModelPicker={jest.fn()} />,
     );
     await flush();
 
@@ -145,7 +145,7 @@ describe('the chat', () => {
     ];
 
     const { getAllByText, getByText } = renderWithTheme(
-      <AgentChatScreen onOpenSessions={jest.fn()} onOpenSettings={jest.fn()} />,
+      <AgentChatScreen onOpenSessions={jest.fn()} onOpenModelPicker={jest.fn()} />,
     );
     await flush();
 
@@ -158,7 +158,7 @@ describe('the chat', () => {
     // So the user's words survive a run that fails to begin — a conversation that dropped what you typed because
     // the provider was misconfigured would look like the app lost it.
     const { getByLabelText } = renderWithTheme(
-      <AgentChatScreen onOpenSessions={jest.fn()} onOpenSettings={jest.fn()} />,
+      <AgentChatScreen onOpenSessions={jest.fn()} onOpenModelPicker={jest.fn()} />,
     );
     await flush();
 
@@ -176,7 +176,7 @@ describe('the chat', () => {
     mockStatus = { ...mockStatus, isReady: false };
 
     const { getByLabelText, getByText } = renderWithTheme(
-      <AgentChatScreen onOpenSessions={jest.fn()} onOpenSettings={jest.fn()} />,
+      <AgentChatScreen onOpenSessions={jest.fn()} onOpenModelPicker={jest.fn()} />,
     );
     await flush();
 
@@ -191,7 +191,7 @@ describe('the chat', () => {
 
   it('refuses to send an empty message', async () => {
     const { getByLabelText } = renderWithTheme(
-      <AgentChatScreen onOpenSessions={jest.fn()} onOpenSettings={jest.fn()} />,
+      <AgentChatScreen onOpenSessions={jest.fn()} onOpenModelPicker={jest.fn()} />,
     );
     await flush();
 
@@ -207,7 +207,7 @@ describe('the chat', () => {
     mockRunState = { ...mockRunState, runState: 'running', currentTask: 'Opening WhatsApp' };
 
     const { getByLabelText, queryByLabelText } = renderWithTheme(
-      <AgentChatScreen onOpenSessions={jest.fn()} onOpenSettings={jest.fn()} />,
+      <AgentChatScreen onOpenSessions={jest.fn()} onOpenModelPicker={jest.fn()} />,
     );
     await flush();
 
@@ -221,7 +221,7 @@ describe('the chat', () => {
     mockRunState = { ...mockRunState, runState: 'running', currentTask: 'Opening WhatsApp' };
 
     const { getByText } = renderWithTheme(
-      <AgentChatScreen onOpenSessions={jest.fn()} onOpenSettings={jest.fn()} />,
+      <AgentChatScreen onOpenSessions={jest.fn()} onOpenModelPicker={jest.fn()} />,
     );
     await flush();
 
@@ -233,7 +233,7 @@ describe('the chat', () => {
     mockRunState = { ...mockRunState, runState: 'running', timersHeld: false };
 
     const { getByText } = renderWithTheme(
-      <AgentChatScreen onOpenSessions={jest.fn()} onOpenSettings={jest.fn()} />,
+      <AgentChatScreen onOpenSessions={jest.fn()} onOpenModelPicker={jest.fn()} />,
     );
     await flush();
 
@@ -244,7 +244,7 @@ describe('the chat', () => {
     mockRunState = { ...mockRunState, runState: 'running', timersHeld: true };
 
     const { queryByText } = renderWithTheme(
-      <AgentChatScreen onOpenSessions={jest.fn()} onOpenSettings={jest.fn()} />,
+      <AgentChatScreen onOpenSessions={jest.fn()} onOpenModelPicker={jest.fn()} />,
     );
     await flush();
 
@@ -255,7 +255,7 @@ describe('the chat', () => {
     mockRunState = { ...mockRunState, configError: 'Add an API key for OpenAI in settings.' };
 
     const { getByText } = renderWithTheme(
-      <AgentChatScreen onOpenSessions={jest.fn()} onOpenSettings={jest.fn()} />,
+      <AgentChatScreen onOpenSessions={jest.fn()} onOpenModelPicker={jest.fn()} />,
     );
     await flush();
 
@@ -265,14 +265,26 @@ describe('the chat', () => {
 
 describe('the sidebar', () => {
   it('lists conversations by their title', async () => {
-    const { getByLabelText } = renderWithTheme(<SessionSidebar onClose={jest.fn()} />);
+    const { getByLabelText } = renderWithTheme(
+      <SessionSidebar
+        onClose={jest.fn()}
+        onOpenOnboarding={jest.fn()}
+        onOpenSettings={jest.fn()}
+      />,
+    );
     await flush();
 
     expect(getByLabelText('Open “Message Robert”')).toBeTruthy();
   });
 
   it('starts a new conversation', async () => {
-    const { getByLabelText } = renderWithTheme(<SessionSidebar onClose={jest.fn()} />);
+    const { getByLabelText } = renderWithTheme(
+      <SessionSidebar
+        onClose={jest.fn()}
+        onOpenOnboarding={jest.fn()}
+        onOpenSettings={jest.fn()}
+      />,
+    );
     await flush();
 
     fireEvent.press(getByLabelText('Start a new conversation'));
@@ -283,7 +295,13 @@ describe('the sidebar', () => {
 
   it('confirms before deleting rather than deleting on the tap', async () => {
     // Messages cascade with the conversation and nothing is recoverable, so this must never happen by mis-tap.
-    const { getByLabelText } = renderWithTheme(<SessionSidebar onClose={jest.fn()} />);
+    const { getByLabelText } = renderWithTheme(
+      <SessionSidebar
+        onClose={jest.fn()}
+        onOpenOnboarding={jest.fn()}
+        onOpenSettings={jest.fn()}
+      />,
+    );
     await flush();
 
     fireEvent.press(getByLabelText('Delete “Message Robert”'));
@@ -294,7 +312,13 @@ describe('the sidebar', () => {
 
   it('names the conversation and its size in the confirmation', async () => {
     // So the user can tell they tapped the row they meant.
-    const { getByLabelText } = renderWithTheme(<SessionSidebar onClose={jest.fn()} />);
+    const { getByLabelText } = renderWithTheme(
+      <SessionSidebar
+        onClose={jest.fn()}
+        onOpenOnboarding={jest.fn()}
+        onOpenSettings={jest.fn()}
+      />,
+    );
     await flush();
 
     fireEvent.press(getByLabelText('Delete “Message Robert”'));
@@ -307,7 +331,13 @@ describe('the sidebar', () => {
   it('says so when there are no conversations', async () => {
     mockSessionState = { ...mockSessionState, sessions: [] };
 
-    const { getByText } = renderWithTheme(<SessionSidebar onClose={jest.fn()} />);
+    const { getByText } = renderWithTheme(
+      <SessionSidebar
+        onClose={jest.fn()}
+        onOpenOnboarding={jest.fn()}
+        onOpenSettings={jest.fn()}
+      />,
+    );
     await flush();
 
     expect(getByText('No conversations yet.')).toBeTruthy();

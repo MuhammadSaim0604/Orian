@@ -23,6 +23,25 @@ const mockMessages = new Map<string, unknown[]>();
 const mockAppend = jest.fn(async () => true);
 const mockBindSession = jest.fn();
 
+/**
+ * Subscribers the store registers at module scope, mirroring the real notifier's fan-out.
+ *
+ * On `globalThis` rather than a module const, because Babel hoists the subject's `import` above every declaration in
+ * this file — and `sessionStore` calls `onMessageAppended` while it is being imported, so anything declared with
+ * `const` here is still uninitialised at that moment. The other mocks get away with it only because they are read
+ * inside function bodies that run later.
+ */
+const listenerBox = (): { listeners: ((event: { sessionId: string; role: string }) => void)[] } => {
+  const holder = globalThis as {
+    __mockMessageListeners?: {
+      listeners: ((event: { sessionId: string; role: string }) => void)[];
+    };
+  };
+
+  holder.__mockMessageListeners ??= { listeners: [] };
+  return holder.__mockMessageListeners;
+};
+
 let mockNextId = 0;
 
 jest.mock('../sessionStorage', () => ({
@@ -52,6 +71,24 @@ jest.mock('../sessionStorage', () => ({
     if (session !== undefined) session.title = title;
   },
   loadMessages: async (id: string) => mockMessages.get(id) ?? [],
+  // The store subscribes to this at module scope, so the mock must provide it or the import fails outright — that
+  // subscription is the live-message fix and it is not optional.
+  onMessageAppended: (listener: (event: { sessionId: string; role: string }) => void) => {
+    const holder = globalThis as {
+      __mockMessageListeners?: {
+        listeners: ((event: { sessionId: string; role: string }) => void)[];
+      };
+    };
+
+    holder.__mockMessageListeners ??= { listeners: [] };
+    holder.__mockMessageListeners.listeners.push(listener);
+
+    return () => {
+      const box = holder.__mockMessageListeners;
+      if (box === undefined) return;
+      box.listeners = box.listeners.filter((candidate) => candidate !== listener);
+    };
+  },
   appendMessage: async (input: { sessionId: string; role: string; text: string }) => {
     const stored = await mockAppend();
     if (!stored) return false;
@@ -65,6 +102,13 @@ jest.mock('../sessionStorage', () => ({
       createdAtEpochMs: Date.now(),
     });
     mockMessages.set(input.sessionId, existing);
+
+    // Notified after a successful write, exactly as the real storage layer does — so the store's module-scope
+    // subscription is exercised here rather than only in production.
+    for (const listener of listenerBox().listeners) {
+      listener({ sessionId: input.sessionId, role: input.role });
+    }
+
     return true;
   },
   titleFromMessage: (text: string) => text.slice(0, 48),
@@ -87,6 +131,18 @@ beforeEach(() => {
   mockBindSession.mockClear();
   useSessionStore.getState().resetForTests();
 });
+
+/**
+ * Lets the notifier's chain drain.
+ *
+ * The subscription re-reads asynchronously — notify, then `reloadMessages`, then a `loadMessages` await — so a test
+ * asserting immediately after a write would see the state before any of it ran.
+ */
+const flushMicrotasks = async (): Promise<void> => {
+  for (let index = 0; index < 8; index += 1) {
+    await Promise.resolve();
+  }
+};
 
 describe('opening the mode', () => {
   it('creates a conversation when there are none', async () => {
@@ -167,7 +223,8 @@ describe('posting a message', () => {
   });
 
   it('does not replace the open transcript when writing to another session', async () => {
-    // A run persisting into a background conversation must not overwrite what the user is reading.
+    // A run persisting into a background conversation must not overwrite what the user is reading. The notifier fires
+    // for every stored message, so the guard on which session is open is what keeps this true.
     await useSessionStore.getState().initialise('agent');
     const other = await useSessionStore.getState().startNew();
     await useSessionStore.getState().post({ role: 'user', text: 'In the open one' });
@@ -178,6 +235,39 @@ describe('posting a message', () => {
       .post({ role: 'tool', text: 'elsewhere', sessionId: openId === other ? 'session_1' : other });
 
     expect(useSessionStore.getState().messages).toHaveLength(1);
+  });
+
+  it('shows a message the run wrote, without the screen being reopened', async () => {
+    // The defect device testing found. The run controller writes through the storage layer rather than through
+    // `post()`, so before the notifier existed the transcript only updated when `open()` ran again — which is why
+    // pressing back and returning made the agent's replies appear all at once.
+    await useSessionStore.getState().initialise('agent');
+    const sessionId = useSessionStore.getState().activeSessionId!;
+
+    // Exactly what the run controller does: straight to storage, not through the store.
+    const { appendMessage } = jest.requireMock('../sessionStorage') as {
+      appendMessage: (input: { sessionId: string; role: string; text: string }) => Promise<boolean>;
+    };
+
+    await appendMessage({ sessionId, role: 'tool', text: 'Tapped “Send”' });
+    await flushMicrotasks();
+
+    expect(useSessionStore.getState().messages).toHaveLength(1);
+  });
+
+  it('ignores a message written into a conversation that is not open', async () => {
+    await useSessionStore.getState().initialise('agent');
+    const background = await useSessionStore.getState().startNew();
+    await useSessionStore.getState().open('session_1');
+
+    const { appendMessage } = jest.requireMock('../sessionStorage') as {
+      appendMessage: (input: { sessionId: string; role: string; text: string }) => Promise<boolean>;
+    };
+
+    await appendMessage({ sessionId: background, role: 'tool', text: 'in the background' });
+    await flushMicrotasks();
+
+    expect(useSessionStore.getState().messages).toHaveLength(0);
   });
 
   it('survives the session having been deleted mid-run', async () => {

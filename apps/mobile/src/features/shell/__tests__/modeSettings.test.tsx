@@ -76,12 +76,12 @@ describe('Agent Mode settings', () => {
   });
 
   it('points at the shared provider registry rather than duplicating it', async () => {
-    // Step 4 replaced the "configured once and shared" note with a route to the registry itself. The registry
-    // stays root-level because both modes use it (issue A5), so this screen must link to it and never show a
-    // second copy that could disagree.
+    // Step 4 replaced the "configured once and shared" note with a route to the model picker, which is the same sheet
+    // the chat header opens. The registry itself stays root-level because both modes use it (issue A5), so this screen
+    // must never show a second copy that could disagree.
     const { getByText } = await renderSettled(<AgentModeShell />);
 
-    expect(getByText('Providers')).toBeTruthy();
+    expect(getByText('Change')).toBeTruthy();
   });
 
   it('offers the tools page, so a tool can be switched off', async () => {
