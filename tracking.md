@@ -4,7 +4,7 @@ Living record of what has been implemented, what is complete, and what remains. 
 
 Authoritative plan: `Development_Plan/`. It was restructured from **phases** to **steps** after device testing (commit `b0c1c60`); phases 0–9 are complete and everything since is a numbered step. See `Development_Plan/03_Issue_Register.md` for the defect IDs each step closes.
 
-Last updated: after the Step 4 device-testing pass, with both CI workflows green on `main` (Android CI run `33350648512`, TypeScript CI run `33350648514`).
+Last updated: after the second Step 4 device pass, with both CI workflows green on `main` (Android CI run `33358007518`, TypeScript CI run `33358007405`).
 
 ---
 
@@ -1725,6 +1725,70 @@ The key field now saves and fetches when it loses focus, because the sequence wa
 - **A module-scope `const` cannot back a mock the subject calls during its own import.** Babel hoists the `import` above every declaration, so `sessionStore`'s module-scope `onMessageAppended(...)` ran while the const was still uninitialised. The listener registry lives on `globalThis` instead. The other mocks get away with it only because they are read inside function bodies that run later.
 
 Totals now 600 Kotlin tests and 439 app Jest tests across 26 suites.
+
+---
+
+## Second device pass after Step 4 (all fixed)
+
+Eight items. Two were behavioural bugs; the rest were the interface saying the wrong thing. Commit `c486c67`; Android CI `33358007518`, TypeScript CI `33358007405`, both green.
+
+### The icon set had to become real vectors
+
+The previous set was assembled from rotated `View`s, and the report was blunt: the send button read as three lines, and settings was a filled circle with an arrow inside it.
+
+**The earlier reasoning was wrong, and worth recording as wrong.** Avoiding a native dependency looked like the cautious choice — an icon font can fail in a release build while working in debug, and a missing glyph is invisible until someone reports a blank square. But views can only make shapes that are compositions of rectangles. They can make an arrow; they cannot make a paper plane or a gear. Choosing the "safe" option produced glyphs nobody recognised, which is a worse failure than the one being avoided.
+
+So `react-native-svg@15.8.0` is a dependency now and `packages/ui/src/components/Icon.ts` is real 24×24 paths. Notes for later:
+
+- **No Jest mock is needed.** Version 15 ships none (older versions did), and its components resolve through `requireNativeComponent`, which the react-native preset already turns into an inert host component. Icons render as empty host views under test, which is all any assertion here needs. This is written into `jest.setup.js`, because the instinct on seeing an icon render as nothing is to go hunting for a missing mock.
+- `:app:compileDebugKotlin` was run specifically to confirm autolinking picks it up and its codegen runs, rather than discovering that in CI.
+
+### The model button
+
+A rounded rectangle with the model's **name** and a chevron, replacing the square icon button. The name rather than the id, because a person picks "Cheap" and `gpt-4o-mini-2024-07-18` across a header button ellipsizes to nothing useful.
+
+`useActiveModelLabel` is a hook rather than a store selector, and that is not a style choice: a selector computing a string allocates on every call, and under zustand v5's `Object.is` comparison that is the infinite-re-render trap already recorded above from Step 2.
+
+### A plan is a timeline, and its status is derived
+
+`taskList.ts` builds a structured list from the run's events. The rule that shapes everything else: **status is inferred from what happened, never claimed.** The loop reports a plan and reports each tool call; nothing in the model's output says "step 3 is done".
+
+- Only **successful** tool calls advance the list. A failed tap means the agent is still on the same task and about to try something else, so advancing would show the plan racing ahead of the work.
+- A **replan replaces** the list and resets progress. Counting from the run's start would mark a fresh plan's first steps as already done — on the strength of calls made against a plan that was abandoned.
+- After a run ends, unreached tasks are **skipped** rather than pending, because pending suggests they are still coming.
+
+Derived on every read rather than held as state, so the pinned card, the transcript card and the overlay cannot disagree — one function, nothing to drift. Plans persist as structured steps; **status deliberately does not**, since a stored status would be a second source of truth that went stale the moment the run continued.
+
+`TaskTimeline` gives each task a glyph and a connecting rail — solid behind completed work, faint ahead of the agent, so progress registers without being read. The active glyph pulses, because "happening now" is a live fact and a static icon looks identical whether the agent is working or stalled. Both animation loops stop on unmount: during a run the JS thread is what drives the phone, and a loop left running competes with it.
+
+`PinnedTaskCard` sits beneath the header, collapsed to one line with the chevron **leading** the text (on the far right of a variable-length card it reads as part of the text), expanding into the full timeline with a 260dp ceiling so a twelve-step plan cannot cover the conversation it describes.
+
+### The duplicated final response was in the loop, not the renderer
+
+`packages/ai-agent` emitted `thinking` with the response's prose **before** checking for tool calls. When there are no tool calls, that same prose becomes the run's summary and is delivered again by `runFinished` — so any consumer persisting both stored the final answer twice.
+
+Fixed by moving the emit after the no-tool-call break. Reasoning that accompanies an action is worth surfacing; reasoning that _is_ the answer is the answer. Two tests, one per direction: the second exists because the obvious over-correction is to stop emitting reasoning altogether.
+
+### Reasoning is a strip, not a bubble
+
+It was stored with role `assistant`, which is precisely what put raw thinking into the chat as speech. It is an `event` now, rendered by `ThinkingStrip`: a spark icon, the word _Thinking_ pulsing while the run is live, and the chevron **immediately beside that word** rather than pushed right, because the chevron belongs to the label it expands.
+
+Expanded, the reasoning sits behind a left rule with no background — quoted material rather than speech. Opacity rather than animated dots, because cycling dots change the string's width and nudge the chevron out from under the finger reaching for it.
+
+### Sidebar
+
+- **The status-bar overflow was a missing inset.** The panel is inside a `statusBarTranslucent` modal, so without `insets.top` its header draws behind the clock. Worth knowing generally: any content in such a modal owns its own insets.
+- **The scrim is gone.** A dim overlay is the conventional way to say "temporary", but it was read as a shadow rather than as an affordance. The uncovered strip is still tappable; the panel's border draws the edge.
+- **"Orion Agent"** as a wordmark — bold plus light in one line, with an _Automation_ overline.
+- **The rows are asymmetric on purpose.** Onboarding keeps the filled badge (a shield and tick) _and_ the trailing arrow because it opens a flow; settings gets a plain gear and neither, because it is one screen. Identical treatment would say they are the same kind of destination.
+
+### Onboarding is a screen
+
+It was a `Modal` with `animationType="slide"` — rising from the bottom with a dimmed status bar above it, which is what a dialog does. It renders inside the mode's own transition container now, sliding horizontally like every other screen and owning the full height.
+
+Kept as local state rather than a new `AgentRoute` case, because it is a detour rather than a destination and `back()` should return to the chat. Still not `resetOnboarding()`, which would send the user through welcome and the mode switcher and lose their conversation.
+
+Totals now 477 app Jest tests across 28 suites, 114 in `ai-agent`, 600 Kotlin.
 
 ---
 
