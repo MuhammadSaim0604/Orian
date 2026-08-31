@@ -4,7 +4,7 @@ Living record of what has been implemented, what is complete, and what remains. 
 
 Authoritative plan: `Development_Plan/`. It was restructured from **phases** to **steps** after device testing (commit `b0c1c60`); phases 0–9 are complete and everything since is a numbered step. See `Development_Plan/03_Issue_Register.md` for the defect IDs each step closes.
 
-Last updated: after the second Step 4 device pass, with both CI workflows green on `main` (Android CI run `33358007518`, TypeScript CI run `33358007405`).
+Last updated: after the third Step 4 device pass, with both CI workflows green on `main` (Android CI run `33363313376`, TypeScript CI run `33363313355`).
 
 ---
 
@@ -1792,17 +1792,69 @@ Totals now 477 app Jest tests across 28 suites, 114 in `ai-agent`, 600 Kotlin.
 
 ---
 
+## Third device pass after Step 4 (all fixed)
+
+Six items. The interesting part is that **three separate reported symptoms had one cause**. Commit `1980844`; Android CI `33363313376`, TypeScript CI `33363313355`, both green.
+
+### `statusBarTranslucent` on a modal changes the whole window
+
+Three reports that read as unrelated: the sidebar drew under the clock; the chat _behind_ the sidebar did too, and corrected itself when the sidebar closed; and opening settings or onboarding produced a jolt from the top of the screen downwards.
+
+**React Native's `statusBarTranslucent` prop does not only affect the modal.** It applies the flag to the host activity's window. So the moment the sidebar mounted, the entire app went edge-to-edge — the panel ran up under the status bar, the chat behind it shifted up with it, and closing restored the flag and dropped everything back. The jolt on opening another screen is the same event seen once: the flag is removed, insets recalculate, and the layout moves a status-bar height in a single frame.
+
+The prop had been added for one reason — so the sidebar could draw its own header up there — and the app's own theme already sets a solid `statusBarColor`, so nothing needed it. Removing it fixed all three.
+
+The generalisable lesson, which is the reason this is written down: **a prop that sounds local to a component can be a window-level flag.** Anything that changes window decoration affects every inset in the tree, including the parts of it that are not on screen. The symptom appears wherever the layout is most sensitive, which is rarely where the flag was set.
+
+Safe-area handling was then done properly rather than patched:
+
+- The sidebar panel uses `SafeAreaView` with `edges={['top', 'bottom']}` — named explicitly, because it is flush to the left screen edge and asking for a left inset would indent it away from that edge on a device with a cutout there.
+- The chat screen applies `insets.top` to the header and passes `insets.bottom` into the **composer's own padding** rather than wrapping the screen. A wrapper would leave a strip of background below the composer instead of the composer sitting against the navigation bar.
+
+### The reasoning jitter was the same class of bug
+
+Expanding the reasoning strip made the conversation jitter before settling. Both expanders — the strip and the pinned task card — animated `maxHeight` from zero.
+
+The content is laid out at its full height immediately while the clamp grows, so the scroll view's content size changes in one frame and every message above shifts, then corrects. `maxHeight` also cannot use the native driver, so every frame was a JS-thread layout pass — on the thread that drives the phone during a run.
+
+Replaced with `LayoutAnimation`, in a shared `apps/mobile/src/features/agent/animateLayout.ts`: the content mounts and the platform interpolates the surrounding layout on the UI thread. Shared rather than repeated because Android's `setLayoutAnimationEnabledExperimental` opt-in has to happen wherever an expander lives, and a component that forgot it would simply snap open — silent, not an error.
+
+Reasoning is now capped by `numberOfLines` rather than a container height, so the limit holds at any font scale.
+
+### The bare "Plan:" line
+
+A stray `Plan:` with nothing after it, in the message area, before the agent's reply.
+
+`makePlan` returns an empty list when planning fails **or when the goal is conversational** — "hi" gives the model nothing to plan. The loop emitted that as a `planned` event regardless, and an empty plan is a header with no content.
+
+Fixed at both ends deliberately: `packages/ai-agent` emits `planned` only when there are steps, and `sessionMemory` trims blank steps and returns null for an all-empty plan. The second half matters because the first only stops _new_ events — a transcript already holding one from an older build would keep rendering it.
+
+`taskListFrom` also ignores an empty plan that follows a real one, so a failed replan cannot wipe the plan the agent is still working to.
+
+### The send icon, and three smaller things
+
+- **The send glyph** was too narrow and tilted. Redrawn level across the full viewBox on a shallow rake with an open tail notch — the notch is what separates a paper plane from an arrowhead — and **filled** rather than stroked, because at 17dp inside a round button a 2px outline is most of the glyph and reads as a wireframe. It sits on a 36dp filled circle; 36 rather than 48 because a 48dp circle inside a 48dp row leaves no room for the field's border, and the row is the touch target.
+- **Root settings showed "AI providers" twice** — the card provides the title and the screen was rendering its own.
+- **Delete is now a labelled button matching Edit**, both equal-width with icons. A bare icon square beside a labelled rectangle read as two different kinds of control, and delete is the one whose consequence most needs spelling out rather than being inferred from a glyph.
+- **The sidebar's bare plus is a labelled "New chat" button**, with search in the section header. Search **replaces** that header rather than appearing above it, so the list does not shift down under the finger that just tapped, and empty groups are dropped so a search never leaves a bare "Today" with nothing under it.
+
+Totals now 490 app Jest tests across 29 suites, 116 in `ai-agent`, 600 Kotlin.
+
+---
+
 ## Remaining
 
 **Steps 1, 2, 3 and 4 are done; Steps 5–13 remain.** The plan is `Development_Plan/steps/`, and `03_Issue_Register.md` is the checklist — a step is not finished while one of its issue IDs survives.
 
-**Next is Step 4 — Agent Mode.** The engine works and the run now survives backgrounding; what is missing is the product around it. Closes B3, B4 and B6:
+**Next is Step 5 — OCR and the perception chain** (M7, closes F1, F2, G7). Agent Mode is now built and has been through three device passes; what it still cannot do is see a screen the Accessibility tree does not describe, and on those screens the agent is simply blind. Step 5 adds:
 
-- **Chat sessions with history.** Today there is one run and starting another replaces it. Sessions need persistence, a list, and a way back into a past conversation.
-- **A tools page.** The user should see which device tools the agent may use and be able to turn any of them off — with the permission mechanism from Step 2 behind each toggle.
-- **Multiple providers.** One provider is configured today; the registry needs to hold several and let the user choose per mode.
+- **A Kotlin `android/ocr` module**, on-device only, depending on `screen` for the bitmap and deliberately **not** on `accessibility` — OCR is an independent way of seeing, and coupling the two would make the fallback chain circular.
+- **An `ocr` tool and node**, plus `findTextOnScreen` as the convenience the agent will actually reach for.
+- **An OCR-backed selector strategy**, inserted between relative position and raw coordinates: a text match survives layout shifts and is checkable, which is why it ranks above coordinates.
+- **A working `VisionMatcher`**, replacing the `UnavailableVisionMatcher` that has made the selector chain's seventh step a no-op since Phase 2.
+- **The UI-tree attribute parity test (G7)**, which nothing currently catches on the TypeScript side.
 
-Step 4 also owns the piece Step 3 deliberately left: **a mid-run input point in the loop**, so the overlay's follow-up box can interleave rather than queue. That is a change to `runAgent`'s context assembly, which is why it was not smuggled into a step about lifetimes.
+Step 4 also left one piece for later: **a mid-run input point in the loop**, so the overlay's follow-up box can interleave rather than queue. That is a change to `runAgent`'s context assembly rather than to a lifetime, which is why it was not smuggled into Step 3 or 4.
 
 Then Step 5 (OCR and the perception chain), Step 6 (Workflow Mode shell), and on through `01_Roadmap.md`.
 
