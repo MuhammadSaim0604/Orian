@@ -38,7 +38,18 @@ class UiTreeWalker(
 
     fun walk(root: NodeSource): Result {
         val state = WalkState()
-        val node = visit(root, depth = 1, index = 0, state = state)
+
+        // The root is visited unconditionally, ignoring [includeInvisible].
+        //
+        // A window root frequently reports `isVisibleToUser = false` even though everything inside it is on
+        // screen - the flag describes the node's own drawn area, and a full-screen container often has
+        // none. Filtering on it here returned an empty tree with no error: `getUiTree` succeeded, the AI
+        // was handed a screen with nothing on it, and every selector then failed to resolve for reasons
+        // that pointed at the resolver rather than at the walk.
+        //
+        // Children are still filtered, which is where the filter earns its keep.
+        val node = visit(root, depth = 1, index = 0, state = state, force = true)
+
         return Result(
             root = node ?: UiNode(),
             nodeCount = state.visited,
@@ -52,13 +63,14 @@ class UiTreeWalker(
         depth: Int,
         index: Int,
         state: WalkState,
+        force: Boolean = false,
     ): UiNode? {
         if (state.visited >= maxNodes) {
             state.truncatedByNodeLimit = true
             return null
         }
 
-        if (!includeInvisible && !source.isVisibleToUser) return null
+        if (!force && !includeInvisible && !source.isVisibleToUser) return null
 
         state.visited++
 

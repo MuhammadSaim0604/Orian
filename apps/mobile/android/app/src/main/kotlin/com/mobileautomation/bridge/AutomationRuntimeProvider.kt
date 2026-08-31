@@ -13,7 +13,10 @@ import com.mobileautomation.accessibility.service.UiAutomationAccessibilityServi
 import com.mobileautomation.automation.DefaultAutomationRuntime
 import com.mobileautomation.gestures.AccessibilityGestureDispatcher
 import com.mobileautomation.gestures.GestureBuilder
+import com.mobileautomation.gestures.GestureDispatcher
 import com.mobileautomation.gestures.GestureEngine
+import com.mobileautomation.gestures.GestureOutcome
+import com.mobileautomation.gestures.GestureSpec
 import com.mobileautomation.screen.MediaProjectionScreenCapture
 import com.mobileautomation.screen.ScreenCapture
 import com.mobileautomation.screen.ScreenCaptureService
@@ -52,25 +55,29 @@ private const val CAPTURE_DIRECTORY = "captures"
     private var screenCapture: MediaProjectionScreenCapture? = null
 
     /**
-     * A bridge over the current runtime, or null when the accessibility service is
-     * not connected.
+     * A bridge over the current runtime. **Always available.**
      *
-     * Rebuilt per call rather than cached: caching would hold a reference to a
-     * service instance the system has already destroyed, and every call would then
-     * fail in a way that looks like a device problem rather than a revoked
-     * permission.
+     * It used to return null whenever the accessibility service was off, and the module then rejected
+     * every call with `accessibility_unavailable`. That was wrong for most of the tool set: taking a
+     * screenshot, opening an app, reading contacts or the clipboard, setting an alarm, posting a
+     * notification, launching an intent, reading a setting and controlling media all work perfectly well
+     * with accessibility disabled. Fourteen of the twenty-four tools were unreachable because a
+     * capability none of them use was missing - and the error told the user to enable accessibility,
+     * which would not have fixed anything.
+     *
+     * So the runtime is always constructed and the accessibility-shaped parts degrade instead: the
+     * screen reader is absent, the gesture dispatcher reports `Unavailable`, and global actions return
+     * false. [DefaultAutomationRuntime] already turns each of those into `AccessibilityUnavailable` for
+     * exactly the tools that need it, so the error still reaches the user - on the right tools.
+     *
+     * Rebuilt per call rather than cached: caching would hold a reference to a service instance the
+     * system has already destroyed, and every call would then fail in a way that looks like a device
+     * problem rather than a revoked permission.
      */
-    fun bridgeOrNull(context: Context): AutomationBridge? {
-        val service = AccessibilityConnection.readerOrNull() ?: return null
-        val performer = AccessibilityConnection.actionPerformerOrNull()
-
-        val gestureService = service as? UiAutomationAccessibilityService
-        if (gestureService == null) {
-            // The reader is not the real service, which happens only in tests. There
-            // is no way to dispatch a gesture, so refuse rather than half-work.
-            Log.w(TAG, "Connected screen reader cannot dispatch gestures")
-            return null
-        }
+    fun bridge(context: Context): AutomationBridge {
+        // The concrete service when connected, because gestures and global actions need the real type.
+        // Null is a normal state, not a refusal.
+        val gestureService = AccessibilityConnection.readerOrNull() as? UiAutomationAccessibilityService
 
         val metrics = context.resources.displayMetrics
         val permissionGate =
@@ -87,10 +94,16 @@ private const val CAPTURE_DIRECTORY = "captures"
                 gestureEngine =
                     GestureEngine(
                         dispatcher =
-                            AccessibilityGestureDispatcher(
-                                service = gestureService,
-                                isServiceConnected = { AccessibilityConnection.isConnected },
-                            ),
+                            if (gestureService == null) {
+                                // Nothing can be dispatched, so this reports rather than refuses - which
+                                // is what lets the tools needing no gestures keep working.
+                                UnavailableGestureDispatcher
+                            } else {
+                                AccessibilityGestureDispatcher(
+                                    service = gestureService,
+                                    isServiceConnected = { AccessibilityConnection.isConnected },
+                                )
+                            },
                         builder =
                             GestureBuilder(
                                 screenWidthPx = metrics.widthPixels,
@@ -118,7 +131,12 @@ private const val CAPTURE_DIRECTORY = "captures"
                 intentTool = AndroidIntentTool(context),
                 systemSettingsReader = AndroidSystemSettingsReader(context),
                 mediaTool = AndroidMediaTool(context),
-                globalActionPerformer = { action: GlobalAction -> gestureService.perform(action) },
+                globalActionPerformer = { action: GlobalAction ->
+                    // Re-read rather than closing over the instance above: the user can enable the
+                    // service between this runtime being built and the action being performed.
+                    (AccessibilityConnection.readerOrNull() as? UiAutomationAccessibilityService)
+                        ?.perform(action) == true
+                },
                 selectorResolver = SelectorResolver(),
                 // Vision needs a screenshot and a model call, so the matcher is
                 // supplied by the agent layer in Phase 7. Until then the chain
@@ -228,7 +246,7 @@ private const val CAPTURE_DIRECTORY = "captures"
     /**
      * Whether a screen-capture session is currently held.
      *
-     * Exposed separately from [bridgeOrNull] because the two are **independent**, and conflating
+     * Exposed separately from [bridge] because the two are **independent**, and conflating
      * them caused a real bug (issue E1): `getStatus` fell back to a stub whenever the accessibility
      * service was off, and that stub hardcoded capture as unavailable - so a user who granted screen
      * recording was told it had not worked, because a different permission was missing.
@@ -285,5 +303,17 @@ private const val CAPTURE_DIRECTORY = "captures"
             com.mobileautomation.screen.CaptureResult.ConsentRequired
 
         override fun release() = Unit
+    }
+
+    /**
+     * Stands in when the accessibility service is off.
+     *
+     * `Unavailable` rather than `Failed`, because the two mean different things downstream: this is a
+     * permission the user can grant, not a gesture that went wrong.
+     */
+    private object UnavailableGestureDispatcher : GestureDispatcher {
+        override val isAvailable: Boolean = false
+
+        override suspend fun dispatch(spec: GestureSpec): GestureOutcome = GestureOutcome.Unavailable
     }
 }

@@ -438,6 +438,73 @@ class SelectorResolverTest {
     }
 
     @Test
+    fun `builds paths from live platform indices, not list positions`() {
+        // The bug this guards was invisible in every result: the resolver matched the right node, the service
+        // acted on a different one, and the runtime reported success.
+        //
+        // `UiTreeWalker` drops invisible children, so a surviving child's position in the parsed list is not
+        // its position in the live hierarchy - but the live one is what `getChild(index)` will be asked for.
+        // Here the target survived at live index 4 while sitting at list position 1.
+        val target =
+            UiNode(
+                text = "Second row",
+                packageName = "com.whatsapp",
+                bounds = Bounds(0, 200, 1080, 300),
+                clickable = true,
+                index = 4,
+            )
+
+        val filteredList =
+            UiTree(
+                root =
+                    UiNode(
+                        className = "android.widget.FrameLayout",
+                        packageName = "com.whatsapp",
+                        bounds = Bounds(0, 0, 1080, 2400),
+                        index = 0,
+                        children =
+                            listOf(
+                                UiNode(
+                                    text = "First row",
+                                    packageName = "com.whatsapp",
+                                    bounds = Bounds(0, 100, 1080, 200),
+                                    clickable = true,
+                                    index = 1,
+                                ),
+                                target,
+                            ),
+                    ),
+                packageName = "com.whatsapp",
+            )
+
+        val match = assertMatch(resolver.resolve(filteredList, Selector.byText("Second row")))
+
+        assertEquals("0.4", match.structuralPath)
+    }
+
+    @Test
+    fun `uses list positions when indices were never recorded`() {
+        // A hand-built tree reports index 0 for every child. Duplicated paths would make two different nodes
+        // indistinguishable, which is worse than an index that addresses nothing.
+        val handBuilt =
+            UiTree(
+                root =
+                    UiNode(
+                        packageName = "com.whatsapp",
+                        bounds = Bounds(0, 0, 1080, 2400),
+                        children =
+                            listOf(
+                                UiNode(text = "one", packageName = "com.whatsapp", bounds = Bounds(0, 0, 10, 10)),
+                                UiNode(text = "two", packageName = "com.whatsapp", bounds = Bounds(0, 20, 10, 30)),
+                            ),
+                    ),
+                packageName = "com.whatsapp",
+            )
+
+        assertEquals("0.1", assertMatch(resolver.resolve(handBuilt, Selector.byText("two"))).structuralPath)
+    }
+
+    @Test
     fun `treats a resource id match as durable rather than fragile`() {
         assertFalse(assertMatch(resolver.resolve(tree, Selector.byResourceId("send_button"))).isFragile)
     }

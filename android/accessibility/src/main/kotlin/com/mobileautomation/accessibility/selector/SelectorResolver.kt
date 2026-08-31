@@ -314,7 +314,7 @@ class SelectorResolver(
 
     private fun indexTree(root: UiNode): List<IndexedNode> {
         val collected = ArrayList<IndexedNode>()
-        indexInto(root, ROOT_PATH, collected)
+        indexInto(root, StructuralPath.ROOT, collected)
         return collected
     }
 
@@ -324,8 +324,13 @@ class SelectorResolver(
         into: MutableList<IndexedNode>,
     ) {
         into.add(IndexedNode(node, path))
-        node.children.forEachIndexed { index, child ->
-            indexInto(child, "$path.$index", into)
+
+        // Delegated to [StructuralPath] because the runtime walks these paths back down to find a clickable
+        // ancestor or an editable child, and the two must agree. They disagreed once already - paths built
+        // from list positions, resolved against live platform indices - and the symptom was a tap landing on
+        // the wrong row with success reported.
+        node.children.indices.forEach { position ->
+            indexInto(node.children[position], StructuralPath.childPath(path, node, position), into)
         }
     }
 
@@ -336,7 +341,7 @@ class SelectorResolver(
         const val DEFAULT_POSITION_TOLERANCE_PX: Int = 48
 
         /** Path assigned to the tree root; children extend it as `0.1.2`. */
-        const val ROOT_PATH: String = "0"
+        const val ROOT_PATH: String = StructuralPath.ROOT
 
         /**
          * Structural path reported for a vision match. Not a real path: a vision

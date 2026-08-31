@@ -356,16 +356,118 @@ class DefaultAutomationRuntimeTest {
         }
 
     @Test
-    fun `click taps the centre of a non-clickable node it was asked to click`() =
+    fun `click taps the centre of a non-clickable node with no clickable ancestor`() =
         runTest {
             val harness = harness(tree = conversationTree)
 
             val result = harness.runtime.click(Selector.byText("Robert"))
 
-            // The label is not clickable, so no node action is attempted; the
-            // gesture is the only option.
+            // The label is not clickable and its only ancestor is the root frame, which is not clickable
+            // either. With no node action available the gesture is the only option.
             assertTrue(result.isSuccess)
             assertTrue(harness.performer.clickCalls.isEmpty())
+            assertEquals(1, harness.dispatcher.dispatched.size)
+        }
+
+    @Test
+    fun `click uses the clickable ancestor of a text label`() =
+        runTest {
+            // The commonest real layout by a wide margin: a selector by visible text matches a TextView, and
+            // the TextView is not clickable - its parent row is. The old code went straight to a coordinate
+            // tap, which works often enough to look correct and fails exactly where it matters: a zero-area
+            // label, a node covered by another view, or the service being off so nothing can be dispatched.
+            val label =
+                UiNode(
+                    text = "Robert Smith",
+                    className = "android.widget.TextView",
+                    packageName = "com.whatsapp",
+                    bounds = Bounds(60, 300, 700, 380),
+                    index = 0,
+                )
+
+            val row =
+                UiNode(
+                    className = "android.widget.LinearLayout",
+                    packageName = "com.whatsapp",
+                    bounds = Bounds(0, 280, 1080, 400),
+                    clickable = true,
+                    index = 3,
+                    children = listOf(label),
+                )
+
+            val listTree =
+                UiTree(
+                    root =
+                        UiNode(
+                            className = "android.widget.FrameLayout",
+                            packageName = "com.whatsapp",
+                            bounds = Bounds(0, 0, 1080, 2400),
+                            children = listOf(row),
+                        ),
+                    packageName = "com.whatsapp",
+                    screenWidthPx = 1080,
+                    screenHeightPx = 2400,
+                )
+
+            val harness = harness(tree = listTree)
+
+            val result = harness.runtime.click(Selector.byText("Robert Smith"))
+
+            assertTrue(result.isSuccess)
+            // The row's path, not the label's - and no coordinate tap.
+            assertEquals(listOf("0.3"), harness.performer.clickCalls)
+            assertTrue(harness.dispatcher.dispatched.isEmpty())
+        }
+
+    @Test
+    fun `click does not reach past a few levels for an ancestor`() =
+        runTest {
+            // Beyond a level or two the "ancestor" is no longer the row the label sits in - it is the screen,
+            // whose click action has nothing to do with what the user pointed at.
+            var node =
+                UiNode(
+                    text = "Deep",
+                    className = "android.widget.TextView",
+                    packageName = "com.whatsapp",
+                    bounds = Bounds(60, 300, 700, 380),
+                    index = 0,
+                )
+
+            repeat(5) {
+                node =
+                    UiNode(
+                        className = "android.widget.FrameLayout",
+                        packageName = "com.whatsapp",
+                        bounds = Bounds(0, 0, 1080, 2400),
+                        index = 0,
+                        children = listOf(node),
+                    )
+            }
+
+            val clickableRoot =
+                UiNode(
+                    className = "android.widget.FrameLayout",
+                    packageName = "com.whatsapp",
+                    bounds = Bounds(0, 0, 1080, 2400),
+                    clickable = true,
+                    children = listOf(node),
+                )
+
+            val harness =
+                harness(
+                    tree =
+                        UiTree(
+                            root = clickableRoot,
+                            packageName = "com.whatsapp",
+                            screenWidthPx = 1080,
+                            screenHeightPx = 2400,
+                        ),
+                )
+
+            val result = harness.runtime.click(Selector.byText("Deep"))
+
+            assertTrue(result.isSuccess)
+            assertTrue("must not click a distant container", harness.performer.clickCalls.isEmpty())
             assertEquals(1, harness.dispatcher.dispatched.size)
         }
 
@@ -441,6 +543,106 @@ class DefaultAutomationRuntimeTest {
             val harness = harness(tree = conversationTree)
 
             val result = harness.runtime.typeText(Selector.byResourceId("send_button"), "text")
+
+            assertEquals("invalid_argument", result.errorOrNull?.code)
+            assertTrue(harness.performer.setTextCalls.isEmpty())
+        }
+
+    @Test
+    fun `typeText finds the field inside a wrapper it was pointed at`() =
+        runTest {
+            // A selector written against a field's *label* or its container resolves to a wrapper, and this
+            // used to be refused outright with "target is not a text field" - which reads as the tool being
+            // broken when the selector was one node off. A hint or a contentDescription usually belongs to
+            // exactly such a wrapper, so this is the commonest way typing fails.
+            val field =
+                UiNode(
+                    className = "android.widget.EditText",
+                    packageName = "com.whatsapp",
+                    bounds = Bounds(70, 1810, 870, 1940),
+                    editable = true,
+                    index = 0,
+                )
+
+            val wrapper =
+                UiNode(
+                    contentDescription = "Type a message",
+                    className = "android.widget.FrameLayout",
+                    packageName = "com.whatsapp",
+                    bounds = Bounds(60, 1800, 880, 1950),
+                    index = 1,
+                    children = listOf(field),
+                )
+
+            val harness =
+                harness(
+                    tree =
+                        UiTree(
+                            root =
+                                UiNode(
+                                    className = "android.widget.FrameLayout",
+                                    packageName = "com.whatsapp",
+                                    bounds = Bounds(0, 0, 1080, 2400),
+                                    children = listOf(wrapper),
+                                ),
+                            packageName = "com.whatsapp",
+                        ),
+                )
+
+            val result = harness.runtime.typeText(Selector.byContentDescription("Type a message"), "Hi")
+
+            assertTrue(result.isSuccess)
+            // The field's path, one level below the wrapper the selector matched.
+            assertEquals(listOf("0.1.0" to "Hi"), harness.performer.setTextCalls)
+        }
+
+    @Test
+    fun `typeText refuses a wrapper holding two fields`() =
+        runTest {
+            // Two editable descendants means the selector genuinely did not say which. Typing into the first
+            // would be a guess with the user's data, which is worse than saying the selector was ambiguous.
+            val wrapper =
+                UiNode(
+                    contentDescription = "Sign in",
+                    className = "android.widget.LinearLayout",
+                    packageName = "com.example",
+                    bounds = Bounds(0, 400, 1080, 700),
+                    index = 0,
+                    children =
+                        listOf(
+                            UiNode(
+                                className = "android.widget.EditText",
+                                packageName = "com.example",
+                                bounds = Bounds(60, 420, 1020, 500),
+                                editable = true,
+                                index = 0,
+                            ),
+                            UiNode(
+                                className = "android.widget.EditText",
+                                packageName = "com.example",
+                                bounds = Bounds(60, 540, 1020, 620),
+                                editable = true,
+                                index = 1,
+                            ),
+                        ),
+                )
+
+            val harness =
+                harness(
+                    tree =
+                        UiTree(
+                            root =
+                                UiNode(
+                                    className = "android.widget.FrameLayout",
+                                    packageName = "com.example",
+                                    bounds = Bounds(0, 0, 1080, 2400),
+                                    children = listOf(wrapper),
+                                ),
+                            packageName = "com.example",
+                        ),
+                )
+
+            val result = harness.runtime.typeText(Selector.byContentDescription("Sign in"), "secret")
 
             assertEquals("invalid_argument", result.errorOrNull?.code)
             assertTrue(harness.performer.setTextCalls.isEmpty())

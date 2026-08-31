@@ -1,9 +1,11 @@
 package com.mobileautomation.automation
 
+import com.mobileautomation.accessibility.model.UiNode
 import com.mobileautomation.accessibility.model.UiTree
 import com.mobileautomation.accessibility.selector.ResolutionResult
 import com.mobileautomation.accessibility.selector.Selector
 import com.mobileautomation.accessibility.selector.SelectorResolver
+import com.mobileautomation.accessibility.selector.StructuralPath
 import com.mobileautomation.accessibility.service.GlobalAction
 import com.mobileautomation.accessibility.service.NodeActionPerformer
 import com.mobileautomation.accessibility.service.ScreenReader
@@ -92,6 +94,23 @@ class DefaultAutomationRuntime(
         return resolve(tree, selector)
     }
 
+    /**
+     * Resolves [selector] and keeps the tree it resolved against.
+     *
+     * [click] and [typeText] both need more than the matched node: a text label's clickable ancestor, or a
+     * wrapper's editable child. Neither can be found from a [ResolvedElement], which is a flat snapshot -
+     * so the tree has to survive the resolve.
+     */
+    private suspend fun resolveWithTree(selector: Selector): ToolResult<Pair<UiTree, ResolvedElement>> {
+        val treeResult = getUiTree()
+        val tree = treeResult.valueOrNull ?: return ToolResult.Failure(treeResult.errorOrNull!!)
+
+        val resolved = resolve(tree, selector)
+        val element = resolved.valueOrNull ?: return ToolResult.Failure(resolved.errorOrNull!!)
+
+        return ToolResult.success(tree to element)
+    }
+
     override suspend fun waitForElement(
         selector: Selector,
         timeoutMs: Long,
@@ -128,19 +147,68 @@ class DefaultAutomationRuntime(
 
     // --- acting on the screen ---------------------------------------------
 
+    /**
+     * Taps the element [selector] resolves to, or the nearest ancestor that can actually be tapped.
+     *
+     * The ancestor walk is the part that matters. A selector by visible text almost always matches a
+     * `TextView`, and in nearly every real layout the `TextView` is not clickable - its parent row is. The
+     * old code checked only the resolved node, found it not clickable, and fell straight through to a
+     * coordinate tap. That works often enough to look correct and fails exactly where it matters: on a
+     * zero-area label, on a node covered by another view, and whenever the accessibility service is off so
+     * no gesture can be dispatched at all.
+     *
+     * The coordinate tap is still the last resort, because it genuinely succeeds where the action does not -
+     * a custom view that handles touch without declaring itself clickable.
+     */
     override suspend fun click(selector: Selector): ToolResult<Unit> {
-        val found = findElement(selector)
-        val element = found.valueOrNull ?: return ToolResult.Failure(found.errorOrNull!!)
+        val resolved = resolveWithTree(selector)
+        val (tree, element) = resolved.valueOrNull ?: return ToolResult.Failure(resolved.errorOrNull!!)
 
-        // The node's own click action first: it succeeds in cases a coordinate tap
-        // cannot, such as a target overlapped by another view or one whose touch
-        // area differs from its reported bounds.
         val performer = actionPerformerProvider()
-        if (element.clickable && performer?.performClick(element.structuralPath) == true) {
-            return ToolResult.success(Unit)
+
+        if (performer != null) {
+            for (path in clickablePathsFor(tree, element)) {
+                if (performer.performClick(path)) return ToolResult.success(Unit)
+            }
         }
 
         return dispatch(gestureEngine.tapCenterOf(element.toRect()))
+    }
+
+    /**
+     * Paths worth performing a click action on, nearest first.
+     *
+     * The resolved node when it claims to be clickable, then the nearest **clickable** ancestor. Ancestors
+     * that are not clickable are skipped rather than tried: a click action on a layout container is either
+     * ignored or, worse, handled by something the user did not point at.
+     *
+     * Bounded by [MAX_CLICKABLE_ANCESTOR_DEPTH] because past a few levels the ancestor is no longer "the row
+     * this label is in" - it is the screen.
+     */
+    private fun clickablePathsFor(
+        tree: UiTree,
+        element: ResolvedElement,
+    ): List<String> {
+        val paths = mutableListOf<String>()
+        if (element.clickable) paths.add(element.structuralPath)
+
+        var path = element.structuralPath
+        var levels = 0
+
+        while (path.contains('.') && levels < MAX_CLICKABLE_ANCESTOR_DEPTH) {
+            path = path.substringBeforeLast('.')
+            levels++
+
+            val ancestor = nodeAt(tree.root, path) ?: break
+            if (!ancestor.enabled) break
+
+            if (ancestor.clickable) {
+                paths.add(path)
+                break
+            }
+        }
+
+        return paths
     }
 
     override suspend fun clickAt(
@@ -201,29 +269,46 @@ class DefaultAutomationRuntime(
         return dispatch(outcome)
     }
 
+    /**
+     * Types into the field [selector] resolves to, or into the single editable node inside it.
+     *
+     * The descendant search is why this is not a one-liner. A selector written against a field's *label* or
+     * its container - which is what a hint text or a `contentDescription` usually belongs to - resolves to
+     * a wrapper, and the old code rejected it outright with "target is not a text field". That reads as the
+     * tool being broken when the selector was merely one node off, and it is the commonest way typing
+     * fails.
+     *
+     * Only an **unambiguous** descendant is accepted. Two editable fields inside one container means the
+     * selector genuinely did not say which, and typing into the first would be a guess with the user's data.
+     */
     override suspend fun typeText(
         selector: Selector,
         text: String,
     ): ToolResult<Unit> {
-        val found = findElement(selector)
-        val element = found.valueOrNull ?: return ToolResult.Failure(found.errorOrNull!!)
-
-        if (!element.editable) {
-            return ToolResult.failure(
-                AutomationError.InvalidArgument(
-                    "target is not a text field (${element.className ?: "unknown class"})",
-                ),
-            )
-        }
+        val resolved = resolveWithTree(selector)
+        val (tree, element) = resolved.valueOrNull ?: return ToolResult.Failure(resolved.errorOrNull!!)
 
         val performer =
             actionPerformerProvider()
                 ?: return ToolResult.failure(AutomationError.AccessibilityUnavailable)
 
-        // Focus first: some fields ignore set-text until they hold focus.
-        performer.performFocus(element.structuralPath)
+        val targetPath =
+            if (element.editable) {
+                element.structuralPath
+            } else {
+                editableDescendantPath(tree, element.structuralPath)
+                    ?: return ToolResult.failure(
+                        AutomationError.InvalidArgument(
+                            "target is not a text field and contains no single editable field " +
+                                "(${element.className ?: "unknown class"})",
+                        ),
+                    )
+            }
 
-        return if (performer.setText(element.structuralPath, text)) {
+        // Focus first: some fields ignore set-text until they hold focus.
+        performer.performFocus(targetPath)
+
+        return if (performer.setText(targetPath, text)) {
             ToolResult.success(Unit)
         } else {
             ToolResult.failure(
@@ -451,11 +536,61 @@ class DefaultAutomationRuntime(
 
     private fun ResolvedElement.toRect(): Rect = Rect(left, top, right, bottom)
 
+    private fun nodeAt(
+        root: UiNode,
+        path: String,
+    ): UiNode? = StructuralPath.nodeAt(root, path)
+
+    /**
+     * The path of the one editable node inside [path], or null when there is none or several.
+     *
+     * Null for "several" rather than a first match: a container with two fields means the selector did not
+     * identify one, and typing into whichever came first would put the user's text somewhere they did not
+     * ask for.
+     */
+    private fun editableDescendantPath(
+        tree: UiTree,
+        path: String,
+    ): String? {
+        val node = nodeAt(tree.root, path) ?: return null
+
+        val found = mutableListOf<String>()
+        collectEditablePaths(node, path, found)
+
+        return found.singleOrNull()
+    }
+
+    private fun collectEditablePaths(
+        node: UiNode,
+        path: String,
+        into: MutableList<String>,
+    ) {
+        if (node.editable && node.enabled) into.add(path)
+
+        // Paths built through [StructuralPath] so they address the same nodes the resolver's do.
+        node.children.indices.forEach { position ->
+            collectEditablePaths(
+                node.children[position],
+                StructuralPath.childPath(path, node, position),
+                into,
+            )
+        }
+    }
+
     private companion object {
         /**
          * Matches the gesture engine's settle delay: polling faster wastes work
          * re-walking a tree that has not changed.
          */
         const val POLL_INTERVAL_MS = 250L
+
+        /**
+         * How far up to look for a clickable ancestor.
+         *
+         * Three levels covers label-inside-row-inside-list, which is the shape this exists for. Further up
+         * and the "ancestor" is a screen-sized container whose click action has nothing to do with what the
+         * user pointed at.
+         */
+        const val MAX_CLICKABLE_ANCESTOR_DEPTH = 3
     }
 }

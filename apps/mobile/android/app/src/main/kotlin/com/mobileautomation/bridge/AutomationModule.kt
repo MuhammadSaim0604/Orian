@@ -3,8 +3,6 @@ package com.mobileautomation.bridge
 import android.app.Activity
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
-import android.os.Build
-import android.provider.Settings
 import com.facebook.react.bridge.ActivityEventListener
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -42,13 +40,16 @@ class AutomationModule(
 ) : ReactContextBaseJavaModule(reactContext),
     ActivityEventListener {
     /**
-     * Runtime provider rather than a runtime.
+     * The bridge over the automation runtime.
      *
-     * The accessibility service is constructed by the system whenever the user
-     * enables it, so the runtime cannot be built once at module construction - it
-     * has to be looked up per call, and be absent when the service is off.
+     * Always present. It used to be nullable and every call was rejected with `accessibility_unavailable`
+     * when the service was off - which blocked fourteen tools that do not use accessibility at all. The
+     * runtime now degrades per capability instead, so the error reaches only the tools that need it.
+     *
+     * Looked up per call rather than held: the accessibility service is constructed by the system
+     * whenever the user enables it, so a cached runtime would point at a destroyed instance.
      */
-    private val bridge: AutomationBridge? get() = AutomationRuntimeProvider.bridgeOrNull(reactContext)
+    private val bridge: AutomationBridge get() = AutomationRuntimeProvider.bridge(reactContext)
 
     /**
      * Native calls run here, not on the JS thread.
@@ -81,10 +82,7 @@ class AutomationModule(
      * offer a run button, and a promise would make it flash the wrong state.
      */
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun getStatus(): String {
-        val active = bridge ?: return notReadyStatusJson()
-        return active.getStatusJson()
-    }
+    fun getStatus(): String = bridge.getStatusJson()
 
     // --- screen reading ---------------------------------------------------
 
@@ -412,18 +410,22 @@ class AutomationModule(
      * has to get error mapping right. An absent runtime rejects with
      * `accessibility_unavailable`, which is exactly what the user needs to fix.
      */
+    /**
+     * Runs a bridge call and settles [promise] with the outcome.
+     *
+     * The single place a native call can fail, so it is also the single place that has to get error
+     * mapping right.
+     *
+     * **No accessibility pre-check here.** There used to be one, rejecting everything when the service
+     * was off, and it was the reason `takeScreenshot`, `openApp`, `getContacts` and eleven other tools
+     * failed with an error about a permission they never needed. Whether a given tool requires the
+     * service is the runtime's business, and it already answers correctly per tool.
+     */
     private fun dispatch(
         promise: Promise,
         call: suspend (AutomationBridge) -> AutomationBridge.Outcome,
     ) {
         val active = bridge
-        if (active == null) {
-            promise.reject(
-                "accessibility_unavailable",
-                "The accessibility service is not enabled, so the screen cannot be read or acted on",
-            )
-            return
-        }
 
         scope.launch {
             val outcome =
@@ -452,30 +454,6 @@ class AutomationModule(
                 .emit(EVENT_STATUS_CHANGED, statusJson)
         }
     }
-
-    /**
-     * The status reported when there is no runtime.
-     *
-     * **Each capability is read independently.** An earlier version hardcoded `canCaptureScreen =
-     * false` here, which caused issue E1: with the accessibility service off, `getStatus` fell
-     * through to this stub, so a user who had just granted screen recording was told it had not
-     * worked. Screen capture and overlay permission have nothing to do with accessibility, and a
-     * status object that lies about two capabilities because a third is missing is worse than no
-     * status at all.
-     */
-    private fun notReadyStatusJson(): String =
-        BridgeResults.statusToJson(
-            isReady = false,
-            canCaptureScreen = AutomationRuntimeProvider.hasScreenCaptureSession(),
-            canDrawOverlay = canDrawOverlay(),
-        )
-
-    private fun canDrawOverlay(): Boolean =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            Settings.canDrawOverlays(reactContext)
-        } else {
-            true
-        }
 
     companion object {
         const val NAME = "NativeAutomation"

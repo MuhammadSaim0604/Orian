@@ -59,6 +59,17 @@
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
 
     <!--
+      Required for the createAlarm tool to set an alarm *without* opening the clock
+      app. `AlarmClock.EXTRA_SKIP_UI` is honoured only for callers holding this
+      permission; without it the clock app opens pre-filled and waits for a tap,
+      which for an agent working in the background means the alarm is never set and
+      the tool still reports success.
+
+      Normal-level, so it is granted at install and needs no request.
+    -->
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+
+    <!--
       Lets the app resolve and open other apps by package name. Without this,
       queryable packages are limited on API 30+ and listApps/openApp would see
       almost nothing.

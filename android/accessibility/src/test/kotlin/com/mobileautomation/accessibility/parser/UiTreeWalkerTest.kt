@@ -93,6 +93,52 @@ class UiTreeWalkerTest {
     }
 
     @Test
+    fun `walks a root that reports itself invisible`() {
+        // A window root frequently reports `isVisibleToUser = false` even with a full screen inside it: the
+        // flag describes the node's own drawn area, and a full-screen container often has none.
+        //
+        // Filtering on it here used to return `Result(root = UiNode())` - an empty tree with no error. So
+        // `getUiTree` succeeded, the model was handed a screen with nothing on it, and every selector then
+        // failed to resolve for reasons that pointed at the resolver rather than at the walk.
+        val source =
+            FakeNodeSource(
+                className = "android.widget.FrameLayout",
+                isVisibleToUser = false,
+                children =
+                    listOf(
+                        FakeNodeSource(text = "Send", isClickable = true),
+                        FakeNodeSource(text = "Message"),
+                    ),
+            )
+
+        val result = UiTreeWalker().walk(source)
+
+        assertEquals("android.widget.FrameLayout", result.root.className)
+        assertEquals(2, result.root.children.size)
+        assertEquals(3, result.nodeCount)
+    }
+
+    @Test
+    fun `still filters invisible children of an invisible root`() {
+        // The exemption is for the root alone. Filtering children is where it earns its keep - a long list is
+        // mostly off-screen rows, and handing them to the model is noise it pays for by the token.
+        val source =
+            FakeNodeSource(
+                isVisibleToUser = false,
+                children =
+                    listOf(
+                        FakeNodeSource(text = "on screen"),
+                        FakeNodeSource(text = "scrolled away", isVisibleToUser = false),
+                    ),
+            )
+
+        val result = UiTreeWalker().walk(source)
+
+        assertEquals(1, result.root.children.size)
+        assertEquals("on screen", result.root.children.first().text)
+    }
+
+    @Test
     fun `stops descending at the depth limit and reports truncation`() {
         val deep = chain(depth = 10)
 
