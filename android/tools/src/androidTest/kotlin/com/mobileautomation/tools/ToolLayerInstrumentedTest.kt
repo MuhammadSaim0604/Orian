@@ -116,9 +116,23 @@ class ToolLayerInstrumentedTest {
     }
 
     @Test
+    fun findAppsOnlyOffersAppsThatCanBeOpened() {
+        // The distinction that matters after the system-app fix: `findApps` searches system packages, because
+        // Settings and Clock are system packages and are exactly what a spoken goal names — but everything it
+        // returns is about to be launched, so an unlaunchable package would be a dead end.
+        //
+        // The instrumentation test package is the convenient proof: installed, and with no launcher activity.
+        val found = AndroidAppManager(context).findApps(context.packageName)
+
+        assertFalse(
+            "an app with no launcher entry must never be offered as a target",
+            found.any { it.packageName == context.packageName },
+        )
+    }
+
+    @Test
     fun findAppsReturnsNothingForANonsenseQuery() {
         val found = AndroidAppManager(context).findApps("zzz-not-an-app-name-zzz")
-
         assertTrue(found.isEmpty())
     }
 

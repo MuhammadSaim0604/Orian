@@ -92,17 +92,21 @@ class AndroidAppManager(
         return if (openApp(candidate.packageName)) candidate else null
     }
 
+    /**
+     * Installed apps.
+     *
+     * `includeSystem = false` also drops apps with no launcher entry, because that list is for choosing a
+     * target and offering one that can never be opened is a dead end. `includeSystem = true` is the honest
+     * inventory - it answers "is this package present", which is a different question and one an agent
+     * legitimately asks about a package it cannot launch.
+     */
     override fun listApps(includeSystem: Boolean): List<InstalledApp> =
         runCatching {
             packageManager
                 .getInstalledApplications(PackageManager.GET_META_DATA)
                 .asSequence()
                 .filter { includeSystem || !it.isSystem() }
-                // An app with no launcher entry cannot be opened, so listing it would offer the user a
-                // target that never works. Applied unconditionally, unlike before: the filter was gated on
-                // `includeSystem` being false, so asking for system apps also asked for every unlaunchable
-                // service package on the device - hundreds of rows, none of them openable.
-                .filter { packageManager.getLaunchIntentForPackage(it.packageName) != null }
+                .filter { includeSystem || packageManager.getLaunchIntentForPackage(it.packageName) != null }
                 .map { it.toInstalledApp() }
                 .sortedBy { it.label.lowercase() }
                 .toList()
@@ -112,18 +116,27 @@ class AndroidAppManager(
         }
 
     /**
-     * Apps matching [query] by label or package.
+     * Apps matching [query] by label or package, best first.
      *
-     * **Includes system apps.** It used to search `includeSystem = false`, which meant
+     * **Searches system apps.** It used to search `includeSystem = false`, which meant
      * `openAppByName("Settings")` could never find anything - Settings, Clock, Phone, Messages, Camera and
      * the browser are all system packages on a stock device, and they are precisely the apps a spoken goal
-     * names. The launcher-entry filter in [listApps] is what keeps this list to things that can actually be
-     * opened.
+     * names.
+     *
+     * Launchability is filtered **here** rather than in [listApps], because the two have different jobs:
+     * everything this returns is about to be opened, so an unlaunchable package is noise, while `listApps`
+     * is an inventory and dropping entries from it would answer "is X installed" wrongly.
      *
      * Ranking lives in [AppRanking], which is pure and unit-tested: "open the clock" matching *Alarm Clock*
      * rather than *Clock* is a real failure with a real cause, and it should be provable without a device.
      */
-    override fun findApps(query: String): List<InstalledApp> = AppRanking.rank(listApps(includeSystem = true), query)
+    override fun findApps(query: String): List<InstalledApp> {
+        val launchable =
+            listApps(includeSystem = true)
+                .filter { packageManager.getLaunchIntentForPackage(it.packageName) != null }
+
+        return AppRanking.rank(launchable, query)
+    }
 
     override fun currentScreen(): CurrentScreen =
         CurrentScreen(
