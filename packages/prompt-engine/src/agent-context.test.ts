@@ -66,14 +66,30 @@ describe('the system prompt', () => {
   });
 
   it('describes the perception chain in order of cost', () => {
-    // The failure to avoid is a model reaching for a screenshot first because it is the most powerful thing
-    // mentioned. Each rung has to say what it costs, and the cheap one has to come first.
+    // The failure to avoid is a model reaching for the most powerful-sounding option first. Each rung has to say
+    // what it costs, and the cheap one has to come first (ADR 0013).
     const hierarchy = AGENT_SYSTEM_PROMPT.indexOf('element hierarchy in <screen>');
+    const ocr = AGENT_SYSTEM_PROMPT.indexOf('runOcr');
     const screenshot = AGENT_SYSTEM_PROMPT.indexOf('takeScreenshot');
 
     expect(hierarchy).toBeGreaterThan(-1);
-    expect(screenshot).toBeGreaterThan(hierarchy);
+    expect(ocr).toBeGreaterThan(hierarchy);
+    expect(screenshot).toBeGreaterThan(ocr);
     expect(AGENT_SYSTEM_PROMPT).toMatch(/only descend when the one above genuinely fails/i);
+  });
+
+  it('names both OCR tools, not just the concept', () => {
+    // A model told that "OCR is available" cannot call it. The tool names have to appear in the instruction that
+    // tells it when to descend.
+    expect(AGENT_SYSTEM_PROMPT).toContain('runOcr');
+    expect(AGENT_SYSTEM_PROMPT).toContain('findTextOnScreen');
+  });
+
+  it('warns that OCR reads pixels and can misread', () => {
+    // Without this the model treats an approximate match as a certainty, which is how it taps "Share" when it
+    // meant "Save".
+    expect(AGENT_SYSTEM_PROMPT).toMatch(/misread/i);
+    expect(AGENT_SYSTEM_PROMPT).toMatch(/check the text it actually read/i);
   });
 
   it('tells the model that answering a question is a complete response', () => {
@@ -165,11 +181,12 @@ describe('assembly', () => {
 
   it('says so explicitly when the hierarchy is empty', () => {
     // An empty block reads as a missing section and the model guesses. Naming the situation is what lets it
-    // decide to descend the perception chain rather than acting blind.
+    // decide to descend the perception chain rather than acting blind - and naming the *next rung specifically*
+    // is what stops it descending straight to the expensive one.
     const content = userContent(input({ observation: { ...observation, uiTree: null } }));
 
     expect(content).toMatch(/element hierarchy is empty/i);
-    expect(content).toContain('takeScreenshot');
+    expect(content).toContain('runOcr');
   });
 
   it('mentions a screenshot by path, never by bytes', () => {

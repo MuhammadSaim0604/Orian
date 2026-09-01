@@ -96,6 +96,25 @@ export interface Spec extends TurboModule {
    */
   takeScreenshot(): Promise<string>;
 
+  // --- reading a screen the tree does not describe -----------------------
+
+  /**
+   * Recognised text as a JSON `OcrResult`.
+   *
+   * The second rung of the perception chain (ADR 0013). Slower than `getUiTree` and
+   * its results carry no durable selectors, so it is a fallback rather than an
+   * alternative.
+   */
+  runOcr(): Promise<string>;
+
+  /**
+   * Finds text on screen, as a JSON `OcrMatch`.
+   *
+   * @param exact refuses a fuzzy match. Positional rather than an options object,
+   *   because the codegen spec cannot express optional properties.
+   */
+  findTextOnScreen(text: string, exact: boolean): Promise<string>;
+
   /**
    * Asks the user for a screen-capture session.
    *

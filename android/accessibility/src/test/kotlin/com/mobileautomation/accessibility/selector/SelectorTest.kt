@@ -41,6 +41,7 @@ class SelectorStrategyTest {
                 "text",
                 "structural",
                 "relativePosition",
+                "ocrText",
                 "coordinates",
                 "vision",
             ),

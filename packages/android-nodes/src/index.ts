@@ -26,6 +26,7 @@ import {
   longPressNode,
   mediaNode,
   notificationNode,
+  ocrNode,
   openAppNode,
   pressBackNode,
   pressHomeNode,
@@ -58,6 +59,14 @@ export const NODE_TO_TOOL = {
   findElement: 'findElement',
   waitForElement: 'waitForElement',
   takeScreenshot: 'takeScreenshot',
+  /**
+   * Maps to `runOcr`, the whole-screen read.
+   *
+   * The node dispatches to `findTextOnScreen` instead when a search term is configured, so this map records the
+   * *default* tool rather than the only one. The alternative — two node types the user has to tell apart — would
+   * put the same distinction in the palette instead of in one node's config.
+   */
+  ocr: 'runOcr',
   pressBack: 'pressBack',
   pressHome: 'pressHome',
   currentScreen: 'getCurrentScreen',
@@ -97,6 +106,9 @@ export const androidNodes: readonly AnyNodeDefinition[] = [
   waitForElementNode,
   readScreenNode,
   takeScreenshotNode,
+  // Straight after the screenshot, because they are the three ways of seeing a screen and the palette should read
+  // in the same order the perception chain does.
+  ocrNode,
   currentScreenNode,
   pressBackNode,
   pressHomeNode,
@@ -123,6 +135,7 @@ export {
   longPressNode,
   mediaNode,
   notificationNode,
+  ocrNode,
   openAppNode,
   pressBackNode,
   pressHomeNode,
@@ -144,6 +157,7 @@ export {
   MediaConfigSchema,
   NoArgumentConfigSchema,
   NotificationConfigSchema,
+  OcrConfigSchema,
   OpenAppConfigSchema,
   ReadScreenConfigSchema,
   SelectorConfigSchema,
@@ -160,6 +174,7 @@ export {
   type MediaConfig,
   type NoArgumentConfig,
   type NotificationConfig,
+  type OcrConfig,
   type OpenAppConfig,
   type ReadScreenConfig,
   type SelectorConfig,

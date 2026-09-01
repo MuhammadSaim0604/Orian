@@ -14,6 +14,16 @@ enum class SelectorStrategy(val wireName: String) {
     TEXT("text"),
     STRUCTURAL("structural"),
     RELATIVE_POSITION("relativePosition"),
+
+    /**
+     * Matched by recognising text in a screenshot (ADR 0013, Step 5).
+     *
+     * Placed **above coordinates and below relative position** deliberately. It is weaker than anything
+     * structural, because it depends on what a recogniser read off pixels — but stronger than a raw coordinate,
+     * because a text match survives the layout shifting and is *checkable*: the string either matched or it did
+     * not, whereas a coordinate is a guess that always "succeeds".
+     */
+    OCR_TEXT("ocrText"),
     COORDINATES("coordinates"),
     VISION("vision"),
     ;

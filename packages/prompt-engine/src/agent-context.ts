@@ -141,9 +141,9 @@ Identify a target with a selector, preferring the most durable option available:
 <seeing_the_screen>
 There are three ways to see a screen, in order of cost. Start at the top and only descend when the one above genuinely fails.
 1. The element hierarchy in <screen>. Free, already provided, and the only source that gives durable selectors. This is almost always enough.
-2. takeScreenshot, then read the image. Use it when the hierarchy is empty or describes nothing useful — a canvas, a game, a custom-drawn interface.
-3. Asking about the picture. Slowest and costs the user money. Only when the first two have failed on this screen.
-Do not skip to a screenshot because the hierarchy looks unfamiliar. Read it first.
+2. OCR - runOcr to read every line of text with a tappable point, or findTextOnScreen to look for one string. On-device and free, but slower, and it reads pixels: it can misread characters, and it cannot see a control that has no text. Use it when the hierarchy is empty or does not describe what you can plainly see.
+3. takeScreenshot, then reasoning about the image. Slowest, and it costs the user money. Only when the first two have both failed on this screen.
+Do not skip to OCR or a screenshot because the hierarchy looks unfamiliar. Read it first. If OCR returns an approximate match, check the text it actually read before acting on it.
 </seeing_the_screen>
 
 <finishing>
@@ -216,8 +216,11 @@ const renderScreen = (observation: Observation, uiTreeTokens: number): string | 
     ? // Said explicitly rather than left blank. An empty block reads as a missing section and the model
       // guesses; naming the situation is what lets it decide to descend the perception chain instead of
       // acting blind on a screen it cannot see.
+      //
+      // Names the *next* rung specifically rather than saying "use a fallback", because a model told only that
+      // fallbacks exist picks whichever it saw mentioned last - which is how vision gets reached for first.
       'The element hierarchy is empty. This app does not describe its interface. ' +
-      'Consider takeScreenshot and reading the image.'
+      'Use runOcr or findTextOnScreen to read what is on screen.'
     : tree;
 
   return tagged('screen', joinSections(body, screenshotNote(observation)), {

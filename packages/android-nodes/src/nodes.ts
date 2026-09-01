@@ -10,6 +10,7 @@ import {
   MediaConfigSchema,
   NoArgumentConfigSchema,
   NotificationConfigSchema,
+  OcrConfigSchema,
   OpenAppConfigSchema,
   ReadScreenConfigSchema,
   SelectorConfigSchema,
@@ -249,6 +250,78 @@ export const takeScreenshotNode = defineNode({
   execute: async (context) =>
     invokeTool(context, 'takeScreenshot', 'takeScreenshot', {}, 'taking a screenshot'),
 });
+
+/**
+ * Reads a screen with OCR.
+ *
+ * The second rung of the perception chain as a workflow node (ADR 0013). Distinct from Read Screen because they
+ * answer different questions — the element hierarchy versus what text can be *seen* — and because a workflow that
+ * must run on a canvas-drawn app has no hierarchy to read at all.
+ *
+ * Dispatches to one of two tools depending on whether a search term was configured. That is not a shortcut: with
+ * text, the workflow is about to act on one thing and wants the best match; without it, the workflow is branching
+ * on screen content and wants everything. One node covering both keeps them from being two palette entries that
+ * users have to tell apart.
+ */
+export const ocrNode = defineNode({
+  type: 'ocr',
+  version: '1.0.0',
+  kind: 'action',
+  display: {
+    label: 'Read Text (OCR)',
+    description: 'Recognises text on screen, with a tappable point for each line',
+    icon: 'scan-text',
+    category: DEVICE_CATEGORY,
+  },
+  configSchema: OcrConfigSchema,
+  inputs: [{ handle: 'in', label: 'In' }],
+  outputs: [{ handle: 'next', label: 'Next' }],
+  requiresDevice: true,
+  execute: async (context) => {
+    const { text, exact, failIfMissing } = context.config;
+
+    if (text === undefined) {
+      return invokeTool(context, 'ocr', 'runOcr', {}, 'reading the text on screen');
+    }
+
+    try {
+      return await invokeTool(
+        context,
+        'ocr',
+        'findTextOnScreen',
+        { text, exact },
+        `looking for "${text}" on screen`,
+      );
+    } catch (error) {
+      // Absent text is a normal outcome, not necessarily a failure. `failIfMissing` decides which, and the
+      // rethrow is deliberate: swallowing every error would also swallow "screen capture was denied", which is
+      // not a missing-text situation and needs the user rather than the next node.
+      if (failIfMissing) throw error;
+
+      if (!isElementNotFound(error)) throw error;
+
+      return {
+        outputs: { result: null },
+        summary: `"${text}" was not on screen; continuing`,
+      };
+    }
+  },
+});
+
+/**
+ * Whether a node failure was "the element is not there" rather than something worse.
+ *
+ * Read from the bridge's own error code rather than from the message, because a message is copy and a code is a
+ * contract — matching on the words would break the moment the wording improved.
+ */
+const isElementNotFound = (error: unknown): boolean => {
+  const detail = (error as { detail?: { code?: unknown } } | null)?.detail;
+
+  return (
+    (error as { code?: unknown } | null)?.code === 'element_not_found' ||
+    detail?.code === 'element_not_found'
+  );
+};
 
 export const pressBackNode = defineNode({
   type: 'pressBack',

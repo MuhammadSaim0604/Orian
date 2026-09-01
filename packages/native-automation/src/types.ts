@@ -180,6 +180,60 @@ export const RINGER_MODES = ['normal', 'vibrate', 'silent'] as const;
 export type RingerMode = (typeof RINGER_MODES)[number];
 
 /**
+ * How a recognised string was matched.
+ *
+ * Mirrors Kotlin's `OcrMatchKind`. The rung matters to the caller, not just to the matcher: acting on a fuzzy
+ * match without checking the text is how an agent taps "Share" when it meant "Save".
+ */
+export const OCR_MATCH_KINDS = ['exact', 'caseInsensitive', 'contains', 'fuzzy'] as const;
+
+export type OcrMatchKind = (typeof OCR_MATCH_KINDS)[number];
+
+/** One recognised line of text, with a point that can be tapped. */
+export type OcrTextBlock = {
+  readonly text: string;
+  readonly bounds: Bounds;
+  readonly centerX: number;
+  readonly centerY: number;
+  /**
+   * Recogniser confidence, 0..1.
+   *
+   * Absent rather than 1 when the recogniser reports none, so a caller can tell "not measured" from "measured
+   * as certain".
+   */
+  readonly confidence?: number;
+  readonly language?: string;
+};
+
+/**
+ * Everything recognised on one screen.
+ *
+ * Carries the dimensions the boxes are expressed in, so a caller can tell whether they were scaled — which is
+ * the first thing to check when an OCR tap lands slightly wrong.
+ */
+export type OcrResult = {
+  readonly blocks: readonly OcrTextBlock[];
+  readonly blockCount: number;
+  readonly screenWidthPx: number;
+  readonly screenHeightPx: number;
+  readonly durationMs: number;
+};
+
+/** A matched piece of text and how solid the match was. */
+export type OcrMatch = {
+  readonly text: string;
+  readonly bounds: Bounds;
+  readonly centerX: number;
+  readonly centerY: number;
+  readonly matchKind: OcrMatchKind;
+  /** 0..1, where 1 is identical. */
+  readonly similarity: number;
+  /** True when the match was exact or differed only in case. */
+  readonly isStrong: boolean;
+  readonly confidence?: number;
+};
+
+/**
  * One text message.
  *
  * Only what a task needs: who, what, when, and which direction. No thread id, no read state, no

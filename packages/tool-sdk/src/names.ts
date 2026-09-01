@@ -15,6 +15,8 @@ export const TOOL_NAMES = [
   'waitForElement',
   'getUiTree',
   'takeScreenshot',
+  'runOcr',
+  'findTextOnScreen',
   'pressBack',
   'pressHome',
   'openApp',

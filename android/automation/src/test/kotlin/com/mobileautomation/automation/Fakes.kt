@@ -4,6 +4,10 @@ import com.mobileautomation.accessibility.model.UiTree
 import com.mobileautomation.accessibility.service.GlobalAction
 import com.mobileautomation.accessibility.service.NodeActionPerformer
 import com.mobileautomation.accessibility.service.ScreenReader
+import com.mobileautomation.ocr.OcrOutcome
+import com.mobileautomation.ocr.OcrResult
+import com.mobileautomation.ocr.OcrTextSearch
+import com.mobileautomation.ocr.ScreenTextSource
 import com.mobileautomation.screen.CaptureResult
 import com.mobileautomation.screen.ScreenCapture
 import com.mobileautomation.tools.AlarmTool
@@ -96,6 +100,42 @@ class FakeScreenCapture(
 
     override fun release() {
         released = true
+    }
+}
+
+/**
+ * OCR over a screen capture, scripted.
+ *
+ * Implements `ScreenTextSource` rather than wrapping a real `ScreenTextReader`, because the JVM test environment
+ * stubs `BitmapFactory` — a real reader would always take the "the screenshot could not be read" path and the
+ * success cases would be untestable.
+ */
+class FakeScreenTextSource(
+    var outcome: OcrOutcome = OcrOutcome.Success(OcrResult.empty(1080, 2400)),
+    var search: OcrTextSearch = OcrTextSearch.NotFound(blocksSearched = 0, reason = "nothing recognised"),
+    override var isAvailable: Boolean = true,
+) : ScreenTextSource {
+    var readCalls: Int = 0
+        private set
+
+    var lastQuery: String? = null
+        private set
+
+    var lastExact: Boolean? = null
+        private set
+
+    override suspend fun read(): OcrOutcome {
+        readCalls++
+        return outcome
+    }
+
+    override suspend fun findText(
+        query: String,
+        exact: Boolean,
+    ): OcrTextSearch {
+        lastQuery = query
+        lastExact = exact
+        return search
     }
 }
 

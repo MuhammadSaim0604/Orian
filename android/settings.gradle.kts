@@ -38,3 +38,10 @@ include(":storage")
 // Android builds the assistant picker from installed voice-interaction services,
 // so without these the app can never be chosen no matter how it asks.
 include(":assistant")
+
+// Step 5: on-device text recognition, the second rung of the perception chain
+// (ADR 0013, ADR 0017). Depends on :screen for the bitmap and deliberately not on
+// :accessibility - OCR is an independent way of seeing, and coupling the two would
+// make the fallback circular: the screens that need OCR are exactly the ones whose
+// accessibility tree is empty.
+include(":ocr")

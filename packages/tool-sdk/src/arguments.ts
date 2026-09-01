@@ -182,6 +182,21 @@ export const TOOL_ARGUMENT_SCHEMAS = {
 
   takeScreenshot: z.object({}).strict(),
 
+  runOcr: z.object({}).strict(),
+
+  findTextOnScreen: z
+    .object({
+      text: z.string().min(1),
+      /**
+       * Refuses a fuzzy match.
+       *
+       * Off by default, because OCR misreads characters and a strict comparison fails on text a person reads
+       * without noticing. On for a caller that would rather fail than tap a guess.
+       */
+      exact: z.boolean().optional(),
+    })
+    .strict(),
+
   getCurrentScreen: z.object({}).strict(),
 
   // --- apps -------------------------------------------------------------

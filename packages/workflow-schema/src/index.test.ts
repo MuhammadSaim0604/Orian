@@ -36,9 +36,17 @@ describe('selector strategies', () => {
       'text',
       'structural',
       'relativePosition',
+      'ocrText',
       'coordinates',
       'vision',
     ]);
+  });
+
+  it('ranks OCR above coordinates and below relative position', () => {
+    // The whole reason ocrText was inserted rather than appended (ADR 0013): a text match survives the layout
+    // shifting and can be checked, while a coordinate cannot fail - it lands somewhere and reports success.
+    expect(strategyRank('ocrText')).toBeGreaterThan(strategyRank('relativePosition'));
+    expect(strategyRank('ocrText')).toBeLessThan(strategyRank('coordinates'));
   });
 
   it('accepts a known strategy', () => {
@@ -54,6 +62,13 @@ describe('selector strategies', () => {
     expect(isFragileStrategy('vision')).toBe(true);
     expect(isFragileStrategy('resourceId')).toBe(false);
     expect(isFragileStrategy('text')).toBe(false);
+  });
+
+  it('does not call an OCR match fragile', () => {
+    // Weakness and fragility are different properties. An OCR match is weaker than a resourceId - the rank says
+    // so - but it is anchored to a string a person can read, so it survives a control moving. Flagging it would
+    // have the review UI warn about every step on a screen where OCR was the only option.
+    expect(isFragileStrategy('ocrText')).toBe(false);
   });
 });
 

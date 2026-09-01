@@ -11,6 +11,11 @@ import com.mobileautomation.automation.CallOutcome
 import com.mobileautomation.automation.ResolvedElement
 import com.mobileautomation.automation.ToolResult
 import com.mobileautomation.gestures.SwipeDirection
+import com.mobileautomation.ocr.OcrBounds
+import com.mobileautomation.ocr.OcrMatch
+import com.mobileautomation.ocr.OcrMatchKind
+import com.mobileautomation.ocr.OcrResult
+import com.mobileautomation.ocr.OcrTextBlock
 import com.mobileautomation.screen.Screenshot
 import com.mobileautomation.tools.IntentRequest
 import com.mobileautomation.tools.MediaCommand
@@ -182,6 +187,32 @@ class AutomationBridgeTest {
         override suspend fun adjustVolume(direction: VolumeDirection): ToolResult<Unit> {
             lastVolumeDirection = direction
             return unitResult
+        }
+
+        // --- reading a screen the tree does not describe -------------------
+
+        var ocrResult: ToolResult<OcrResult> =
+            ToolResult.success(OcrResult(blocks = emptyList(), screenWidthPx = 1080, screenHeightPx = 2400))
+
+        var ocrMatch: ToolResult<OcrMatch> =
+            ToolResult.success(
+                OcrMatch(
+                    block = OcrTextBlock(text = "Continue", bounds = OcrBounds(400, 1200, 700, 1300)),
+                    kind = OcrMatchKind.EXACT,
+                    similarity = 1.0,
+                ),
+            )
+
+        var lastOcrQuery: Pair<String, Boolean>? = null
+
+        override suspend fun runOcr(): ToolResult<OcrResult> = ocrResult
+
+        override suspend fun findTextOnScreen(
+            query: String,
+            exact: Boolean,
+        ): ToolResult<OcrMatch> {
+            lastOcrQuery = query to exact
+            return ocrMatch
         }
 
         // --- messaging and calls ------------------------------------------
@@ -368,6 +399,142 @@ class AutomationBridgeTest {
             assertTrue(json.contains("\"widthPx\":1080"))
             // Bytes crossing the bridge would block the JS thread.
             assertFalseContains(json, "base64")
+        }
+
+    // --- ocr --------------------------------------------------------------
+
+    @Test
+    fun `serializes ocr results with a tappable point per line`() =
+        runTest {
+            val runtime = FakeRuntime()
+            runtime.ocrResult =
+                ToolResult.success(
+                    OcrResult(
+                        blocks =
+                            listOf(
+                                OcrTextBlock(
+                                    text = "Continue",
+                                    bounds = OcrBounds(400, 1200, 700, 1300),
+                                    confidence = 0.94,
+                                ),
+                            ),
+                        screenWidthPx = 1080,
+                        screenHeightPx = 2400,
+                        durationMs = 180L,
+                    ),
+                )
+
+            val json = successJson(bridge(runtime).runOcr())!!
+
+            assertTrue(json.contains("\"text\":\"Continue\""))
+            assertTrue(json.contains("\"blockCount\":1"))
+            // The centre crosses the bridge rather than being recomputed on the TS side: two implementations of a
+            // centre point is exactly how a tap ends up one row off.
+            assertTrue(json.contains("\"centerX\":550"))
+            assertTrue(json.contains("\"centerY\":1250"))
+            assertTrue(json.contains("\"screenWidthPx\":1080"))
+        }
+
+    @Test
+    fun `omits confidence when the recogniser reported none`() =
+        runTest {
+            // Absent rather than defaulted, so the TS side can tell "not measured" from "measured as certain".
+            val runtime = FakeRuntime()
+            runtime.ocrResult =
+                ToolResult.success(
+                    OcrResult(
+                        blocks = listOf(OcrTextBlock(text = "Continue", bounds = OcrBounds(0, 0, 100, 40))),
+                        screenWidthPx = 1080,
+                        screenHeightPx = 2400,
+                    ),
+                )
+
+            val json = successJson(bridge(runtime).runOcr())!!
+
+            assertFalseContains(json, "confidence")
+        }
+
+    @Test
+    fun `serializes an empty ocr result as an empty array rather than null`() =
+        runTest {
+            // A screen with no text is a successful read. `null` would make the TS side treat it as a failure.
+            val json = successJson(bridge().runOcr())!!
+
+            assertTrue(json.contains("\"blocks\":[]"))
+            assertTrue(json.contains("\"blockCount\":0"))
+        }
+
+    @Test
+    fun `serializes an ocr match with its rung and similarity`() =
+        runTest {
+            val runtime = FakeRuntime()
+            runtime.ocrMatch =
+                ToolResult.success(
+                    OcrMatch(
+                        block = OcrTextBlock(text = "Contlnue", bounds = OcrBounds(400, 1200, 700, 1300)),
+                        kind = OcrMatchKind.FUZZY,
+                        similarity = 0.875,
+                    ),
+                )
+
+            val json = successJson(bridge(runtime).findTextOnScreen("Continue", exact = false))!!
+
+            // Both fields matter to the agent: acting on a fuzzy match without checking the text is how it taps
+            // "Share" when it meant "Save".
+            assertTrue(json.contains("\"matchKind\":\"fuzzy\""))
+            assertTrue(json.contains("\"text\":\"Contlnue\""))
+            assertTrue(json.contains("\"isStrong\":false"))
+            assertTrue(json.contains("\"similarity\":0.875"))
+        }
+
+    @Test
+    fun `a fractional value crosses as a plain json number`() =
+        runTest {
+            // Deliberately not locale-formatted: a German device would emit 0,875 and produce JSON the TS side
+            // cannot parse - a bug that only appears for some users.
+            val runtime = FakeRuntime()
+            runtime.ocrMatch =
+                ToolResult.success(
+                    OcrMatch(
+                        block = OcrTextBlock(text = "Continue", bounds = OcrBounds(0, 0, 100, 40)),
+                        kind = OcrMatchKind.EXACT,
+                        similarity = 1.0,
+                    ),
+                )
+
+            val json = successJson(bridge(runtime).findTextOnScreen("Continue", exact = true))!!
+
+            assertFalseContains(json, ",0")
+            assertTrue(json.contains("\"similarity\":1.0"))
+        }
+
+    @Test
+    fun `passes the query and the exact flag through to the runtime`() =
+        runTest {
+            val runtime = FakeRuntime()
+
+            bridge(runtime).findTextOnScreen("Continue", exact = true)
+
+            assertEquals("Continue" to true, runtime.lastOcrQuery)
+        }
+
+    @Test
+    fun `reports absent text as element not found rather than a tool failure`() =
+        runTest {
+            // The distinction that tells the agent to scroll rather than to stop.
+            val runtime = FakeRuntime()
+            runtime.ocrMatch =
+                ToolResult.failure(
+                    AutomationError.ElementNotFound(
+                        attemptedStrategies = listOf("ocrText"),
+                        detail = "\"Continue\" was not among the 12 lines recognised",
+                    ),
+                )
+
+            assertEquals(
+                "element_not_found",
+                rejection(bridge(runtime).findTextOnScreen("Continue", exact = false)).code,
+            )
         }
 
     @Test

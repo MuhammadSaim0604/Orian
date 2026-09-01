@@ -91,6 +91,48 @@ export const ReadScreenConfigSchema = z.object({
 
 export type ReadScreenConfig = z.infer<typeof ReadScreenConfigSchema>;
 
+/**
+ * Reading a screen with OCR.
+ *
+ * Its own config rather than a flag on `ReadScreenConfigSchema`, because the two answer different questions. Read
+ * Screen asks "what is the element hierarchy"; this asks "what text can be seen, and where". A node that did both
+ * behind a boolean would have one output shape meaning two different things.
+ *
+ * The interesting fields are the ones that decide what happens when the text is **not** found, since that is the
+ * normal case on a screen that has changed — a workflow that always failed there would be unusable, and one that
+ * always continued would silently do nothing.
+ */
+export const OcrConfigSchema = z.object({
+  /**
+   * Text to look for. Omit to read the whole screen.
+   *
+   * When absent the node returns every recognised line, which is what a workflow branching on screen content
+   * wants. When present it returns the single best match, which is what a workflow about to tap something wants.
+   */
+  text: z.string().min(1).optional(),
+
+  /**
+   * Refuse a fuzzy match.
+   *
+   * Off by default, because OCR reads `l` as `1` and `O` as `0`, so an exact comparison fails on text a person
+   * reads without noticing. On for a workflow that would rather fail than act on an approximate match.
+   */
+  exact: z.boolean().default(false),
+
+  /**
+   * Whether absent text fails the node or lets the workflow continue.
+   *
+   * Defaults to failing, which is the safer half of an asymmetric choice: a workflow that continues past a
+   * missing "Payment successful" goes on to do the next thing having never confirmed the first. Continuing is
+   * available for the case where absence is the expected outcome — checking whether an error banner appeared.
+   */
+  failIfMissing: z.boolean().default(true),
+
+  ...withAssignTo,
+});
+
+export type OcrConfig = z.infer<typeof OcrConfigSchema>;
+
 /** A node that needs no arguments at all, such as pressBack. */
 export const NoArgumentConfigSchema = z.object({ ...withAssignTo });
 

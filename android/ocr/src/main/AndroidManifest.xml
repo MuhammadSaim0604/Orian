@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      No permissions, and that is the point worth stating.
+
+      Recognition runs entirely on the device against a model bundled in the APK (ADR 0017), so
+      this module needs no INTERNET permission and must never acquire one. If a future change adds
+      a network permission here, that is the signal the on-device decision has been reversed by
+      accident - screen content would be leaving the phone for something the user never configured.
+
+      Screen capture consent is not requested here either: the bitmap arrives from :screen, which
+      already holds the MediaProjection session. OCR is a reader, not a capturer.
+    -->
+
+</manifest>

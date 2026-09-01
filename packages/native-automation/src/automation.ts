@@ -12,6 +12,8 @@ import {
   type InstalledApp,
   type IntentRequest,
   type MediaCommand,
+  type OcrMatch,
+  type OcrResult,
   type ResolvedElement,
   type RingerMode,
   type Screenshot,
@@ -208,6 +210,26 @@ export const pressHome = async (): Promise<void> => call(() => requireModule().p
 /** Captures a screenshot. The result carries a file path, not bytes. */
 export const takeScreenshot = async (): Promise<Screenshot> =>
   callParsing('a screenshot', () => requireModule().takeScreenshot());
+
+/**
+ * Recognises the text on screen.
+ *
+ * The second rung of the perception chain (ADR 0013): reach for it when `getUiTree` describes nothing useful,
+ * not before. It is slower than a tree read and its boxes are not durable selectors — a workflow built from OCR
+ * is weaker than one built from a resourceId, which is why `ocrText` sits low in the selector chain.
+ */
+export const runOcr = async (): Promise<OcrResult> =>
+  callParsing('OCR results', () => requireModule().runOcr());
+
+/**
+ * Finds text on screen and returns a tappable point.
+ *
+ * **Check `matchKind` before acting.** Matching tolerates the character substitutions OCR makes — `1` for `l`,
+ * `0` for `O` — so a `fuzzy` match means the recogniser read something close to what was asked for, not the
+ * same thing. Pass `exact` when you would rather fail than tap a guess.
+ */
+export const findTextOnScreen = async (text: string, exact = false): Promise<OcrMatch> =>
+  callParsing('an OCR match', () => requireModule().findTextOnScreen(text, exact));
 
 /**
  * Asks the user to allow screen capture for this session.
@@ -429,6 +451,8 @@ export const automation = {
   pressBack,
   pressHome,
   takeScreenshot,
+  runOcr,
+  findTextOnScreen,
   requestScreenCaptureConsent,
   releaseScreenCapture,
   openApp,

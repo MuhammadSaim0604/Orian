@@ -14,6 +14,7 @@ import {
   longPressNode,
   mediaNode,
   notificationNode,
+  ocrNode,
   openAppNode,
   pressBackNode,
   readScreenNode,
@@ -203,6 +204,115 @@ describe('readScreen', () => {
     );
 
     expect(call?.args.compact).toBe(false);
+  });
+});
+
+/**
+ * The OCR node.
+ *
+ * One node, two tools, and the config decides which — so most of what is worth testing is the dispatch and the
+ * behaviour when the text is absent, which is the normal case on a screen that has changed.
+ */
+describe('ocr', () => {
+  const match = { text: 'Continue', centerX: 550, centerY: 1250, matchKind: 'exact' };
+
+  it('reads the whole screen when no text is configured', async () => {
+    // Without a search term the workflow is branching on screen content and wants everything.
+    const { call } = await run(ocrNode, {}, { runOcr: () => ({ blockCount: 3 }) });
+
+    expect(call?.tool).toBe('runOcr');
+  });
+
+  it('looks for one string when text is configured', async () => {
+    // With a search term the workflow is about to act on one thing and wants the best match.
+    const { call } = await run(ocrNode, { text: 'Continue' }, { findTextOnScreen: () => match });
+
+    expect(call?.tool).toBe('findTextOnScreen');
+    expect(call?.args.text).toBe('Continue');
+  });
+
+  it('allows a fuzzy match by default', async () => {
+    // OCR reads `l` as `1` and `O` as `0`, so an exact comparison fails on text a person reads without noticing.
+    const { call } = await run(ocrNode, { text: 'Continue' }, { findTextOnScreen: () => match });
+
+    expect(call?.args.exact).toBe(false);
+  });
+
+  it('can demand an exact match', async () => {
+    const { call } = await run(
+      ocrNode,
+      { text: 'Continue', exact: true },
+      { findTextOnScreen: () => match },
+    );
+
+    expect(call?.args.exact).toBe(true);
+  });
+
+  it('fails when the text is missing, by default', async () => {
+    // The safer half of an asymmetric choice: a workflow that continues past a missing "Payment successful" goes
+    // on to do the next thing having never confirmed the first.
+    const notFound = Object.assign(new Error('Element not found'), { code: 'element_not_found' });
+
+    await expect(
+      run(
+        ocrNode,
+        { text: 'Continue' },
+        {
+          findTextOnScreen: () => {
+            throw notFound;
+          },
+        },
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('can continue past missing text when told to', async () => {
+    // For the case where absence is the expected outcome - checking whether an error banner appeared.
+    const notFound = Object.assign(new Error('Element not found'), { code: 'element_not_found' });
+
+    const { result } = await run(
+      ocrNode,
+      { text: 'Continue', failIfMissing: false },
+      {
+        findTextOnScreen: () => {
+          throw notFound;
+        },
+      },
+    );
+
+    expect(result.outputs?.result).toBeNull();
+    expect(result.summary).toContain('not on screen');
+  });
+
+  it('still fails on a denied screen capture, even when told to continue', async () => {
+    // The distinction the code checks by error *code* rather than message. Swallowing everything would swallow
+    // "screen capture was denied", which is not a missing-text situation and needs the user rather than the next
+    // node.
+    const denied = Object.assign(new Error('needs permission'), {
+      code: 'capture_consent_required',
+    });
+
+    await expect(
+      run(
+        ocrNode,
+        { text: 'Continue', failIfMissing: false },
+        {
+          findTextOnScreen: () => {
+            throw denied;
+          },
+        },
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('assigns the match to a variable when asked', async () => {
+    const { variables } = await run(
+      ocrNode,
+      { text: 'Continue', assignTo: 'button' },
+      { findTextOnScreen: () => match },
+    );
+
+    expect(variables.get('button')).toEqual(match);
   });
 });
 

@@ -19,6 +19,8 @@ enum class DeviceTool(val toolName: String) {
     WAIT_FOR_ELEMENT("waitForElement"),
     GET_UI_TREE("getUiTree"),
     TAKE_SCREENSHOT("takeScreenshot"),
+    RUN_OCR("runOcr"),
+    FIND_TEXT_ON_SCREEN("findTextOnScreen"),
     PRESS_BACK("pressBack"),
     PRESS_HOME("pressHome"),
     OPEN_APP("openApp"),

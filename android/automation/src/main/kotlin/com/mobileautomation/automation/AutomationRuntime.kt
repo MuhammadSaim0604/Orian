@@ -4,6 +4,8 @@ import com.mobileautomation.accessibility.model.UiTree
 import com.mobileautomation.accessibility.selector.Selector
 import com.mobileautomation.accessibility.selector.SelectorStrategy
 import com.mobileautomation.gestures.SwipeDirection
+import com.mobileautomation.ocr.OcrMatch
+import com.mobileautomation.ocr.OcrResult
 import com.mobileautomation.screen.Screenshot
 import com.mobileautomation.tools.IntentRequest
 import com.mobileautomation.tools.MediaCommand
@@ -152,6 +154,31 @@ interface AutomationRuntime {
 
     /** Nudges the music volume one step. */
     suspend fun adjustVolume(direction: VolumeDirection): ToolResult<Unit>
+
+    // --- reading a screen the tree does not describe -----------------------
+
+    /**
+     * Recognises the text on screen, with a bounding box for each line.
+     *
+     * The second rung of the perception chain (ADR 0013). Slower than [getUiTree] and its results carry no
+     * durable selectors, so it is a fallback rather than an alternative - some apps expose almost nothing
+     * through accessibility, and on those screens this is the difference between working and being blind.
+     */
+    suspend fun runOcr(): ToolResult<OcrResult>
+
+    /**
+     * Finds [query] on screen and returns a tappable point.
+     *
+     * The convenience a caller actually wants: one string in, a point out. Separate from [runOcr] because a
+     * caller looking for a button should not have to do the matching itself, and because matching in one place
+     * means the fuzzy rules are identical for the agent, the workflow node, and the selector resolver.
+     *
+     * @param exact refuses a fuzzy match, for a caller that would rather fail than tap a guess.
+     */
+    suspend fun findTextOnScreen(
+        query: String,
+        exact: Boolean = false,
+    ): ToolResult<OcrMatch>
 
     // --- messaging and calls ----------------------------------------------
 

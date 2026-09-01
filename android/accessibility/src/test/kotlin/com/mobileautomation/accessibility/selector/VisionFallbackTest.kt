@@ -11,7 +11,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Tests for the seventh selector strategy.
+ * Tests for the last selector strategy.
  *
  * Vision exists for screens that expose no useful accessibility tree - canvas
  * UIs, games, some WebViews. The behaviour that matters is ordering and honesty:
@@ -74,7 +74,7 @@ class VisionFallbackTest {
         val resolver = SelectorResolver(visionMatcher = matcher)
 
         runTest {
-            val result = resolver.resolveWithVision(tree, Selector.byResourceId("send_button"))
+            val result = resolver.resolveWithFallbacks(tree, Selector.byResourceId("send_button"))
 
             assertEquals(SelectorStrategy.RESOURCE_ID, (result as ResolutionResult.Match).strategy)
             assertEquals("vision must not be paid for when the tree answers", 0, matcher.locateCalls)
@@ -90,7 +90,7 @@ class VisionFallbackTest {
         val resolver = SelectorResolver(visionMatcher = matcher)
 
         runTest {
-            val result = resolver.resolveWithVision(opaqueTree, Selector.byText("Start"))
+            val result = resolver.resolveWithFallbacks(opaqueTree, Selector.byText("Start"))
 
             val match = result as ResolutionResult.Match
             assertEquals(SelectorStrategy.VISION, match.strategy)
@@ -107,7 +107,7 @@ class VisionFallbackTest {
             )
 
         runTest {
-            val match = resolver.resolveWithVision(opaqueTree, Selector.byText("Start"))
+            val match = resolver.resolveWithFallbacks(opaqueTree, Selector.byText("Start"))
 
             assertTrue((match as ResolutionResult.Match).isFragile)
         }
@@ -122,7 +122,7 @@ class VisionFallbackTest {
 
         runTest {
             val match =
-                resolver.resolveWithVision(opaqueTree, Selector.byText("Start"))
+                resolver.resolveWithFallbacks(opaqueTree, Selector.byText("Start"))
                     as ResolutionResult.Match
 
             assertEquals(0.42, match.visionMatch!!.confidence, 0.001)
@@ -138,7 +138,7 @@ class VisionFallbackTest {
 
         runTest {
             val notFound =
-                resolver.resolveWithVision(opaqueTree, Selector.byText("Start"))
+                resolver.resolveWithFallbacks(opaqueTree, Selector.byText("Start"))
                     as ResolutionResult.NotFound
 
             assertTrue(notFound.reason.contains("vision was not attempted"))
@@ -153,7 +153,7 @@ class VisionFallbackTest {
 
         runTest {
             val notFound =
-                resolver.resolveWithVision(opaqueTree, Selector.byText("Start"))
+                resolver.resolveWithFallbacks(opaqueTree, Selector.byText("Start"))
                     as ResolutionResult.NotFound
 
             assertTrue(notFound.attempted.contains(SelectorStrategy.VISION))
@@ -168,7 +168,7 @@ class VisionFallbackTest {
         val resolver = SelectorResolver(visionMatcher = matcher)
 
         runTest {
-            val result = resolver.resolveWithVision(tree, Selector())
+            val result = resolver.resolveWithFallbacks(tree, Selector())
 
             assertFalse(result.isMatch)
             assertEquals("nothing was described, so there is nothing to look for", 0, matcher.locateCalls)
@@ -183,7 +183,7 @@ class VisionFallbackTest {
         runTest {
             val selector = Selector(text = "Send", packageName = "com.telegram")
 
-            resolver.resolveWithVision(tree, selector)
+            resolver.resolveWithFallbacks(tree, selector)
 
             assertEquals("we should not be looking at this screen at all", 0, matcher.locateCalls)
         }
@@ -195,7 +195,7 @@ class VisionFallbackTest {
 
         runTest {
             val notFound =
-                resolver.resolveWithVision(opaqueTree, Selector.byText("Start"))
+                resolver.resolveWithFallbacks(opaqueTree, Selector.byText("Start"))
                     as ResolutionResult.NotFound
 
             assertTrue(notFound.reason.contains("vision was not attempted"))
@@ -208,7 +208,7 @@ class VisionFallbackTest {
 
         runTest {
             val match =
-                resolver.resolveWithVision(tree, Selector.byResourceId("send_button"))
+                resolver.resolveWithFallbacks(tree, Selector.byResourceId("send_button"))
                     as ResolutionResult.Match
 
             assertNull(match.visionMatch)

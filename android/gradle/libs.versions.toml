@@ -9,6 +9,7 @@ coroutines = "1.9.0"
 room = "2.6.1"
 junit = "4.13.2"
 mockk = "1.13.13"
+mlkitTextRecognition = "16.0.1"
 androidxTestJunit = "1.2.1"
 androidxTestRunner = "1.6.2"
 androidxTestCore = "1.6.1"
@@ -24,6 +25,10 @@ room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
 room-ktx = { module = "androidx.room:room-ktx", version.ref = "room" }
 room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
 room-testing = { module = "androidx.room:room-testing", version.ref = "room" }
+# The bundled model, not the play-services variant (ADR 0017). Bigger APK, but the capability
+# either exists on a device or the device cannot run the app - no third state where OCR is
+# missing because a download never happened.
+mlkit-text-recognition = { module = "com.google.mlkit:text-recognition", version.ref = "mlkitTextRecognition" }
 junit = { module = "junit:junit", version.ref = "junit" }
 mockk = { module = "io.mockk:mockk", version.ref = "mockk" }
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }

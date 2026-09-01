@@ -154,6 +154,29 @@ export const TOOL_DEFINITIONS: { readonly [K in ToolName]: ToolDefinition<K> } =
     true,
   ),
 
+  runOcr: define(
+    'runOcr',
+    'Read the text on screen by recognising it in an image, with a box and a tappable ' +
+      'point for each line. Use this only when getUiTree does not describe the screen ' +
+      '- a game, a canvas, or an app that draws its own interface. It is slower than ' +
+      'reading the hierarchy and its results cannot be reused as durable selectors, ' +
+      'so it is a fallback rather than an alternative.',
+    'Each recognised line with its text, bounding box, and centre point.',
+    'read',
+    true,
+  ),
+
+  findTextOnScreen: define(
+    'findTextOnScreen',
+    'Find a specific piece of text on screen and get a point you can tap. Use this ' +
+      'when you know what a control says but getUiTree does not list it. Matching ' +
+      'tolerates small misreadings, since recognising text from an image is not exact ' +
+      '- check the returned text is what you expected before acting on it.',
+    'The matched text, its box, a centre point, and whether the match was exact or approximate.',
+    'read',
+    true,
+  ),
+
   getCurrentScreen: define(
     'getCurrentScreen',
     'Find out which app and screen is in the foreground. Use this to confirm an app ' +

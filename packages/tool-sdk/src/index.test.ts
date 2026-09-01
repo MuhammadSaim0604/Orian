@@ -25,6 +25,15 @@ describe('tool-sdk', () => {
     expect(TOOL_NAMES).toContain('adjustVolume');
   });
 
+  it('declares the OCR tools next to the screenshot tool', () => {
+    // Adjacency is deliberate: all three are ways of seeing a screen the accessibility tree does not
+    // describe, and the model reads this list in order (ADR 0013).
+    const screenshot = TOOL_NAMES.indexOf('takeScreenshot');
+
+    expect(TOOL_NAMES[screenshot + 1]).toBe('runOcr');
+    expect(TOOL_NAMES[screenshot + 2]).toBe('findTextOnScreen');
+  });
+
   it('matches the Kotlin DeviceTool vocabulary', () => {
     // Mirrors DeviceTool in android/automation, where a parity test restates this
     // list. Both sides must change together or the AI can name a tool it cannot
@@ -38,6 +47,8 @@ describe('tool-sdk', () => {
       'waitForElement',
       'getUiTree',
       'takeScreenshot',
+      'runOcr',
+      'findTextOnScreen',
       'pressBack',
       'pressHome',
       'openApp',

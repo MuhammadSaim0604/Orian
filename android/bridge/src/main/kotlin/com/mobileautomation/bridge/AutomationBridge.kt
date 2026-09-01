@@ -128,6 +128,15 @@ class AutomationBridge(
 
     suspend fun takeScreenshot(): Outcome = runtime.takeScreenshot().toOutcome { BridgeResults.screenshotToJson(it) }
 
+    // --- reading a screen the tree does not describe -----------------------
+
+    suspend fun runOcr(): Outcome = runtime.runOcr().toOutcome { BridgeResults.ocrResultToJson(it) }
+
+    suspend fun findTextOnScreen(
+        text: String,
+        exact: Boolean,
+    ): Outcome = runtime.findTextOnScreen(text, exact).toOutcome { BridgeResults.ocrMatchToJson(it) }
+
     // --- apps -------------------------------------------------------------
 
     suspend fun openApp(packageName: String): Outcome = runtime.openApp(packageName).toUnitOutcome()

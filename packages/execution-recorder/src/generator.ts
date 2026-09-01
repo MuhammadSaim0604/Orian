@@ -89,6 +89,10 @@ export const TOOL_TO_NODE: Readonly<Record<string, string>> = {
   getSystemSetting: 'systemSetting',
   getUiTree: 'readScreen',
   takeScreenshot: 'takeScreenshot',
+  // Both OCR tools compile to the one node, which owns the with-text / without-text distinction in its config.
+  // A trace that used findTextOnScreen becomes an `ocr` node with `text` set.
+  runOcr: 'ocr',
+  findTextOnScreen: 'ocr',
   getCurrentScreen: 'currentScreen',
   findElement: 'findElement',
 };

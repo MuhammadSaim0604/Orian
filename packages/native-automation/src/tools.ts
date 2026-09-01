@@ -9,6 +9,7 @@ import {
   endCall,
   findContacts,
   findElement,
+  findTextOnScreen,
   getContacts,
   getCurrentScreen,
   getSystemSetting,
@@ -23,6 +24,7 @@ import {
   pressHome,
   readClipboard,
   readSms,
+  runOcr,
   sendNotification,
   sendSms,
   setRingerMode,
@@ -100,6 +102,12 @@ export const invokeTool = async (tool: string, args: ToolArguments): Promise<unk
 
     case 'takeScreenshot':
       return takeScreenshot();
+
+    case 'runOcr':
+      return runOcr();
+
+    case 'findTextOnScreen':
+      return findTextOnScreen(args.text as string, args.exact as boolean | undefined);
 
     case 'getCurrentScreen':
       return getCurrentScreen();

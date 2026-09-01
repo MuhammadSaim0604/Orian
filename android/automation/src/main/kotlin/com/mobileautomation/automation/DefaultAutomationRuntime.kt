@@ -5,6 +5,7 @@ import com.mobileautomation.accessibility.model.UiTree
 import com.mobileautomation.accessibility.selector.ResolutionResult
 import com.mobileautomation.accessibility.selector.Selector
 import com.mobileautomation.accessibility.selector.SelectorResolver
+import com.mobileautomation.accessibility.selector.SelectorStrategy
 import com.mobileautomation.accessibility.selector.StructuralPath
 import com.mobileautomation.accessibility.service.GlobalAction
 import com.mobileautomation.accessibility.service.NodeActionPerformer
@@ -13,6 +14,11 @@ import com.mobileautomation.gestures.GestureEngine
 import com.mobileautomation.gestures.GestureOutcome
 import com.mobileautomation.gestures.Rect
 import com.mobileautomation.gestures.SwipeDirection
+import com.mobileautomation.ocr.OcrMatch
+import com.mobileautomation.ocr.OcrOutcome
+import com.mobileautomation.ocr.OcrResult
+import com.mobileautomation.ocr.OcrTextSearch
+import com.mobileautomation.ocr.ScreenTextSource
 import com.mobileautomation.screen.CaptureResult
 import com.mobileautomation.screen.ScreenCapture
 import com.mobileautomation.screen.Screenshot
@@ -68,6 +74,14 @@ class DefaultAutomationRuntime(
     private val phoneTool: PhoneTool,
     private val systemSettingsWriter: SystemSettingsWriter,
     private val ringerTool: RingerTool,
+    /**
+     * Reads the screen with OCR, or null when the build has no recogniser.
+     *
+     * Nullable rather than a no-op implementation, because "OCR is not available" and "OCR found nothing" need
+     * different answers: the first tells the agent to descend to vision, the second tells it the text is not
+     * there. An always-empty reader would collapse them.
+     */
+    private val screenTextReader: ScreenTextSource? = null,
     private val globalActionPerformer: (GlobalAction) -> Boolean,
     private val selectorResolver: SelectorResolver = SelectorResolver(),
 ) : AutomationRuntime {
@@ -455,8 +469,84 @@ class DefaultAutomationRuntime(
             )
         }
 
-    // --- messaging and calls ----------------------------------------------
+    // --- reading a screen the tree does not describe -----------------------
 
+    /**
+     * Recognises the text on screen.
+     *
+     * Failures are mapped to distinct errors rather than one "OCR failed", because they lead to different next
+     * moves: a missing capture consent is the user's to fix, a secure window is nobody's, and a recogniser
+     * error is a retry. Collapsing them would have the agent ask for a permission it already has.
+     */
+    override suspend fun runOcr(): ToolResult<OcrResult> {
+        val reader =
+            screenTextReader
+                ?: return ToolResult.failure(
+                    AutomationError.ToolFailed("runOcr", "text recognition is not available in this build"),
+                )
+
+        return when (val outcome = reader.read()) {
+            is OcrOutcome.Success -> ToolResult.success(outcome.result)
+
+            is OcrOutcome.CaptureFailed -> ToolResult.failure(captureError("runOcr", outcome.reason))
+
+            is OcrOutcome.RecognitionFailed ->
+                ToolResult.failure(AutomationError.ToolFailed("runOcr", outcome.reason))
+        }
+    }
+
+    override suspend fun findTextOnScreen(
+        query: String,
+        exact: Boolean,
+    ): ToolResult<OcrMatch> {
+        if (query.isBlank()) {
+            return ToolResult.failure(AutomationError.InvalidArgument("the text to find cannot be blank"))
+        }
+
+        val reader =
+            screenTextReader
+                ?: return ToolResult.failure(
+                    AutomationError.ToolFailed(
+                        "findTextOnScreen",
+                        "text recognition is not available in this build",
+                    ),
+                )
+
+        return when (val search = reader.findText(query, exact)) {
+            is OcrTextSearch.Found -> ToolResult.success(search.match)
+
+            // ElementNotFound rather than ToolFailed: the tool worked, the text is not on this screen. That
+            // distinction is what tells the agent to scroll or look elsewhere rather than to stop.
+            is OcrTextSearch.NotFound ->
+                ToolResult.failure(
+                    AutomationError.ElementNotFound(
+                        attemptedStrategies = listOf(SelectorStrategy.OCR_TEXT.wireName),
+                        detail = search.reason,
+                    ),
+                )
+
+            is OcrTextSearch.Failed ->
+                ToolResult.failure(captureError("findTextOnScreen", search.reason))
+        }
+    }
+
+    /**
+     * Maps an OCR capture failure onto the error the caller needs.
+     *
+     * Consent and a secure window already have typed errors from the screenshot path, and reusing them means a
+     * caller handling "you need to grant screen recording" handles it once rather than once per tool.
+     */
+    private fun captureError(
+        tool: String,
+        reason: String,
+    ): AutomationError =
+        when {
+            reason.contains("permission", ignoreCase = true) -> AutomationError.CaptureConsentRequired
+            reason.contains("blocks screen capture", ignoreCase = true) -> AutomationError.SecureScreen
+            else -> AutomationError.ToolFailed(tool, reason)
+        }
+
+    // --- messaging and calls ----------------------------------------------
     override suspend fun sendSms(
         phoneNumber: String,
         body: String,

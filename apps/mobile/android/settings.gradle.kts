@@ -53,6 +53,7 @@ val nativeModules =
         "assistant",
         "gestures",
         "screen",
+        "ocr",
         "overlays",
         "tools",
         "automation",

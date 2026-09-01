@@ -42,6 +42,12 @@ export const TOOL_CAPABILITY: Readonly<Record<ToolName, CapabilityId | null>> = 
   // accessibility.
   takeScreenshot: 'screen_capture',
 
+  // OCR reads a screenshot, so it needs the same session - and nothing more. It deliberately has no capability
+  // of its own: recognition runs on-device against a bundled model (ADR 0017), so there is no separate thing for
+  // the user to grant, and inventing one would imply screen text goes somewhere it does not.
+  runOcr: 'screen_capture',
+  findTextOnScreen: 'screen_capture',
+
   getContacts: 'contacts',
   findContacts: 'contacts',
 
@@ -193,6 +199,8 @@ const TOOL_LABELS: Readonly<Record<ToolName, string>> = {
   waitForElement: 'Wait for an element',
   getUiTree: 'Read the screen',
   takeScreenshot: 'Take a screenshot',
+  runOcr: 'Read the text on screen',
+  findTextOnScreen: 'Find text on screen',
   pressBack: 'Press back',
   pressHome: 'Go to the home screen',
   openApp: 'Open an app by package',

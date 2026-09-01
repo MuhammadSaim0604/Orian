@@ -29,12 +29,17 @@ android {
 
 dependencies {
     // `api` rather than `implementation`: the automation runtime's public surface
-    // exposes types from these modules (UiTree, Selector, Screenshot, Contact),
-    // so consumers - the Phase 3 bridge - need them on their compile classpath.
+    // exposes types from these modules (UiTree, Selector, Screenshot, Contact,
+    // OcrResult), so consumers - the Phase 3 bridge - need them on their compile
+    // classpath.
     api(project(":accessibility"))
     api(project(":gestures"))
     api(project(":screen"))
     api(project(":tools"))
+
+    // Step 5: the second rung of the perception chain (ADR 0013). `api` because
+    // runOcr returns OcrResult and the bridge has to serialize it.
+    api(project(":ocr"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.android)

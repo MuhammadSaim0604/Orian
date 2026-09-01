@@ -12,6 +12,13 @@ import com.mobileautomation.gestures.GestureEngine
 import com.mobileautomation.gestures.GestureOutcome
 import com.mobileautomation.gestures.GestureSpec
 import com.mobileautomation.gestures.SwipeDirection
+import com.mobileautomation.ocr.OcrBounds
+import com.mobileautomation.ocr.OcrMatch
+import com.mobileautomation.ocr.OcrMatchKind
+import com.mobileautomation.ocr.OcrOutcome
+import com.mobileautomation.ocr.OcrResult
+import com.mobileautomation.ocr.OcrTextBlock
+import com.mobileautomation.ocr.OcrTextSearch
 import com.mobileautomation.screen.CaptureResult
 import com.mobileautomation.screen.Screenshot
 import com.mobileautomation.tools.IntentRequest
@@ -119,6 +126,7 @@ class DefaultAutomationRuntimeTest {
         val phone: FakePhoneTool,
         val settingsWriter: FakeSystemSettingsWriter,
         val ringer: FakeRingerTool,
+        val ocr: FakeScreenTextSource?,
         val globalActions: RecordingGlobalActionPerformer,
         val runtime: DefaultAutomationRuntime,
     )
@@ -137,6 +145,14 @@ class DefaultAutomationRuntimeTest {
         phonePermitted: Boolean = true,
         writeSettingsPermitted: Boolean = true,
         ringerPermitted: Boolean = true,
+        /**
+         * Null by default, mirroring a build with no recogniser.
+         *
+         * The default is the interesting case rather than the convenient one: it is what proves "OCR is not
+         * available" stays distinguishable from "OCR found nothing", which is the distinction that decides whether
+         * the agent descends to vision.
+         */
+        ocr: FakeScreenTextSource? = null,
     ): Harness {
         val reader = FakeScreenReader(isAvailable = serviceAvailable, tree = tree)
         val performer = FakeNodeActionPerformer()
@@ -179,13 +195,14 @@ class DefaultAutomationRuntimeTest {
                 phoneTool = phone,
                 systemSettingsWriter = settingsWriter,
                 ringerTool = ringer,
+                screenTextReader = ocr,
                 globalActionPerformer = globalActions,
             )
 
         return Harness(
             reader, performer, dispatcher, capture, appManager, contactsReader, clipboard,
             alarms, notifications, intents, settingsReader, media, sms, phone, settingsWriter,
-            ringer, globalActions, runtime,
+            ringer, ocr, globalActions, runtime,
         )
     }
 
@@ -1209,5 +1226,158 @@ class DefaultAutomationRuntimeTest {
 
             assertTrue(result.isSuccess)
             assertEquals(listOf(RingerMode.NORMAL), harness.ringer.modes)
+        }
+
+    // --- ocr --------------------------------------------------------------
+
+    @Test
+    fun `runOcr returns the recognised text`() =
+        runTest {
+            val blocks =
+                listOf(
+                    OcrTextBlock(text = "Continue", bounds = OcrBounds(400, 1200, 700, 1300)),
+                )
+            val ocr =
+                FakeScreenTextSource(
+                    outcome = OcrOutcome.Success(OcrResult(blocks, screenWidthPx = 1080, screenHeightPx = 2400)),
+                )
+
+            val result = harness(ocr = ocr).runtime.runOcr()
+
+            assertTrue(result.isSuccess)
+            assertEquals(1, result.valueOrNull?.blockCount)
+            assertEquals("Continue", result.valueOrNull?.blocks?.first()?.text)
+        }
+
+    @Test
+    fun `runOcr succeeds with no text rather than failing`() =
+        runTest {
+            // "Nothing is written on this screen" is an answer, and a useful one: it tells the agent that OCR is
+            // not the way in and vision is next. Reporting it as a failure would have the agent retry.
+            val ocr = FakeScreenTextSource(outcome = OcrOutcome.Success(OcrResult.empty(1080, 2400)))
+
+            val result = harness(ocr = ocr).runtime.runOcr()
+
+            assertTrue(result.isSuccess)
+            assertTrue(result.valueOrNull!!.isEmpty)
+        }
+
+    @Test
+    fun `runOcr reports an absent recogniser distinctly from an empty screen`() =
+        runTest {
+            // The reason the reader is nullable rather than a no-op implementation. An always-empty reader would
+            // make these two indistinguishable, and the agent would descend to vision for the wrong reason.
+            val result = harness(ocr = null).runtime.runOcr()
+
+            assertFalse(result.isSuccess)
+            assertTrue(result.errorOrNull!!.message.contains("not available"))
+        }
+
+    @Test
+    fun `runOcr maps a denied capture onto the consent error`() =
+        runTest {
+            // Reuses the screenshot path's typed error, so a caller handling "you need to grant screen recording"
+            // handles it once rather than once per tool.
+            val ocr =
+                FakeScreenTextSource(
+                    outcome =
+                        OcrOutcome.CaptureFailed(
+                            "screen capture needs the user's permission for this session",
+                        ),
+                )
+
+            val result = harness(ocr = ocr).runtime.runOcr()
+
+            assertEquals("capture_consent_required", result.errorOrNull?.code)
+        }
+
+    @Test
+    fun `runOcr maps a secure window onto the secure screen error`() =
+        runTest {
+            val ocr =
+                FakeScreenTextSource(
+                    outcome =
+                        OcrOutcome.CaptureFailed(
+                            "this app blocks screen capture, so its text cannot be read",
+                        ),
+                )
+
+            val result = harness(ocr = ocr).runtime.runOcr()
+
+            assertEquals("secure_screen", result.errorOrNull?.code)
+        }
+
+    @Test
+    fun `findTextOnScreen returns a tappable point`() =
+        runTest {
+            val block = OcrTextBlock(text = "Continue", bounds = OcrBounds(400, 1200, 700, 1300))
+            val ocr =
+                FakeScreenTextSource(
+                    search =
+                        OcrTextSearch.Found(
+                            match = OcrMatch(block, OcrMatchKind.EXACT, 1.0),
+                            blocksSearched = 4,
+                        ),
+                )
+
+            val result = harness(ocr = ocr).runtime.findTextOnScreen("Continue")
+
+            assertTrue(result.isSuccess)
+            assertEquals(550, result.valueOrNull?.centerX)
+            assertEquals(1250, result.valueOrNull?.centerY)
+        }
+
+    @Test
+    fun `findTextOnScreen passes the exact flag through`() =
+        runTest {
+            val ocr = FakeScreenTextSource()
+
+            harness(ocr = ocr).runtime.findTextOnScreen("Continue", exact = true)
+
+            assertEquals("Continue", ocr.lastQuery)
+            assertEquals(true, ocr.lastExact)
+        }
+
+    @Test
+    fun `findTextOnScreen reports absent text as element not found`() =
+        runTest {
+            // Not ToolFailed. "The tool worked and the text is not here" tells the agent to scroll or look
+            // elsewhere; "the tool failed" tells it to stop.
+            val ocr =
+                FakeScreenTextSource(
+                    search = OcrTextSearch.NotFound(blocksSearched = 12, reason = "not among 12 lines"),
+                )
+
+            val result = harness(ocr = ocr).runtime.findTextOnScreen("Continue")
+
+            assertEquals("element_not_found", result.errorOrNull?.code)
+        }
+
+    @Test
+    fun `findTextOnScreen names the ocr strategy in its failure`() =
+        runTest {
+            // So a trace says which rung of the perception chain was attempted, rather than just that something
+            // was not found. Carried as the strategy list rather than in the message, because a message is copy
+            // and a list is something a caller can act on.
+            val ocr =
+                FakeScreenTextSource(
+                    search = OcrTextSearch.NotFound(blocksSearched = 0, reason = "nothing recognised"),
+                )
+
+            val result = harness(ocr = ocr).runtime.findTextOnScreen("Continue")
+
+            val error = result.errorOrNull as AutomationError.ElementNotFound
+            assertEquals(listOf(SelectorStrategy.OCR_TEXT.wireName), error.attemptedStrategies)
+        }
+
+    @Test
+    fun `findTextOnScreen rejects a blank query before touching the device`() =
+        runTest {
+            val ocr = FakeScreenTextSource()
+
+            val result = harness(ocr = ocr).runtime.findTextOnScreen("   ")
+
+            assertEquals("invalid_argument", result.errorOrNull?.code)
+            assertEquals("no capture should have been attempted", null, ocr.lastQuery)
         }
 }

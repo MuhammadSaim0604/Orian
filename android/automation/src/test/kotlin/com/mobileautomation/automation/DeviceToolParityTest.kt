@@ -36,6 +36,8 @@ class DeviceToolParityTest {
             "waitForElement",
             "getUiTree",
             "takeScreenshot",
+            "runOcr",
+            "findTextOnScreen",
             "pressBack",
             "pressHome",
             "openApp",
@@ -137,6 +139,23 @@ class DeviceToolParityTest {
     @Test
     fun `device configuration tools are part of the tool surface`() {
         assertTrue(DeviceTool.toolNames.containsAll(listOf("setSystemSetting", "setRingerMode")))
+    }
+
+    @Test
+    fun `the ocr tools are part of the tool surface`() {
+        // The second rung of the perception chain (ADR 0013). Without these the agent is blind on any screen
+        // whose accessibility tree is empty, which is issue F1.
+        assertTrue(DeviceTool.toolNames.containsAll(listOf("runOcr", "findTextOnScreen")))
+    }
+
+    @Test
+    fun `ocr sits beside the screenshot tool rather than at the end of the list`() {
+        // The list order is what the model reads. Grouping the three ways of seeing a screen together is what
+        // stops OCR being reached for first because it happened to be mentioned last.
+        val screenshot = DeviceTool.toolNames.indexOf("takeScreenshot")
+
+        assertEquals("runOcr", DeviceTool.toolNames[screenshot + 1])
+        assertEquals("findTextOnScreen", DeviceTool.toolNames[screenshot + 2])
     }
 
     @Test

@@ -34,6 +34,13 @@ describe('android-nodes', () => {
     expect(toolForNode('click')).toBe('click');
   });
 
+  it('maps the OCR node to the whole-screen read', () => {
+    // The map records the *default* tool. The node dispatches to findTextOnScreen instead when a search term is
+    // configured, which keeps the with-text / without-text distinction in one node's config rather than making it
+    // two palette entries users have to tell apart.
+    expect(toolForNode('ocr')).toBe('runOcr');
+  });
+
   it('exports one definition per mapped node type', () => {
     const exported = androidNodes.map((node) => node.type).sort();
     const mapped = Object.keys(NODE_TO_TOOL).sort();

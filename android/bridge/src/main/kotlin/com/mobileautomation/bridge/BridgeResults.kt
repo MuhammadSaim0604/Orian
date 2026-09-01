@@ -5,6 +5,10 @@ import com.mobileautomation.accessibility.model.UiTree
 import com.mobileautomation.accessibility.serialization.UiTreeSerializer
 import com.mobileautomation.automation.CallOutcome
 import com.mobileautomation.automation.ResolvedElement
+import com.mobileautomation.ocr.OcrBounds
+import com.mobileautomation.ocr.OcrMatch
+import com.mobileautomation.ocr.OcrResult
+import com.mobileautomation.ocr.OcrTextBlock
 import com.mobileautomation.screen.Screenshot
 import com.mobileautomation.tools.model.Contact
 import com.mobileautomation.tools.model.CurrentScreen
@@ -95,6 +99,61 @@ object BridgeResults {
     fun contactsToJson(contacts: List<Contact>): String =
         contacts.joinToString(prefix = "[", postfix = "]") { contactToJson(it) }
 
+    /**
+     * One recognised line of text.
+     *
+     * `centerX`/`centerY` are included rather than left for the caller to compute from the bounds. It is trivial
+     * arithmetic, but it is arithmetic that must agree with what the Kotlin side would tap — and two
+     * implementations of a centre point is exactly how a tap ends up one row off.
+     */
+    fun ocrBlockToJson(block: OcrTextBlock): String =
+        buildJson {
+            string("text", block.text)
+            raw("bounds", ocrBoundsToJson(block.bounds))
+            number("centerX", block.centerX)
+            number("centerY", block.centerY)
+            // Omitted rather than defaulted when the recogniser reports none, so the caller can tell "not
+            // measured" from "measured as low".
+            block.confidence?.let { number("confidence", it) }
+            block.language?.let { string("language", it) }
+        }
+
+    fun ocrBoundsToJson(bounds: OcrBounds): String =
+        buildJson {
+            number("left", bounds.left)
+            number("top", bounds.top)
+            number("right", bounds.right)
+            number("bottom", bounds.bottom)
+        }
+
+    fun ocrResultToJson(result: OcrResult): String =
+        buildJson {
+            raw("blocks", result.blocks.joinToString(prefix = "[", postfix = "]") { ocrBlockToJson(it) })
+            number("blockCount", result.blockCount)
+            number("screenWidthPx", result.screenWidthPx)
+            number("screenHeightPx", result.screenHeightPx)
+            number("durationMs", result.durationMs)
+        }
+
+    /**
+     * A matched piece of text.
+     *
+     * `matchKind` and `similarity` cross deliberately. The agent has to be able to tell an exact match from one
+     * that tolerated a misread, because acting on a fuzzy match without checking the text is how it taps "Share"
+     * when it meant "Save".
+     */
+    fun ocrMatchToJson(match: OcrMatch): String =
+        buildJson {
+            string("text", match.block.text)
+            raw("bounds", ocrBoundsToJson(match.block.bounds))
+            number("centerX", match.centerX)
+            number("centerY", match.centerY)
+            string("matchKind", match.kind.wireName)
+            number("similarity", match.similarity)
+            boolean("isStrong", match.isStrong)
+            match.block.confidence?.let { number("confidence", it) }
+        }
+
     fun smsMessageToJson(message: SmsMessage): String =
         buildJson {
             string("address", message.address)
@@ -168,6 +227,22 @@ object BridgeResults {
             value: Long,
         ) {
             parts.add("${quote(name)}:$value")
+        }
+
+        /**
+         * A fractional number, for confidences and similarities.
+         *
+         * Rendered with `toString()` rather than formatted, because a locale-aware format would emit `0,8` on a
+         * German device and produce JSON the TS side cannot parse — a bug that only appears for some users.
+         */
+        fun number(
+            name: String,
+            value: Double,
+        ) {
+            // NaN and the infinities are not valid JSON numbers, and a recogniser handing one back should not
+            // corrupt the whole payload.
+            val safe = if (value.isFinite()) value else 0.0
+            parts.add("${quote(name)}:$safe")
         }
 
         fun boolean(

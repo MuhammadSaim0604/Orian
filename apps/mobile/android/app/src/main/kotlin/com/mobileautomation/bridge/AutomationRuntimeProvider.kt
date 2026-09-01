@@ -11,12 +11,16 @@ import com.mobileautomation.accessibility.service.AccessibilityConnection
 import com.mobileautomation.accessibility.service.GlobalAction
 import com.mobileautomation.accessibility.service.UiAutomationAccessibilityService
 import com.mobileautomation.automation.DefaultAutomationRuntime
+import com.mobileautomation.automation.ScreenTextOcrMatcher
 import com.mobileautomation.gestures.AccessibilityGestureDispatcher
 import com.mobileautomation.gestures.GestureBuilder
 import com.mobileautomation.gestures.GestureDispatcher
 import com.mobileautomation.gestures.GestureEngine
 import com.mobileautomation.gestures.GestureOutcome
 import com.mobileautomation.gestures.GestureSpec
+import com.mobileautomation.ocr.MlKitTextRecogniser
+import com.mobileautomation.ocr.ScreenTextReader
+import com.mobileautomation.ocr.TextRecogniser
 import com.mobileautomation.screen.MediaProjectionScreenCapture
 import com.mobileautomation.screen.ScreenCapture
 import com.mobileautomation.screen.ScreenCaptureService
@@ -59,6 +63,19 @@ private const val CAPTURE_DIRECTORY = "captures"
     private var screenCapture: MediaProjectionScreenCapture? = null
 
     /**
+     * The text recogniser, held for the process.
+     *
+     * ML Kit's recogniser loads a model on construction, so building one per call would add hundreds of
+     * milliseconds to every OCR — on the path that is already the slow fallback. Held here rather than inside
+     * `ScreenTextReader` because `bridge()` is called repeatedly and each call builds a new reader.
+     */
+    @Volatile
+    private var recogniser: TextRecogniser? = null
+
+    private fun sharedRecogniser(): TextRecogniser =
+        recogniser ?: MlKitTextRecogniser().also { recogniser = it }
+
+    /**
      * A bridge over the current runtime. **Always available.**
      *
      * It used to return null whenever the accessibility service was off, and the module then rejected
@@ -91,6 +108,27 @@ private const val CAPTURE_DIRECTORY = "captures"
                 hasScreenCaptureSession = { hasScreenCaptureSession() },
             )
 
+        // Built once and shared, because OCR and takeScreenshot must read the same capture session. Two
+        // instances would mean OCR silently had no session while screenshots worked.
+        val capture = screenCaptureOrPlaceholder(context)
+
+        /**
+         * OCR over that capture session.
+         *
+         * Display metrics are read through a lambda rather than captured, because the screen can rotate
+         * mid-run and a width fixed at construction would scale every box wrongly for the rest of the session
+         * - landing taps slightly off while reporting success (ADR 0017).
+         */
+        val textReader =
+            ScreenTextReader(
+                screenCapture = capture,
+                recogniser = sharedRecogniser(),
+                displayMetrics = {
+                    val live = context.resources.displayMetrics
+                    live.widthPixels to live.heightPixels
+                },
+            )
+
         val runtime =
             DefaultAutomationRuntime(
                 screenReaderProvider = { AccessibilityConnection.readerOrNull() },
@@ -114,7 +152,7 @@ private const val CAPTURE_DIRECTORY = "captures"
                                 screenHeightPx = metrics.heightPixels,
                             ),
                     ),
-                screenCapture = screenCaptureOrPlaceholder(context),
+                screenCapture = capture,
                 appManager =
                     AndroidAppManager(
                         context = context,
@@ -139,13 +177,20 @@ private const val CAPTURE_DIRECTORY = "captures"
                 phoneTool = AndroidPhoneTool(context, permissionGate),
                 systemSettingsWriter = AndroidSystemSettingsWriter(context, permissionGate),
                 ringerTool = AndroidRingerTool(context, permissionGate),
+                screenTextReader = textReader,
                 globalActionPerformer = { action: GlobalAction ->
                     // Re-read rather than closing over the instance above: the user can enable the
                     // service between this runtime being built and the action being performed.
                     (AccessibilityConnection.readerOrNull() as? UiAutomationAccessibilityService)
                         ?.perform(action) == true
                 },
-                selectorResolver = SelectorResolver(),
+                selectorResolver =
+                    SelectorResolver(
+                        // The sixth rung of the chain (ADR 0013, Step 5). Reached only when the structural
+                        // strategies fail and the selector carries text, which is the only thing a recogniser
+                        // can look for.
+                        ocrMatcher = ScreenTextOcrMatcher(textReader),
+                    ),
                 // Vision needs a screenshot and a model call, so the matcher is
                 // supplied by the agent layer in Phase 7. Until then the chain
                 // reports honestly that vision was not attempted.

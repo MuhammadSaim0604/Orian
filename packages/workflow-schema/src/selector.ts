@@ -16,6 +16,13 @@ import { z } from 'zod';
 /**
  * Resolution order, strongest first. Coordinates are a last resort and vision is
  * the final fallback.
+ *
+ * `ocrText` sits between relative position and coordinates deliberately (ADR 0013, Step 5). It is weaker than
+ * anything structural, because it depends on what a recogniser read off pixels — but stronger than a raw
+ * coordinate, because a text match survives the layout shifting and is **checkable**: the string either matched
+ * or it did not. A coordinate cannot fail; it lands somewhere and reports success.
+ *
+ * Mirrors the Kotlin `SelectorStrategy` enum, and a parity test on each side keeps them from drifting.
  */
 export const SELECTOR_STRATEGIES = [
   'resourceId',
@@ -23,6 +30,7 @@ export const SELECTOR_STRATEGIES = [
   'text',
   'structural',
   'relativePosition',
+  'ocrText',
   'coordinates',
   'vision',
 ] as const;
@@ -35,7 +43,15 @@ export type SelectorStrategy = z.infer<typeof SelectorStrategySchema>;
 export const strategyRank = (strategy: SelectorStrategy): number =>
   SELECTOR_STRATEGIES.indexOf(strategy);
 
-/** True when a match relied on pixels rather than meaning. */
+/**
+ * True when a match relied on pixels rather than meaning.
+ *
+ * `ocrText` is **not** fragile, and that is a judgement rather than an oversight. A fragile strategy is one whose
+ * step should be flagged for review because it will break on the next layout change; an OCR match is anchored to
+ * a string the user can read, so it survives a control moving. It is *weaker* than a resourceId, which the rank
+ * already says — weakness and fragility are different properties, and collapsing them would have the review UI
+ * warn about every OCR step on a screen where OCR was the only option.
+ */
 export const isFragileStrategy = (strategy: SelectorStrategy): boolean =>
   strategy === 'coordinates' || strategy === 'vision';
 

@@ -373,6 +373,18 @@ class AutomationModule(
             }
     }
 
+    // --- reading a screen the tree does not describe -----------------------
+
+    @ReactMethod
+    fun runOcr(promise: Promise) = dispatch(promise) { it.runOcr() }
+
+    @ReactMethod
+    fun findTextOnScreen(
+        text: String,
+        exact: Boolean,
+        promise: Promise,
+    ) = dispatch(promise) { it.findTextOnScreen(text, exact) }
+
     // --- messaging and calls ----------------------------------------------
 
     @ReactMethod

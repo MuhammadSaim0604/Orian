@@ -13,11 +13,13 @@ import kotlin.math.abs
  * produced it, so callers know how trustworthy the result is:
  *
  * `resourceId → accessibility semantics → text/contentDescription →
- *  structural path → relative position → coordinates → vision`
+ *  structural path → relative position → OCR text → coordinates → vision`
  *
- * Vision is not implemented here - it needs a screenshot and a model, so it
- * lives above this layer. The resolver reports that it stopped short instead of
- * pretending to have tried.
+ * **Two strategies are not implemented here.** OCR needs a screenshot and a
+ * recogniser; vision needs a screenshot and a model. Both live above this layer,
+ * so the synchronous [resolve] skips them and [resolveWithFallbacks] reaches them
+ * through injected matchers. The resolver reports that it stopped short rather
+ * than pretending to have tried.
  *
  * Pure and deterministic: it takes a parsed tree, not a live service, so the
  * whole priority chain is unit-testable.
@@ -31,7 +33,12 @@ class SelectorResolver(
      */
     private val positionTolerancePx: Int = DEFAULT_POSITION_TOLERANCE_PX,
     /**
-     * The seventh and final strategy. Defaults to unavailable, so a caller that
+     * The sixth strategy: text read off the screen. Defaults to unavailable, so a
+     * caller without screen capture gets the structural chain and an honest report.
+     */
+    private val ocrMatcher: OcrMatcher = UnavailableOcrMatcher,
+    /**
+     * The eighth and final strategy. Defaults to unavailable, so a caller that
      * has not configured vision gets the structural chain and an honest report
      * that vision was not attempted.
      */
@@ -73,8 +80,9 @@ class SelectorResolver(
                     SelectorStrategy.STRUCTURAL -> matchByStructuralPath(candidates, selector)
                     SelectorStrategy.RELATIVE_POSITION -> matchByRelativePosition(candidates, selector)
                     SelectorStrategy.COORDINATES -> matchByCoordinates(candidates, selector)
-                    // Needs a screenshot and a model, so it cannot run inside a
-                    // synchronous resolve; see resolveWithVision.
+                    // Both need a screenshot, so they cannot run inside a synchronous
+                    // resolve; see resolveWithFallbacks.
+                    SelectorStrategy.OCR_TEXT -> emptyList()
                     SelectorStrategy.VISION -> emptyList()
                 }
 
@@ -101,26 +109,70 @@ class SelectorResolver(
     }
 
     /**
-     * Resolves [selector], falling through to vision when the structural chain
-     * finds nothing.
+     * Resolves [selector], falling through to OCR and then vision when the structural chain finds nothing.
      *
-     * The complete seven-step chain, and the entry point the agent and workflow
-     * engine should use. Kept separate from [resolve] because vision is
-     * suspending and costs a model call, so callers that only want the cheap
-     * structural strategies are not forced to pay for it.
+     * The complete eight-step chain, and the entry point the agent and workflow engine should use. Kept separate
+     * from [resolve] because both fallbacks are suspending and cost a screenshot — and vision costs a model call
+     * — so callers that only want the cheap structural strategies are not forced to pay for either.
+     *
+     * **Order matters and is not arbitrary.** OCR is tried before vision because it is on-device, free, and
+     * verifiable: the text matched or it did not. Vision is a model guessing coordinates from an image, which
+     * cannot be checked and costs the user money on every look. Reversing them would spend money to get a worse
+     * answer.
      */
-    suspend fun resolveWithVision(
+    suspend fun resolveWithFallbacks(
         tree: UiTree,
         selector: Selector,
     ): ResolutionResult {
         val structural = resolve(tree, selector)
         if (structural.isMatch) return structural
 
-        val notFound = structural as ResolutionResult.NotFound
+        var notFound = structural as ResolutionResult.NotFound
 
-        // An empty selector or the wrong screen are not vision's problem: there is
-        // nothing to look for, or we should not be looking here at all.
+        // An empty selector or the wrong screen are not a fallback's problem: there is nothing to look for, or
+        // we should not be looking here at all.
         if (notFound.attempted.isEmpty()) return notFound
+
+        // --- OCR, the sixth rung ---------------------------------------------
+
+        // Only when the selector carries text. A resourceId does not appear on screen and a structural path is
+        // not something a recogniser can see, so OCR has nothing to look for without it.
+        if (!selector.text.isNullOrBlank()) {
+            if (!ocrMatcher.isAvailable) {
+                notFound =
+                    notFound.copy(
+                        reason =
+                            "${notFound.reason}; OCR was not attempted because no screenshot " +
+                                "or recogniser is available",
+                    )
+            } else {
+                val ocrMatch = ocrMatcher.locate(selector)
+                val withOcr = notFound.attempted + SelectorStrategy.OCR_TEXT
+
+                if (ocrMatch != null) {
+                    // A synthetic node, for the same reason vision needs one: text recognised off pixels may
+                    // correspond to no accessibility node at all, which is usually why OCR was needed.
+                    return ResolutionResult.Match(
+                        node =
+                            UiNode(
+                                text = ocrMatch.recognisedText,
+                                bounds = ocrMatch.bounds,
+                                packageName = tree.packageName,
+                            ),
+                        strategy = SelectorStrategy.OCR_TEXT,
+                        structuralPath = OCR_PATH,
+                    )
+                }
+
+                notFound =
+                    notFound.copy(
+                        attempted = withOcr,
+                        reason = "${notFound.reason}, and OCR did not find that text on screen",
+                    )
+            }
+        }
+
+        // --- vision, the last rung -------------------------------------------
 
         if (!visionMatcher.isAvailable) {
             return notFound.copy(
@@ -154,6 +206,21 @@ class SelectorResolver(
             visionMatch = match,
         )
     }
+
+    /**
+     * The previous name for [resolveWithFallbacks].
+     *
+     * Kept so existing callers and tests keep working while the chain gains a rung. The name is now wrong — it
+     * tries OCR first — which is why it delegates rather than being an alias with its own body.
+     */
+    @Deprecated(
+        "OCR is now tried before vision; use resolveWithFallbacks",
+        ReplaceWith("resolveWithFallbacks(tree, selector)"),
+    )
+    suspend fun resolveWithVision(
+        tree: UiTree,
+        selector: Selector,
+    ): ResolutionResult = resolveWithFallbacks(tree, selector)
 
     // --- strategies, strongest first ---------------------------------------
 
@@ -348,6 +415,15 @@ class SelectorResolver(
          * match often has no node in the tree, so there is none to report.
          */
         const val VISION_PATH: String = "vision"
+
+        /**
+         * The same for an OCR match, and for the same reason.
+         *
+         * A distinct value rather than sharing [VISION_PATH], so a recorded trace says which fallback actually
+         * produced the step. The recorder judges durability from that, and OCR and vision are not equally
+         * durable.
+         */
+        const val OCR_PATH: String = "ocr"
 
         private fun String?.equalsIgnoreCase(other: String): Boolean =
             this != null && this.equals(other, ignoreCase = true)
