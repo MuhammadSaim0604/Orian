@@ -4,7 +4,7 @@ Living record of what has been implemented, what is complete, and what remains. 
 
 Authoritative plan: `Development_Plan/`. It was restructured from **phases** to **steps** after device testing (commit `b0c1c60`); phases 0–9 are complete and everything since is a numbered step. See `Development_Plan/03_Issue_Register.md` for the defect IDs each step closes.
 
-Last updated: after the tools-page rebuild and the tool-wiring bug sweep, with both CI workflows green on `main` (Android CI run `33391387254`, TypeScript CI run `33391387303`).
+Last updated: after the screen-capture consent fix and the messaging/call/settings tool set, with both CI workflows green on `main` (Android CI run `33410315237`, TypeScript CI run `33410315152`).
 
 ---
 
@@ -1895,6 +1895,55 @@ Totals now 512 app Jest tests across 30 suites, 116 in `ai-agent`, 625 Kotlin.
 
 ---
 
+## Screen-capture consent, an honest capture failure, and eight new tools
+
+Two device-reported bugs plus the tool set the user asked for. Commit `3656fa0`; Android CI `33410315237`, TypeScript CI `33410315152`, both green.
+
+### The tools-page toggle asked and then stopped
+
+Granting screen capture from the device-automation card worked; the same toggle on the tools page set a spinner, cleared it, and never showed a system dialog.
+
+`requestCapability('screen_capture')` resolves the string `session_consent` — the native side correctly saying "not mine: MediaProjection consent is an activity result, and that plumbing lives on `AutomationModule`". **Every caller treated that answer as a finished request.** The card worked only because it calls the capture flow directly rather than going through the capability store.
+
+The store now continues the request on that outcome, so `request()` means the same thing for all thirteen capabilities. The general point: an action whose contract is "make this happen" must not have one member of its input domain where it silently means "somebody else should make this happen". If a value is an instruction to the caller rather than a result, the caller has to act on it — or the value should not cross that boundary at all.
+
+### "This app blocks screenshots" was an inference presented as a fact
+
+The agent told the user, at length, that the foreground app had set `FLAG_SECURE` and screenshots were refused at the system level. None of that was true.
+
+`captureFrame` took **one** frame and treated any all-black sample as a secure window. But a freshly created `VirtualDisplay` emits blank frames while the mirror initialises, and a genuinely secure window emits black frames forever — **indistinguishable from a single sample**. So the first capture of any session reported a secure window regardless of the app.
+
+Fixed at both ends, and the second half is the one that matters:
+
+- **Look again before concluding.** Four attempts on a freshly created display, two on a warm one (a screen mid-transition can legitimately be black for a frame), 120 ms apart. `SecureWindow` only if every attempt was black. A bitmap leak on that path was fixed while in there — the old code returned without recycling.
+- **Say what is known, and what to do instead.** The message now states that the screen came back blank several times, that this _usually_ means capture is blocked, and — the behavioural part — to read the screen with `getUiTree`. `takeScreenshot`'s own description names the fallback too, so the model sees it before it ever fails.
+
+The lesson worth keeping: **an error message is part of the agent's context, not just a log line.** Anything phrased as certainty will be relayed to the user as certainty. A tool that fails should say what was observed, how confident that makes it, and what remains available — a screenshot failing is one perception route closing, not the end of the task.
+
+### Eight new tools, and the decisions behind them
+
+`sendSms`, `readSms`, `placeCall`, `endCall`, `setSystemSetting`, `setRingerMode`, with four new capabilities: SMS, phone, write-settings, do-not-disturb.
+
+**SMS sends; it does not draft.** Through `SmsManager`, not an `ACTION_SENDTO` intent. An intent opens a compose screen and waits for a human, so an agent asked to text someone would leave an unsent draft and report success. That asymmetry is the entire reason this needs a dangerous permission. Long bodies go through `divideMessage`, since `sendTextMessage` past the single-part limit is silently truncated by some carriers.
+
+**Calling degrades rather than failing, and says so.** `placeCall` returns `CallOutcome` — `CALLING` or `DIALER_OPENED` — not a boolean. Without the permission it opens the dialer pre-filled, which is one tap from done and far better than a refusal; but the agent must be able to tell the user "the dialer is open" rather than "I called them", which a boolean cannot express. It degrades **only** on a permission denial: a device with no dialer is a real failure and hiding it would be wrong.
+
+**Writable settings are an allowlist**, not a passthrough — four keys. The caller is a model inferring a key name from "make the screen dimmer", and `Settings.System` holds keys that make parts of the device unusable when written badly. The schema uses a `z.enum`, so a wrong key is rejected _before_ the call with the real list in the error; the model can then pick one instead of retrying variations of the same guess.
+
+**The ringer's permission is asymmetric.** `setRingerMode` succeeds for normal with no grant at all and throws for silent and vibrate without Do Not Disturb access, so the check is per value. Returning a phone to normal should never be the call that fails.
+
+**SMS is one capability, not two.** `SEND_SMS` and `READ_SMS` are a single permission group: asking for either shows the same system prompt. Two toggles would imply a choice the platform does not offer, and the user would grant one and find the other granted too.
+
+`WRITE_SETTINGS` and DND are read with `Settings.System.canWrite` and `isNotificationPolicyAccessGranted` rather than `checkSelfPermission`, which returns granted merely because the manifest declares them — the same false positive that made usage access need an appop check.
+
+### What the round trips taught
+
+Three local test failures before the gate went green, all the same shape: **widening a constructor or a tool list breaks the fixtures before the source.** `Fakes.kt`, the bridge's `FakeRuntime`, and both `invokeTool` mock surfaces each restate the full surface, so each had to grow with it. Worth expecting rather than rediscovering — the fixtures are the first thing to update, not the last.
+
+Totals now 521 app Jest tests across 31 suites, 116 in `ai-agent`, 638 Kotlin.
+
+---
+
 ## Remaining
 
 **Steps 1, 2, 3 and 4 are done; Steps 5–13 remain.** The plan is `Development_Plan/steps/`, and `03_Issue_Register.md` is the checklist — a step is not finished while one of its issue IDs survives.
@@ -1924,6 +1973,10 @@ Carry-forward notes:
 - **The UI-tree JSON is versioned for a reason.** `UI_TREE_SCHEMA_VERSION` is at **2**; bump it whenever a key changes and update `UiNodeAttribute`, `UI_NODE_ATTRIBUTES`, and the `UiTree` type in `native-automation` together. `UiNodeAttributeParityTest` catches the Kotlin half; nothing yet catches a stale TS list, so keep them in the same commit.
 - **Vision is still not wired.** `SelectorResolver` defaults to `UnavailableVisionMatcher`, so the chain reports "vision was not attempted" and stops at coordinates. A provider client, a screenshot path in agent context, a trace that records one per step, and now an overlay that captures one are all present — this needs a vision-capable model and a cost decision, not new code paths.
 - **Big payloads cross by reference.** Screenshots are file paths and the UI tree has a compact mode. Neither should become inline base64 — and an MCP response is exactly where someone would be tempted.
+- **A tool error message is agent context.** Anything phrased as certainty will be relayed to the user as certainty, which is how "this app blocks screenshots" reached a user about an app that blocked nothing. State what was observed, how confident that makes it, and what remains available — `SecureScreen` and `CaptureConsentRequired` both now name `getUiTree` as the fallback, and `takeScreenshot`'s description does too.
+- **Never let one sample decide an irreversible-sounding conclusion.** A blank first frame and a permanently secure window are identical from a single frame; the capture path retries before it will say the window is secure. The same trap exists anywhere the platform reports absence rather than an error.
+- **`requestCapability` resolves `session_consent` for screen capture, and that is an instruction, not a result.** MediaProjection consent is an activity result owned by `AutomationModule`, so `capabilityStore.request` continues the flow itself. Any new caller must do the same or its toggle will appear to do nothing.
+- **Widening a shared surface breaks the fixtures before the source.** `Fakes.kt`, the bridge's `FakeRuntime`, and both `invokeTool` mock surfaces each restate the full tool set, so a new tool or constructor parameter means updating them in the same pass.
 - **Packages the RN app imports need a source entrypoint.** Metro does not run Turborepo's build first, so a `dist` entry breaks the release bundle while the debug APK may still pass. Every workspace package now has either a source `main` or a `react-native` field.
 - **pnpm strictness.** When adding any React Native tool that Gradle or Metro invokes, declare it explicitly in `apps/mobile/package.json`.
 - **Only an assemble compiles what ktlint and unit tests skip.** This has now bitten twice: the app module in Phase 6 (`:storage` and Room) and the `androidTest` source set in Phase 8 (`OverlayResult`). Run `gradle :<module>:assembleDebug` when changing a module's public surface, and `gradle assembleDebugAndroidTest` when changing anything an instrumentation test touches.
@@ -1963,6 +2016,8 @@ Every engine layer needs physical hardware, and none can be automated here — e
 | Background (Step 3)  | **that a run continues with another app in front** — the check that decides whether Step 3 worked; what the probe reports on an aggressive OEM skin; the status overlay appearing and staying on top; stop from the notification; the two overlays evicting each other                                                                                                                                                                                             |
 | Fix round (Step 3)   | **that the held headless task really keeps timers firing** — the whole freeze fix rests on it; that the overlay survives repeated expand/collapse without the wrong-thread crash; that the stop button and the chat text box are both operable; that screen capture reports granted after consent on API 34+ **without crashing**, with the other two rows unmoved; whether the same UI-thread fix cleared C5 in the node toolset                                  |
 | Agent Mode (Step 4)  | **Checked and passed** on the post-Step-4 pass: conversations survive a force-stop (which closes issue G5's persistence question), a follow-up shows the agent remembering the first run, `/models` discovery and manual entry both work, and a disabled tool is no longer attempted. What remains untested is the reworked UI itself — the live-message fix, the blocked-tool row, model id/name editing, the picker sheet, the left sidebar, and the transitions |
+| Tools page           | the permission cards' toggles across OEM skins; that a checkbox switched off really keeps the tool out of the prompt; and the eight tool fixes found by reading the code — a screenshot with accessibility **off**, "open settings" and "open the clock" by name, a tap on a list row identified by its text, and an alarm set without the clock app opening                                                                                                       |
+| Comms tools          | **that the screen-recording toggle on the tools page now shows the system dialog** — the reported bug; that a screenshot no longer reports a secure window on its first attempt, and that the agent falls back to `getUiTree` when it genuinely is one; sending a text and reading one back; `placeCall` dialling with the permission and opening the dialer without it; brightness and screen timeout actually changing; silent and vibrate needing the DND grant |
 
 **Step 13 runs this as one session, in an order where each stage feeds the next so a failure localises itself:** onboarding → the agent outside the app → OCR on a tree-less screen → the recorded trace → generation → running the workflow from the canvas → the node toolset overlay → a force-stop persistence check.
 
