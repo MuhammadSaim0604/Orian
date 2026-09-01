@@ -1,7 +1,7 @@
 import { type ToolDefinition } from '@mobile-automation/tool-sdk';
 
 import { toPromptJson, truncateToTokens } from './redaction';
-import { type PromptMessage, joinSections, section, systemMessage, userMessage } from './template';
+import { type PromptMessage, joinSections, systemMessage, tagged, userMessage } from './template';
 
 /**
  * Context for the Configure-with-AI overlay (Phase 8).
@@ -64,62 +64,73 @@ export type NodeConfigContextInput = {
  * durable selectors are actually chosen - the user is standing on the real screen, and
  * a config that captures a resourceId now is one that still works after an app update.
  */
-export const NODE_CONFIG_SYSTEM_PROMPT = `You configure a single node in a mobile automation workflow.
+export const NODE_CONFIG_SYSTEM_PROMPT = `<role>
+You configure a single node in a mobile automation workflow.
+</role>
 
-You will be given the node, what the user wants it to do, the screen they are looking at, and a JSON Schema for the node's configuration.
+<input>
+You are given the node in <node>, what the user asked for in <instruction>, the screen they are looking at in <screen>, and a JSON Schema in <schema>.
+</input>
 
-Return only a JSON object matching that schema. No explanation, no markdown fences, no commentary.
+<output>
+Return only a JSON object matching <schema>. No explanation, no markdown fences, no commentary.
+</output>
 
+<identifying_elements>
 When the configuration identifies an element on screen:
 - Use resourceId when the element has one. It survives app updates and language changes.
 - Otherwise use contentDescription, then text.
 - Include coordinates only when nothing else identifies the element, and never as the only clue if a better one exists.
-- Take the values from the screen you were given. Do not invent an id or a label that is not there.
+- Take the values from <screen>. Never invent an id or a label that is not there.
+</identifying_elements>
 
-If the user's instruction cannot be expressed by this node's schema, return the closest valid configuration rather than an invalid one.`;
+<when_it_does_not_fit>
+If <instruction> cannot be expressed by this node's schema, return the closest valid configuration rather than an invalid one.
+</when_it_does_not_fit>`;
 
 export const buildNodeConfigContext = (input: NodeConfigContextInput): readonly PromptMessage[] => {
   const uiTreeTokens = input.uiTreeTokens ?? 6_000;
 
-  const nodeSection = section(
-    'The node you are configuring',
+  const nodeSection = tagged(
+    'node',
     joinSections(
-      `Type: ${input.node.type}`,
-      `Label: ${input.node.label}`,
       `What it does: ${input.node.description}`,
       `Current configuration:\n${toPromptJson(input.node.currentConfig, 2)}`,
     ),
+    { type: input.node.type, label: input.node.label },
   );
 
-  const instructionSection = section('What the user wants', input.instruction);
+  const instructionSection = tagged('instruction', input.instruction);
 
-  const schemaSection = section('Configuration schema', toPromptJson(input.configJsonSchema, 2));
+  const schemaSection = tagged('schema', toPromptJson(input.configJsonSchema, 2));
 
-  const screenSection = section(
-    'The screen the user is looking at',
+  const screenSection = tagged(
+    'screen',
     joinSections(
-      input.screen.packageName == null ? null : `App: ${input.screen.packageName}`,
-      input.screen.activityName == null ? null : `Screen: ${input.screen.activityName}`,
+      truncateToTokens(toPromptJson(input.screen.uiTree), uiTreeTokens),
       input.screen.screenshotPath == null
         ? null
-        : `A screenshot is available at ${input.screen.screenshotPath}.`,
-      truncateToTokens(toPromptJson(input.screen.uiTree), uiTreeTokens),
+        : `<screenshot path="${input.screen.screenshotPath}" />`,
     ),
+    {
+      app: input.screen.packageName ?? 'unknown',
+      activity: input.screen.activityName,
+    },
   );
 
   const toolSection =
     input.availableTools === undefined || input.availableTools.length === 0
       ? null
-      : section(
-          'Available tools',
+      : tagged(
+          'tools',
           input.availableTools.map((tool) => `- ${tool.name}: ${tool.description}`).join('\n'),
         );
 
   const retrySection =
     input.previousAttempt == null
       ? null
-      : section(
-          'Your previous attempt was rejected',
+      : tagged(
+          'rejected_attempt',
           joinSections(
             input.previousAttempt.output,
             `Problem: ${input.previousAttempt.error}`,

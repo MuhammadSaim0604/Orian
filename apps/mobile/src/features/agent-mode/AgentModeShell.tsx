@@ -30,25 +30,15 @@ import { useHorizontalTransition } from '../shell/useHorizontalTransition';
  */
 export const AgentModeShell = () => {
   const route = useShellStore((state) => state.agentRoute);
-  const navigate = useShellStore((state) => state.navigateAgent);
+  const push = useShellStore((state) => state.pushAgent);
+  const back = useShellStore((state) => state.back);
+  const navDirection = useShellStore((state) => state.navDirection);
 
   const initialise = useSessionStore((state) => state.initialise);
   const sidebarOpen = useSessionStore((state) => state.sidebarOpen);
   const setSidebarOpen = useSessionStore((state) => state.setSidebarOpen);
 
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
-
-  /**
-   * Onboarding, as a screen inside the mode.
-   *
-   * Local state rather than a shell route, because the shell's `AgentRoute` union is part of the navigation
-   * contract and this is a detour rather than a destination — `back()` from here should return to the chat, which
-   * is what local state gives without teaching the route store a new case.
-   *
-   * Deliberately **not** `resetOnboarding()`, which would send the user through welcome and the mode switcher and
-   * lose the conversation they were in.
-   */
-  const [onboardingOpen, setOnboardingOpen] = useState(false);
 
   useEffect(() => {
     // Loads the session list and opens the most recent, creating one if there are none. Runs on entering the mode
@@ -57,32 +47,39 @@ export const AgentModeShell = () => {
   }, [initialise]);
 
   /**
-   * Which way a transition should read.
+   * Which way the transition reads, taken from the navigation rather than from the destination.
    *
-   * Chat is the mode's home, so anything leaving it goes forward and anything returning goes back. The onboarding
-   * detour is keyed in as its own screen, or moving to it would reuse the chat's transition and not animate.
+   * This is the fix for the reported wrong-direction bug. Direction used to be derived from *which screen* was
+   * being shown — anything that was not the chat counted as forward — so returning from tools to settings slid
+   * in from the right like a push. The store now records what the user did, and a pop is always backward.
    */
-  const screen = onboardingOpen ? 'onboarding' : route.kind;
-  const direction = screen === 'chat' || screen === 'sessions' ? 'backward' : 'forward';
-  const transition = useHorizontalTransition(screen, direction);
+  const transition = useHorizontalTransition(route.kind, navDirection);
 
   const closeSidebar = useCallback(() => setSidebarOpen(false), [setSidebarOpen]);
+
+  /** Opens a screen from the sidebar: dismiss the panel, then push, so back returns to the chat. */
+  const openFromSidebar = useCallback(
+    (target: 'onboarding' | 'settings') => {
+      setSidebarOpen(false);
+      push({ kind: target });
+    },
+    [push, setSidebarOpen],
+  );
 
   return (
     <View className="flex-1 bg-background">
       <Animated.View className="flex-1" style={transition}>
-        {onboardingOpen ? (
-          <PermissionSetupScreen
-            onContinue={() => setOnboardingOpen(false)}
-            onBack={() => setOnboardingOpen(false)}
-          />
+        {route.kind === 'onboarding' ? (
+          // A route now, not local state. As state the back button could not see it and fell through to the
+          // mode's own case, which sent the user to the switcher — the reported bug.
+          //
+          // Deliberately **not** `resetOnboarding()`, which would send them through welcome and the mode
+          // switcher and lose the conversation they were in.
+          <PermissionSetupScreen onContinue={back} onBack={back} />
         ) : route.kind === 'settings' ? (
-          <AgentSettingsScreen
-            onBack={() => navigate({ kind: 'chat' })}
-            onOpenTools={() => navigate({ kind: 'tools' })}
-          />
+          <AgentSettingsScreen onBack={back} onOpenTools={() => push({ kind: 'tools' })} />
         ) : route.kind === 'tools' ? (
-          <AgentToolsScreen onBack={() => navigate({ kind: 'settings' })} />
+          <AgentToolsScreen onBack={back} />
         ) : (
           // `sessions` falls through to the chat, because the session list is a panel rather than a screen. The
           // route is kept in the union so a future wide-screen layout could render it inline.
@@ -106,8 +103,8 @@ export const AgentModeShell = () => {
       <Modal visible={sidebarOpen} transparent animationType="none" onRequestClose={closeSidebar}>
         <SessionSidebar
           onClose={closeSidebar}
-          onOpenOnboarding={() => setOnboardingOpen(true)}
-          onOpenSettings={() => navigate({ kind: 'settings' })}
+          onOpenOnboarding={() => openFromSidebar('onboarding')}
+          onOpenSettings={() => openFromSidebar('settings')}
         />
       </Modal>
 

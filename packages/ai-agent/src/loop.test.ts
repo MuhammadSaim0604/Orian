@@ -83,6 +83,20 @@ const deps = (
   observe: () => Promise<Observation> = async () => observation(),
 ): AgentDependencies => ({ provider, tools, observe });
 
+/**
+ * Runs the agent with planning forced on.
+ *
+ * Planning is now a judgement made from the goal — a plan for "call 0000" cost a round trip and told the user
+ * nothing — so most of the goals in this file ("x", "Open WhatsApp") would no longer be planned. Every test
+ * below that scripts a `plan(...)` response is about what the loop does *with* a plan, not about whether one
+ * is made, so the decision is pinned here rather than woven into each case.
+ *
+ * `skipPlanning: false` is the explicit "plan anyway" override. Options spread last, so a test can still say
+ * otherwise.
+ */
+const run = (dependencies: AgentDependencies, options: Parameters<typeof runAgent>[1]) =>
+  runAgent(dependencies, { skipPlanning: false, ...options });
+
 describe('a simple run', () => {
   it('plans, acts, and finishes', async () => {
     const provider = scriptedProvider([
@@ -92,7 +106,7 @@ describe('a simple run', () => {
     ]);
     const device = recordingDevice({ openApp: () => undefined });
 
-    const result = await runAgent(deps(provider, device), { goal: 'Open WhatsApp' });
+    const result = await run(deps(provider, device), { goal: 'Open WhatsApp' });
 
     expect(result.outcome).toBe('succeeded');
     expect(result.stepsTaken).toBe(1);
@@ -103,7 +117,7 @@ describe('a simple run', () => {
   it('can skip planning for a single obvious action', async () => {
     const provider = scriptedProvider([toolCall('pressHome', {}), prose('Done.')]);
 
-    const result = await runAgent(deps(provider, recordingDevice()), {
+    const result = await run(deps(provider, recordingDevice()), {
       goal: 'Go home',
       skipPlanning: true,
     });
@@ -117,7 +131,7 @@ describe('a simple run', () => {
     const events: AgentEvent[] = [];
     const provider = scriptedProvider([plan('step one', 'step two'), prose('Done.')]);
 
-    const result = await runAgent(deps(provider, recordingDevice()), {
+    const result = await run(deps(provider, recordingDevice()), {
       goal: 'Do something',
       onEvent: (event) => events.push(event),
     });
@@ -138,7 +152,7 @@ describe('a simple run', () => {
       },
     };
 
-    const result = await runAgent(deps(provider, recordingDevice()), { goal: 'Do something' });
+    const result = await run(deps(provider, recordingDevice()), { goal: 'Do something' });
 
     expect(result.outcome).toBe('succeeded');
     expect(result.memory.plan).toEqual([]);
@@ -157,7 +171,7 @@ describe('observation', () => {
       prose('Done.'),
     ]);
 
-    const result = await runAgent(
+    const result = await run(
       deps(provider, recordingDevice({ click: () => undefined }), async () => {
         reads++;
         return observation();
@@ -174,7 +188,7 @@ describe('observation', () => {
     const events: AgentEvent[] = [];
     const provider = scriptedProvider([plan('a'), prose('Done.')]);
 
-    await runAgent(deps(provider, recordingDevice()), {
+    await run(deps(provider, recordingDevice()), {
       goal: 'Look',
       onEvent: (event) => events.push(event),
     });
@@ -188,7 +202,7 @@ describe('observation', () => {
   it('includes the current screen in the prompt', async () => {
     const provider = scriptedProvider([plan('a'), prose('Done.')]);
 
-    await runAgent(deps(provider, recordingDevice()), { goal: 'Look' });
+    await run(deps(provider, recordingDevice()), { goal: 'Look' });
 
     // The second request is the action turn; the first was planning.
     const actionRequest = provider.requests[1]!;
@@ -210,7 +224,7 @@ describe('tool call validation', () => {
     ]);
     const device = recordingDevice({ click: () => undefined });
 
-    await runAgent(deps(provider, device), { goal: 'Tap send' });
+    await run(deps(provider, device), { goal: 'Tap send' });
 
     // Only the valid call reached the device.
     expect(device.calls).toHaveLength(1);
@@ -224,7 +238,7 @@ describe('tool call validation', () => {
       prose('Done.'),
     ]);
 
-    await runAgent(deps(provider, recordingDevice()), { goal: 'Message Robert' });
+    await run(deps(provider, recordingDevice()), { goal: 'Message Robert' });
 
     // The turn after the rejection carries the correction.
     const retryContent = provider.requests[2]!.messages.map((m) => m.content).join('\n');
@@ -242,7 +256,7 @@ describe('tool call validation', () => {
       prose('Done.'),
     ]);
 
-    const result = await runAgent(deps(provider, recordingDevice({ click: () => undefined })), {
+    const result = await run(deps(provider, recordingDevice({ click: () => undefined })), {
       goal: 'Tap send',
     });
 
@@ -253,7 +267,7 @@ describe('tool call validation', () => {
     // Further attempts spend the user's money without progress.
     const provider = scriptedProvider([plan('a'), toolCall('notATool', {})]);
 
-    const result = await runAgent(deps(provider, recordingDevice()), { goal: 'Do something' });
+    const result = await run(deps(provider, recordingDevice()), { goal: 'Do something' });
 
     expect(result.outcome).toBe('failed');
     expect(result.summary).toContain('could not produce a valid action');
@@ -264,7 +278,7 @@ describe('tool call validation', () => {
     const events: AgentEvent[] = [];
     const provider = scriptedProvider([plan('a'), toolCall('nope', {}), prose('Done.')]);
 
-    await runAgent(deps(provider, recordingDevice()), {
+    await run(deps(provider, recordingDevice()), {
       goal: 'x',
       onEvent: (event) => events.push(event),
     });
@@ -292,7 +306,7 @@ describe('tool call validation', () => {
     ]);
     const device = recordingDevice({ click: () => undefined });
 
-    await runAgent(deps(provider, device), { goal: 'Tap' });
+    await run(deps(provider, device), { goal: 'Tap' });
 
     expect(device.calls).toHaveLength(1);
     expect(device.calls[0]?.args).toEqual({ selector: { text: 'A' } });
@@ -303,7 +317,7 @@ describe('bounds', () => {
   it('stops at the step ceiling', async () => {
     const provider = scriptedProvider([plan('a'), toolCall('swipe', { direction: 'down' })]);
 
-    const result = await runAgent(deps(provider, recordingDevice({ swipe: () => undefined })), {
+    const result = await run(deps(provider, recordingDevice({ swipe: () => undefined })), {
       goal: 'Scroll forever',
       maxSteps: 5,
     });
@@ -319,7 +333,7 @@ describe('bounds', () => {
     let clock = 0;
     const provider = scriptedProvider([plan('a'), toolCall('swipe', { direction: 'down' })]);
 
-    const result = await runAgent(
+    const result = await run(
       {
         ...deps(provider, recordingDevice({ swipe: () => undefined })),
         now: () => {
@@ -340,7 +354,7 @@ describe('bounds', () => {
 
     const provider = scriptedProvider([plan('a'), prose('Done.')]);
 
-    const result = await runAgent(deps(provider, recordingDevice()), {
+    const result = await run(deps(provider, recordingDevice()), {
       goal: 'x',
       signal: controller.signal,
       skipPlanning: true,
@@ -362,7 +376,7 @@ describe('bounds', () => {
       },
     };
 
-    const result = await runAgent(deps(provider, device), {
+    const result = await run(deps(provider, device), {
       goal: 'x',
       signal: controller.signal,
       skipPlanning: true,
@@ -389,7 +403,7 @@ describe('failure and replanning', () => {
       },
     };
 
-    const result = await runAgent(deps(provider, device), { goal: 'Tap missing' });
+    const result = await run(deps(provider, device), { goal: 'Tap missing' });
 
     expect(result.stepsTaken).toBe(1);
     expect(result.memory.steps[0]?.outcome).toBe('failed');
@@ -413,7 +427,7 @@ describe('failure and replanning', () => {
       },
     };
 
-    await runAgent(deps(provider, device), {
+    await run(deps(provider, device), {
       goal: 'x',
       onEvent: (event) => events.push(event),
     });
@@ -433,7 +447,7 @@ describe('failure and replanning', () => {
       prose('Done.'),
     ]);
 
-    await runAgent(deps(provider, recordingDevice({ click: () => undefined })), {
+    await run(deps(provider, recordingDevice({ click: () => undefined })), {
       goal: 'x',
       maxSteps: 8,
       onEvent: (event) => events.push(event),
@@ -456,7 +470,7 @@ describe('failure and replanning', () => {
     };
 
     await expect(
-      runAgent(deps(provider, recordingDevice()), { goal: 'x', skipPlanning: true }),
+      run(deps(provider, recordingDevice()), { goal: 'x', skipPlanning: true }),
     ).rejects.toThrow(/bad key/);
   });
 });
@@ -470,7 +484,7 @@ describe('the recorder seam', () => {
       prose('Done.'),
     ]);
 
-    await runAgent(deps(provider, recordingDevice({ click: () => undefined })), {
+    await run(deps(provider, recordingDevice({ click: () => undefined })), {
       goal: 'Tap send',
       onEvent: (event) => events.push(event),
     });
@@ -491,7 +505,7 @@ describe('the recorder seam', () => {
       prose('Done.'),
     ]);
 
-    await runAgent(deps(provider, recordingDevice({ click: () => undefined })), {
+    await run(deps(provider, recordingDevice({ click: () => undefined })), {
       goal: 'Tap send',
       onEvent: (event) => events.push(event),
     });
@@ -520,7 +534,7 @@ describe('the recorder seam', () => {
       prose('Done.'),
     ]);
 
-    await runAgent(
+    await run(
       deps(
         provider,
         recordingDevice({
@@ -560,7 +574,7 @@ describe('the recorder seam', () => {
       },
     };
 
-    await runAgent(deps(provider, device), {
+    await run(deps(provider, device), {
       goal: 'x',
       onEvent: (event) => events.push(event),
     });
@@ -579,7 +593,7 @@ describe('the recorder seam', () => {
     // Abandoning a run because a log view has a bug would leave the phone half-done.
     const provider = scriptedProvider([plan('a'), toolCall('pressBack', {}), prose('Done.')]);
 
-    const result = await runAgent(deps(provider, recordingDevice()), {
+    const result = await run(deps(provider, recordingDevice()), {
       goal: 'x',
       onEvent: () => {
         throw new Error('listener bug');
@@ -593,7 +607,7 @@ describe('the recorder seam', () => {
     const events: AgentEvent[] = [];
     const provider = scriptedProvider([plan('a'), prose('Done.')]);
 
-    await runAgent(deps(provider, recordingDevice()), {
+    await run(deps(provider, recordingDevice()), {
       goal: 'x',
       onEvent: (event) => events.push(event),
     });
@@ -606,7 +620,7 @@ describe('the recorder seam', () => {
     const events: AgentEvent[] = [];
     const provider = scriptedProvider([plan('a'), prose('Done.')]);
 
-    const result = await runAgent(deps(provider, recordingDevice()), {
+    const result = await run(deps(provider, recordingDevice()), {
       goal: 'x',
       onEvent: (event) => events.push(event),
     });
@@ -626,7 +640,7 @@ describe('the recorder seam', () => {
       prose('Done.'),
     ]);
 
-    await runAgent(deps(provider, recordingDevice({ openApp: () => undefined })), {
+    await run(deps(provider, recordingDevice({ openApp: () => undefined })), {
       goal: 'x',
       onEvent: (event) => events.push(event),
     });
@@ -644,7 +658,7 @@ describe('the recorder seam', () => {
     const events: AgentEvent[] = [];
     const provider = scriptedProvider([prose('not json at all'), prose('Nothing to do.')]);
 
-    await runAgent(deps(provider, recordingDevice()), {
+    await run(deps(provider, recordingDevice()), {
       goal: 'hi',
       onEvent: (event) => events.push(event),
     });
@@ -657,7 +671,7 @@ describe('the recorder seam', () => {
     const events: AgentEvent[] = [];
     const provider = scriptedProvider([plan('open the app', 'find the contact'), prose('Done.')]);
 
-    await runAgent(deps(provider, recordingDevice()), {
+    await run(deps(provider, recordingDevice()), {
       goal: 'message Robert',
       onEvent: (event) => events.push(event),
     });
@@ -674,7 +688,7 @@ describe('the recorder seam', () => {
     const events: AgentEvent[] = [];
     const provider = scriptedProvider([plan('a'), prose('Everything is already done.')]);
 
-    const result = await runAgent(deps(provider, recordingDevice()), {
+    const result = await run(deps(provider, recordingDevice()), {
       goal: 'x',
       onEvent: (event) => events.push(event),
     });
@@ -697,7 +711,7 @@ describe('the recorder seam', () => {
       prose('Done.'),
     ]);
 
-    await runAgent(deps(provider, recordingDevice()), {
+    await run(deps(provider, recordingDevice()), {
       goal: 'x',
       onEvent: (event) => events.push(event),
     });
@@ -710,7 +724,7 @@ describe('tool restriction', () => {
   it('offers only the allowed tools', async () => {
     const provider = scriptedProvider([plan('a'), prose('Done.')]);
 
-    await runAgent(deps(provider, recordingDevice()), {
+    await run(deps(provider, recordingDevice()), {
       goal: 'Look only',
       allowedTools: ['getUiTree', 'findElement'],
     });
@@ -732,7 +746,7 @@ describe('tool restriction', () => {
     ]);
     const device = recordingDevice({ click: () => undefined });
 
-    await runAgent(deps(provider, device), {
+    await run(deps(provider, device), {
       goal: 'x',
       allowedTools: ['getUiTree'],
       maxSteps: 3,

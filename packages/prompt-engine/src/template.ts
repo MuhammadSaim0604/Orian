@@ -133,6 +133,65 @@ export const section = (label: string, body: string | null | undefined): string 
 };
 
 /**
+ * Renders a block inside an XML-style tag.
+ *
+ * Preferred over {@link section} for anything the model must treat as **data rather than instruction**, and
+ * that distinction is the whole reason this exists.
+ *
+ * A markdown heading is a convention; a tag pair is a delimiter. When a UI tree is introduced by `## Current
+ * screen`, a text node reading `## Goal` inside that tree is indistinguishable from the prompt's own heading —
+ * screen content is arbitrary text from a third-party app, so this is not hypothetical. `<screen>…</screen>`
+ * has an explicit end, and the model can see where the untrusted region stops.
+ *
+ * The models this product targets are also measurably better at attending to tagged regions and at being told
+ * "the element hierarchy is in `<screen>`" than at following prose references to a heading.
+ *
+ * @param attributes rendered as tag attributes, for facts about the block itself — `<screen app="com.whatsapp">`
+ *   keeps metadata out of the body, where it would otherwise have to be prose the model must parse.
+ */
+export const tagged = (
+  tag: string,
+  body: string | null | undefined,
+  attributes: Readonly<Record<string, string | number | null | undefined>> = {},
+): string | null => {
+  if (body == null || body.trim() === '') return null;
+
+  const rendered = Object.entries(attributes)
+    .filter(([, value]) => value != null && String(value).trim() !== '')
+    .map(([name, value]) => ` ${name}="${escapeAttribute(String(value))}"`)
+    .join('');
+
+  return `<${tag}${rendered}>\n${body.trim()}\n</${tag}>`;
+};
+
+/**
+ * Escapes an attribute value.
+ *
+ * Only the quote and the angle brackets, because these are not real XML — nothing parses this — and escaping
+ * ampersands would put `&amp;` in front of a model, which it would read as literal text.
+ */
+const escapeAttribute = (value: string): string =>
+  value.replace(/"/g, "'").replace(/</g, '(').replace(/>/g, ')');
+
+/**
+ * A self-closing tag, for a fact with no body.
+ *
+ * `<budget step="3" of="40" />` rather than a sentence, so the model is not asked to parse prose for a number
+ * it should be reading directly.
+ */
+export const emptyTag = (
+  tag: string,
+  attributes: Readonly<Record<string, string | number | null | undefined>>,
+): string => {
+  const rendered = Object.entries(attributes)
+    .filter(([, value]) => value != null && String(value).trim() !== '')
+    .map(([name, value]) => ` ${name}="${escapeAttribute(String(value))}"`)
+    .join('');
+
+  return `<${tag}${rendered} />`;
+};
+
+/**
  * Renders a numbered list, or nothing when empty.
  *
  * Numbered rather than bulleted because the agent's plan and memory are sequences,

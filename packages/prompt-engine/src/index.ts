@@ -32,6 +32,7 @@ export {
   type RenderedPrompt,
   assistantMessage,
   defineTemplate,
+  emptyTag,
   estimateMessagesTokens,
   estimateTokens,
   joinSections,
@@ -39,6 +40,7 @@ export {
   renderPrompt,
   section,
   systemMessage,
+  tagged,
   toolMessage,
   userMessage,
 } from './template';

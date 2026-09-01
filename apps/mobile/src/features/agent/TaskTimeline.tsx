@@ -2,15 +2,13 @@ import {
   AlertCircleIcon,
   CheckCircleIcon,
   ChevronDownIcon,
-  ChevronUpIcon,
   CircleIcon,
   RefreshIcon,
   useTheme,
 } from '@mobile-automation/ui';
-import { useEffect, useRef, useState } from 'react';
-import { Animated, Easing, Pressable, Text, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Animated, Easing, type LayoutChangeEvent, Pressable, Text, View } from 'react-native';
 
-import { animateNextLayout } from './animateLayout';
 import { type Task, type TaskList, currentTask, taskPositionLabel } from './taskList';
 
 /**
@@ -186,78 +184,158 @@ export interface PinnedTaskCardProps {
  * The current task, pinned beneath the header, expanding into the full timeline.
  *
  * Pinned because the plan scrolls away the moment the agent starts working, and "what is it doing now" is the
- * question a user asks continuously while watching their phone be driven. Collapsed by default so it costs one
- * line; expanded on a tap, animated, because a card that jumps to full height moves the conversation under the
- * user's eyes.
+ * question a user asks continuously while watching their phone be driven.
+ *
+ * ## Why the expanded panel floats rather than growing the card
+ *
+ * Device testing reported two things about expanding it, and they have one cause. It snapped open with no
+ * motion, and it pushed the whole conversation down.
+ *
+ * Both came from the expanded timeline being an ordinary child: mounting it changed the card's height, which
+ * changed the layout of everything below it. `LayoutAnimation` was meant to smooth that, but it animates the
+ * *surrounding* layout — so even at its best the fix was animating the chat rather than the card, which is the
+ * behaviour that was reported as wrong. A panel that displaces the content behind it is also just the wrong
+ * model for this: it is a disclosure over the conversation, not a section of it.
+ *
+ * So the panel is **absolutely positioned** and out of flow. Nothing below it moves, at all, ever. It reveals
+ * itself by sliding down from behind the card with a `translateY` on the **native driver**, which matters
+ * during a run: the JS thread is the one driving the phone, and a per-frame layout pass there is stealing time
+ * from the automation.
+ *
+ * The panel is laid out at its natural height from the first render and only measured once, which is what lets
+ * the slide be a transform rather than an animated height. An animated height cannot use the native driver and
+ * would make the timeline re-measure every frame.
  */
 export const PinnedTaskCard = ({ list }: PinnedTaskCardProps) => {
   const { theme } = useTheme();
   const [expanded, setExpanded] = useState(false);
 
+  /** Natural height of the timeline, measured once so the slide can be a transform. */
+  const [panelHeight, setPanelHeight] = useState(0);
+
+  const reveal = useRef(new Animated.Value(0)).current;
+
   const active = currentTask(list);
 
-  /**
-   * Expanded by mounting, with the platform animating the surrounding layout.
-   *
-   * Not an animated `maxHeight`, which is what this used to be and what made the conversation jitter: the content
-   * lays out at full height immediately while the clamp grows, so the scroll view's content size jumps in one frame
-   * and everything below shifts. `maxHeight` also cannot use the native driver, so every frame was a JS-thread
-   * layout pass — during a run, on the thread driving the phone.
-   */
-  const toggle = () => {
-    animateNextLayout(EXPAND_MS);
-    setExpanded((current) => !current);
-  };
+  useEffect(() => {
+    Animated.timing(reveal, {
+      toValue: expanded ? 1 : 0,
+      duration: EXPAND_MS,
+      // Decelerating out, accelerating in: opening should feel like it settles, closing like it is dismissed.
+      easing: expanded ? Easing.out(Easing.cubic) : Easing.in(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [expanded, reveal]);
+
+  const onMeasure = useCallback(
+    (event: LayoutChangeEvent) => {
+      const measured = Math.round(event.nativeEvent.layout.height);
+
+      // Only ever grows, and only from zero to a real measurement. A remeasure mid-animation would move the
+      // clip while the panel slides through it, which reads as a stutter.
+      if (measured > 0 && measured !== panelHeight) setPanelHeight(measured);
+    },
+    [panelHeight],
+  );
 
   return (
-    // `overflow-hidden` sits on the card, whose height changes only when the platform animates it — it is here to
-    // keep the progress rail inside the rounded corners.
-    <View className="mx-3 mt-2 overflow-hidden rounded-xl border border-border bg-surface">
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={
-          active === null
-            ? `Plan, ${taskPositionLabel(list)}, ${expanded ? 'collapse' : 'expand'}`
-            : `Current task: ${active.text}. ${expanded ? 'Collapse' : 'Expand'} the plan`
-        }
-        accessibilityState={{ expanded }}
-        onPress={toggle}
-        style={{ minHeight: MIN_TOUCH_TARGET }}
-        className="flex-row items-center gap-2 px-3"
-      >
-        {/* The chevron leads, because it is the affordance — putting it on the far right of a card whose text
-            length varies makes it look like part of the text. */}
-        {expanded ? (
-          <ChevronUpIcon size={16} color={theme.colors.textSecondary} />
-        ) : (
-          <ChevronDownIcon size={16} color={theme.colors.textSecondary} />
-        )}
+    // `zIndex` and `elevation` together: iOS orders by the first, Android draws by the second, and the floating
+    // panel has to be above the conversation on both.
+    <View className="mx-3 mt-2" style={{ zIndex: 20, elevation: 20 }}>
+      <View className="overflow-hidden rounded-xl border border-border bg-surface">
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={
+            active === null
+              ? `Plan, ${taskPositionLabel(list)}, ${expanded ? 'collapse' : 'expand'}`
+              : `Current task: ${active.text}. ${expanded ? 'Collapse' : 'Expand'} the plan`
+          }
+          accessibilityState={{ expanded }}
+          onPress={() => setExpanded((current) => !current)}
+          style={{ minHeight: MIN_TOUCH_TARGET }}
+          className="flex-row items-center gap-2 px-3"
+        >
+          {/* The chevron leads, because it is the affordance — putting it on the far right of a card whose text
+              length varies makes it look like part of the text. Rotated rather than swapped, so the state change
+              is a movement the eye follows rather than two icons that happen to differ. */}
+          <Animated.View
+            style={{
+              transform: [
+                {
+                  rotate: reveal.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: ['0deg', '180deg'],
+                  }),
+                },
+              ],
+            }}
+          >
+            <ChevronDownIcon size={16} color={theme.colors.textSecondary} />
+          </Animated.View>
 
-        <View className="flex-1 py-2">
-          <Text className="text-xs font-medium uppercase tracking-wide text-text-muted">
-            {list.isReplan ? 'New plan' : 'Plan'} · {taskPositionLabel(list)}
-          </Text>
+          <View className="flex-1 py-2">
+            <Text className="text-xs font-medium uppercase tracking-wide text-text-muted">
+              {list.isReplan ? 'New plan' : 'Plan'} · {taskPositionLabel(list)}
+            </Text>
 
-          <Text numberOfLines={expanded ? undefined : 1} className="text-sm text-text-primary">
-            {active?.text ?? 'Finished'}
-          </Text>
+            <Text numberOfLines={1} className="text-sm text-text-primary">
+              {active?.text ?? 'Finished'}
+            </Text>
+          </View>
+        </Pressable>
+
+        {/* A progress rail rather than a percentage: the fraction of a plan completed is a feeling, not a number
+            anyone acts on. */}
+        <View className="h-0.5 bg-surface-muted">
+          <View
+            className="h-0.5 bg-primary"
+            style={{ width: `${Math.round(fractionDone(list) * 100)}%` }}
+          />
         </View>
-      </Pressable>
-
-      {/* A progress rail rather than a percentage: the fraction of a plan completed is a feeling, not a number
-          anyone acts on. */}
-      <View className="h-0.5 bg-surface-muted">
-        <View
-          className="h-0.5 bg-primary"
-          style={{ width: `${Math.round(fractionDone(list) * 100)}%` }}
-        />
       </View>
 
-      {expanded && (
-        <View style={{ padding: theme.spacing[3] }}>
+      {/* Out of flow, clipped to the measured height, sliding out from behind the card above it.
+          `pointerEvents` follows the state so a collapsed panel cannot swallow taps meant for the conversation
+          it is invisibly covering. */}
+      <View
+        pointerEvents={expanded ? 'auto' : 'none'}
+        style={{
+          position: 'absolute',
+          top: '100%',
+          left: 0,
+          right: 0,
+          height: panelHeight === 0 ? undefined : panelHeight,
+          overflow: 'hidden',
+        }}
+      >
+        <Animated.View
+          onLayout={onMeasure}
+          className="rounded-b-xl border-x border-b border-border bg-surface"
+          style={{
+            padding: theme.spacing[3],
+            // Shadowed, because it is floating over the conversation and a flat panel would look like part of
+            // a scrolled list.
+            shadowColor: '#000',
+            shadowOpacity: 0.18,
+            shadowRadius: 8,
+            shadowOffset: { width: 0, height: 4 },
+            elevation: 8,
+            opacity: reveal,
+            transform: [
+              {
+                translateY: reveal.interpolate({
+                  inputRange: [0, 1],
+                  // From fully behind the card to its resting place. Before measurement the offset is a guess
+                  // that is never seen, since opacity is zero until the first reveal.
+                  outputRange: [-(panelHeight || ESTIMATED_PANEL_HEIGHT), 0],
+                }),
+              },
+            ],
+          }}
+        >
           <TaskTimeline list={list} compact />
-        </View>
-      )}
+        </Animated.View>
+      </View>
     </View>
   );
 };
@@ -287,5 +365,13 @@ const toneFor = (
 const PULSE_MS = 700;
 
 const EXPAND_MS = 220;
+
+/**
+ * Assumed panel height for the very first reveal.
+ *
+ * Only used before `onLayout` has measured anything, and never visible: opacity is zero at that point, so the
+ * offset only has to be large enough that the panel starts out of sight.
+ */
+const ESTIMATED_PANEL_HEIGHT = 240;
 
 const MIN_TOUCH_TARGET = 48;

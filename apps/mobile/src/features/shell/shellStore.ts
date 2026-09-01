@@ -35,7 +35,15 @@ export type AgentRoute =
   | { readonly kind: 'chat' }
   | { readonly kind: 'sessions' }
   | { readonly kind: 'tools' }
-  | { readonly kind: 'settings' };
+  | { readonly kind: 'settings' }
+  /**
+   * The permission screen, reached from the sidebar.
+   *
+   * A real route rather than local component state, which is what it used to be. As state it was invisible to
+   * `back()`, so the Android back button fell through to the mode's own case and sent the user to the switcher —
+   * one of the two reported navigation bugs. Anything the back button must understand has to live in the store.
+   */
+  | { readonly kind: 'onboarding' };
 
 /** Routes inside Workflow Mode. Steps 6–10 fill these in. */
 export type WorkflowRoute =
@@ -51,11 +59,35 @@ export type WorkflowRoute =
 export const AGENT_HOME: AgentRoute = { kind: 'chat' };
 export const WORKFLOW_HOME: WorkflowRoute = { kind: 'list' };
 
+/**
+ * Which way a transition should read.
+ *
+ * Derived from the navigation itself rather than from the destination, which is the fix for the second reported
+ * bug: leaving the tools screen animated right-to-left, like going forward, because direction was computed from
+ * a list of "screens that are not home". Settings is not home either, so returning from tools to settings was
+ * classified as forward.
+ *
+ * Now `push` marks forward and `back`/`pop` mark backward, so the motion always matches what the user did.
+ */
+export type NavDirection = 'forward' | 'backward';
+
 export type ShellState = {
   readonly route: ShellRoute;
   /** Agent Mode's own route, held even while Workflow Mode is active. */
   readonly agentRoute: AgentRoute;
   readonly workflowRoute: WorkflowRoute;
+  /**
+   * Screens behind the current one, oldest first.
+   *
+   * A real stack, because the reported bugs were both the absence of one: back from the tools screen went to
+   * the mode switcher rather than to the settings screen it was opened from. `back()` used to reset to home,
+   * which is only correct when home is where you came from.
+   *
+   * Held per mode and cleared on leaving, since a stack that survived a mode switch would take the user back
+   * into a mode they had left.
+   */
+  readonly agentStack: readonly AgentRoute[];
+  readonly workflowStack: readonly WorkflowRoute[];
   readonly onboardingComplete: boolean;
   /** The mode last used, for highlighting on the switcher. Never restored as a route. */
   readonly lastMode: AppMode | null;
@@ -63,6 +95,8 @@ export type ShellState = {
   readonly themePreference: ThemePreference;
   /** True while a mode transition animation is running. */
   readonly transitioning: boolean;
+  /** Which way the last in-mode navigation went, for the slide direction. */
+  readonly navDirection: NavDirection;
 };
 
 export type ShellActions = {
@@ -77,8 +111,21 @@ export type ShellActions = {
   /** Switches directly to the other mode, from inside a mode's settings. */
   switchMode: () => void;
 
+  /**
+   * Replaces the current Agent Mode route without stacking it.
+   *
+   * For a lateral move, where the screen being left is not somewhere back should return to.
+   */
   navigateAgent: (route: AgentRoute) => void;
   navigateWorkflow: (route: WorkflowRoute) => void;
+
+  /** Pushes a route, remembering the current one so back returns to it. */
+  pushAgent: (route: AgentRoute) => void;
+  pushWorkflow: (route: WorkflowRoute) => void;
+
+  /** Pops one route, returning whether there was one to pop. */
+  popAgent: () => boolean;
+  popWorkflow: () => boolean;
 
   setThemePreference: (theme: ThemePreference) => void;
   setTransitioning: (transitioning: boolean) => void;
@@ -101,10 +148,13 @@ const initialState = (): ShellState => {
     route: preferences.onboardingComplete ? { kind: 'switcher' } : { kind: 'onboarding' },
     agentRoute: AGENT_HOME,
     workflowRoute: WORKFLOW_HOME,
+    agentStack: [],
+    workflowStack: [],
     onboardingComplete: preferences.onboardingComplete,
     lastMode: preferences.lastMode,
     themePreference: preferences.themePreference,
     transitioning: false,
+    navDirection: 'forward',
   };
 };
 
@@ -124,13 +174,16 @@ export const useShellStore = create<ShellState & ShellActions>((set, get) => ({
   },
 
   enterMode: (mode) => {
-    // Each mode always opens at its home. The in-mode route is deliberately not restored:
+    // Each mode always opens at its home, with an empty stack. The in-mode route is deliberately not restored:
     // reopening into a canvas whose workflow may have changed on disk is a bug waiting to happen.
     set({
       route: { kind: 'mode', mode },
       lastMode: mode,
       agentRoute: mode === 'agent' ? AGENT_HOME : get().agentRoute,
       workflowRoute: mode === 'workflow' ? WORKFLOW_HOME : get().workflowRoute,
+      agentStack: mode === 'agent' ? [] : get().agentStack,
+      workflowStack: mode === 'workflow' ? [] : get().workflowStack,
+      navDirection: 'forward',
     });
 
     void writeLastMode(mode);
@@ -138,21 +191,23 @@ export const useShellStore = create<ShellState & ShellActions>((set, get) => ({
 
   goToSwitcher: () => {
     const current = get().route;
+    const leavingAgent = current.kind === 'mode' && current.mode === 'agent';
+    const leavingWorkflow = current.kind === 'mode' && current.mode === 'workflow';
 
-    // Leaving a mode resets its route, so returning later starts clean rather than in whatever
-    // half-finished state it was abandoned in.
+    // Leaving a mode resets its route and clears its stack, so returning later starts clean rather than in
+    // whatever half-finished state it was abandoned in - and so a later back press cannot walk into a mode the
+    // user has left.
     set({
       route: { kind: 'switcher' },
-      agentRoute:
-        current.kind === 'mode' && current.mode === 'agent' ? AGENT_HOME : get().agentRoute,
-      workflowRoute:
-        current.kind === 'mode' && current.mode === 'workflow'
-          ? WORKFLOW_HOME
-          : get().workflowRoute,
+      agentRoute: leavingAgent ? AGENT_HOME : get().agentRoute,
+      workflowRoute: leavingWorkflow ? WORKFLOW_HOME : get().workflowRoute,
+      agentStack: leavingAgent ? [] : get().agentStack,
+      workflowStack: leavingWorkflow ? [] : get().workflowStack,
+      navDirection: 'backward',
     });
   },
 
-  openRootSettings: () => set({ route: { kind: 'rootSettings' } }),
+  openRootSettings: () => set({ route: { kind: 'rootSettings' }, navDirection: 'forward' }),
 
   switchMode: () => {
     const current = get().route;
@@ -164,9 +219,51 @@ export const useShellStore = create<ShellState & ShellActions>((set, get) => ({
     get().enterMode(current.mode === 'agent' ? 'workflow' : 'agent');
   },
 
-  navigateAgent: (route) => set({ agentRoute: route }),
+  navigateAgent: (route) => set({ agentRoute: route, navDirection: 'forward' }),
 
-  navigateWorkflow: (route) => set({ workflowRoute: route }),
+  navigateWorkflow: (route) => set({ workflowRoute: route, navDirection: 'forward' }),
+
+  pushAgent: (route) =>
+    set((state) => ({
+      agentStack: [...state.agentStack, state.agentRoute],
+      agentRoute: route,
+      navDirection: 'forward',
+    })),
+
+  pushWorkflow: (route) =>
+    set((state) => ({
+      workflowStack: [...state.workflowStack, state.workflowRoute],
+      workflowRoute: route,
+      navDirection: 'forward',
+    })),
+
+  popAgent: () => {
+    const stack = get().agentStack;
+    const previous = stack.at(-1);
+    if (previous === undefined) return false;
+
+    set({
+      agentRoute: previous,
+      agentStack: stack.slice(0, -1),
+      navDirection: 'backward',
+    });
+
+    return true;
+  },
+
+  popWorkflow: () => {
+    const stack = get().workflowStack;
+    const previous = stack.at(-1);
+    if (previous === undefined) return false;
+
+    set({
+      workflowRoute: previous,
+      workflowStack: stack.slice(0, -1),
+      navDirection: 'backward',
+    });
+
+    return true;
+  },
 
   setThemePreference: (theme) => {
     set({ themePreference: theme });
@@ -178,9 +275,13 @@ export const useShellStore = create<ShellState & ShellActions>((set, get) => ({
   /**
    * Handles the Android back button.
    *
-   * Returns whether the press was consumed. Owning this explicitly is the cost of not using a
-   * navigator (ADR 0015), and it is the part most likely to be got wrong — so every route says
-   * where back goes, and the default is to let the system handle it rather than trap the user.
+   * Returns whether the press was consumed. Owning this explicitly is the cost of not using a navigator
+   * (ADR 0015), and it is the part most likely to be got wrong - which it was: back from the tools screen went
+   * to the **mode switcher**, because the mode case reset to home rather than popping.
+   *
+   * It now pops the stack first and only leaves the mode when there is nothing behind the current screen. A
+   * route reached by `navigateAgent` rather than `pushAgent` has nothing behind it and still falls back to
+   * home, which is right for a lateral move.
    */
   back: () => {
     const { route, agentRoute, workflowRoute } = get();
@@ -196,24 +297,30 @@ export const useShellStore = create<ShellState & ShellActions>((set, get) => ({
         return false;
 
       case 'rootSettings':
-        set({ route: { kind: 'switcher' } });
+        set({ route: { kind: 'switcher' }, navDirection: 'backward' });
         return true;
 
       case 'mode': {
         if (route.mode === 'agent') {
+          if (get().popAgent()) return true;
+
           if (agentRoute.kind === AGENT_HOME.kind) {
             get().goToSwitcher();
             return true;
           }
-          set({ agentRoute: AGENT_HOME });
+
+          set({ agentRoute: AGENT_HOME, navDirection: 'backward' });
           return true;
         }
+
+        if (get().popWorkflow()) return true;
 
         if (workflowRoute.kind === WORKFLOW_HOME.kind) {
           get().goToSwitcher();
           return true;
         }
-        set({ workflowRoute: WORKFLOW_HOME });
+
+        set({ workflowRoute: WORKFLOW_HOME, navDirection: 'backward' });
         return true;
       }
     }
@@ -230,3 +337,6 @@ export const selectWorkflowRoute = (state: ShellState): WorkflowRoute => state.w
 /** The mode currently active, or null when the shell is outside a mode. */
 export const selectActiveMode = (state: ShellState): AppMode | null =>
   state.route.kind === 'mode' ? state.route.mode : null;
+
+/** Which way the last in-mode navigation went, for the slide direction. */
+export const selectNavDirection = (state: ShellState): NavDirection => state.navDirection;

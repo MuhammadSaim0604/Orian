@@ -43,8 +43,43 @@ describe('the system prompt', () => {
   });
 
   it('tells the model to read the screen before acting', () => {
-    // Without it, models tap coordinates remembered from a screen two steps old.
-    expect(AGENT_SYSTEM_PROMPT).toMatch(/read the screen before acting/i);
+    // Without it, models tap coordinates remembered from a screen two steps old. Named as the tag rather than
+    // as prose, because that is how the instruction now refers to it and the model must be able to follow the
+    // reference.
+    expect(AGENT_SYSTEM_PROMPT).toMatch(/read <screen> before acting/i);
+  });
+
+  it('is structured into tagged sections rather than one list of rules', () => {
+    // Four different kinds of statement — what it is, how to work, how to see, when to stop — and a flat list
+    // of bullets gives the model no way to tell a hard rule from a hint.
+    for (const tag of [
+      'role',
+      'how_to_work',
+      'identifying_elements',
+      'seeing_the_screen',
+      'finishing',
+      'safety',
+    ]) {
+      expect(AGENT_SYSTEM_PROMPT).toContain(`<${tag}>`);
+      expect(AGENT_SYSTEM_PROMPT).toContain(`</${tag}>`);
+    }
+  });
+
+  it('describes the perception chain in order of cost', () => {
+    // The failure to avoid is a model reaching for a screenshot first because it is the most powerful thing
+    // mentioned. Each rung has to say what it costs, and the cheap one has to come first.
+    const hierarchy = AGENT_SYSTEM_PROMPT.indexOf('element hierarchy in <screen>');
+    const screenshot = AGENT_SYSTEM_PROMPT.indexOf('takeScreenshot');
+
+    expect(hierarchy).toBeGreaterThan(-1);
+    expect(screenshot).toBeGreaterThan(hierarchy);
+    expect(AGENT_SYSTEM_PROMPT).toMatch(/only descend when the one above genuinely fails/i);
+  });
+
+  it('tells the model that answering a question is a complete response', () => {
+    // A question about the screen was being turned into a sequence of actions, because nothing said that
+    // answering is enough.
+    expect(AGENT_SYSTEM_PROMPT).toMatch(/Answering is a complete response/i);
   });
 
   it('states the selector preference order', () => {
@@ -98,7 +133,7 @@ describe('assembly', () => {
   it('puts the current screen last, where recency weighs most', () => {
     const content = userContent(input());
 
-    expect(content.lastIndexOf('## Current screen')).toBeGreaterThan(content.indexOf('## Goal'));
+    expect(content.lastIndexOf('<screen')).toBeGreaterThan(content.indexOf('<goal>'));
   });
 
   it('lists the available tools with their descriptions', () => {
@@ -109,12 +144,32 @@ describe('assembly', () => {
     expect(content).toContain('Wait for an element to appear');
   });
 
+  it('delimits every data block with a closing tag', () => {
+    // The reason the turn is tagged rather than headed: screen content is arbitrary text from a third-party
+    // app, so a UI tree containing "## Goal" is indistinguishable from the prompt's own heading. A tag pair
+    // has an explicit end.
+    const content = userContent(input({ plan: ['open WhatsApp'], memory: [] }));
+
+    for (const tag of ['goal', 'plan', 'tools', 'screen']) {
+      expect(content).toContain(`</${tag}>`);
+    }
+  });
+
   it('handles an unknown foreground app', () => {
     const content = userContent(
       input({ observation: { ...observation, packageName: null, activityName: null } }),
     );
 
-    expect(content).toContain('Unknown app');
+    expect(content).toContain('app="unknown"');
+  });
+
+  it('says so explicitly when the hierarchy is empty', () => {
+    // An empty block reads as a missing section and the model guesses. Naming the situation is what lets it
+    // decide to descend the perception chain rather than acting blind.
+    const content = userContent(input({ observation: { ...observation, uiTree: null } }));
+
+    expect(content).toMatch(/element hierarchy is empty/i);
+    expect(content).toContain('takeScreenshot');
   });
 
   it('mentions a screenshot by path, never by bytes', () => {
@@ -139,23 +194,35 @@ describe('plan and budget', () => {
       input({ plan: ['open WhatsApp', 'search for Robert', 'send the message'] }),
     );
 
-    expect(content).toContain('Your plan');
+    expect(content).toContain('<plan');
     expect(content).toContain('2. search for Robert');
   });
 
+  it('says the plan is a guide rather than a script', () => {
+    // The screen decides what is actually possible. A model treating the plan as a script keeps executing a
+    // step that no longer applies.
+    expect(userContent(input({ plan: ['open WhatsApp'] }))).toContain('not a script');
+  });
+
   it('omits the plan section when there is no plan', () => {
-    expect(userContent(input())).not.toContain('Your plan');
+    expect(userContent(input())).not.toContain('<plan');
   });
 
   it('states the step budget', () => {
-    expect(userContent(input({ stepsTaken: 4, maxSteps: 40 }))).toContain('Step 5 of at most 40');
+    // Attributes rather than a sentence: it is three numbers, and prose asking a model to compare "step 5 of
+    // at most 40" is more work than reading remaining="36".
+    const content = userContent(input({ stepsTaken: 4, maxSteps: 40 }));
+
+    expect(content).toContain('<budget step="5"');
+    expect(content).toContain('max="40"');
+    expect(content).toContain('remaining="36"');
   });
 
   it('warns when the budget is nearly spent', () => {
     // So the model prioritises finishing rather than exploring.
     const content = userContent(input({ stepsTaken: 35, maxSteps: 40 }));
 
-    expect(content).toMatch(/running short of steps/i);
+    expect(content).toMatch(/running short/i);
   });
 
   it('does not warn early in the run', () => {
@@ -180,7 +247,7 @@ describe('memory', () => {
   it('lists what has been done', () => {
     const content = userContent(input({ memory: [entry(1), entry(2)] }));
 
-    expect(content).toContain('What you have done so far');
+    expect(content).toContain('<history');
     expect(content).toContain('1. click');
   });
 
@@ -210,7 +277,9 @@ describe('memory', () => {
 
     const content = userContent(input({ memory: many }));
 
-    expect(content).toMatch(/earlier steps? omitted/i);
+    // An attribute rather than a parenthetical, so the count is a fact about the block rather than a line the
+    // model might read as history itself.
+    expect(content).toMatch(/omitted="\d+"/);
   });
 
   it('keeps the most recent steps when trimming', () => {

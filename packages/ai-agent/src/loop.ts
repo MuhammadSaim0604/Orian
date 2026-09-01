@@ -20,6 +20,7 @@ import {
   toolExecutedEvent,
 } from './events';
 import { AgentMemory, describeScreen } from './memory';
+import { decidePlanning } from './planning';
 import { type ModelProvider, ProviderError, isProviderError } from './provider';
 
 /**
@@ -62,7 +63,15 @@ export type AgentRunOptions = {
 
   readonly onEvent?: AgentEventListener;
 
-  /** Skips the planning turn, for a single obvious action. */
+  /**
+   * Forces the planning decision.
+   *
+   * Omitted normally, and that is the intended use: {@link decidePlanning} judges from the goal, because a
+   * plan for "call 0000" costs a round trip before anything happens and puts a card in the transcript saying
+   * nothing the user did not just type.
+   *
+   * `false` skips planning outright. `true` forces it, for a caller that knows more than the goal text does.
+   */
   readonly skipPlanning?: boolean;
 
   /**
@@ -177,12 +186,31 @@ export const runAgent = async (
   let lastRejection: string | null = null;
 
   try {
-    if (options.skipPlanning !== true) {
+    /**
+     * Planned only when the goal warrants it.
+     *
+     * `skipPlanning` still wins when given, but the default is now a judgement rather than "always plan".
+     * Device testing found a task list generated for "call 0000" - one tool call, presented as a project -
+     * and the cost is not only cosmetic: it is a model round trip before the first action on exactly the
+     * goals that should feel immediate.
+     *
+     * Biased toward not planning, because the failure is asymmetric. An unplanned complex goal still works:
+     * the loop observes, acts, and replans if it gets stuck, since a plan was never what made the agent
+     * capable. A planned simple goal wastes a call and shows the user a plan for something they described in
+     * four words.
+     */
+    const planningDecision = decidePlanning(options.goal);
+
+    // `skipPlanning` is a three-state override: true forces off, false forces on, absent defers to the goal.
+    const shouldPlan =
+      options.skipPlanning === undefined ? planningDecision.needsPlan : !options.skipPlanning;
+
+    if (shouldPlan) {
       const plan = await makePlan(dependencies, options.goal, toolDefinitions, signal);
       memory.setPlan(plan);
 
       // Only when there is a plan. `makePlan` returns an empty list when planning fails or when the goal is
-      // conversational enough that the model has nothing to plan — and an empty `planned` event is not
+      // conversational enough that the model has nothing to plan - and an empty `planned` event is not
       // information, it is a header with nothing under it. Consumers rendering it produced a bare "Plan:" line.
       if (plan.length > 0) {
         events.emit({
@@ -227,19 +255,31 @@ export const runAgent = async (
         screenshotPath: observation.screenshotPath ?? null,
       });
 
-      const stuck = memory.isStuck();
-      if (stuck.stuck) {
+      /**
+       * One replan decision per iteration, taken before the model is asked anything.
+       *
+       * There used to be two: `isStuck()` here and `shouldReplan()` after a failed step. Both were pure
+       * predicates over unchanged history, so a single stall satisfied them on **every** turn until
+       * something moved - which is the "new plan every second turn" that was reported. Each one cost a model
+       * call and added a plan card the user had to read.
+       *
+       * `claimReplan()` answers once and records that it did, so a continuing condition is responded to
+       * once, and a run is capped at `MAX_REPLANS` changes of approach.
+       */
+      const replan = memory.claimReplan();
+
+      if (replan.replan) {
         events.emit({
           type: 'replanning',
           runId,
           timestampEpochMs: now(),
-          reason: stuck.reason!,
+          reason: replan.reason!,
           stepsTaken: memory.stepCount,
         });
 
         const plan = await makePlan(
           dependencies,
-          `${options.goal}\n\nThe previous approach is not working: ${stuck.reason}. ` +
+          `${options.goal}\n\nThe previous approach is not working: ${replan.reason}. ` +
             `${memory.summarise()} Plan a different approach.`,
           toolDefinitions,
           signal,
@@ -393,32 +433,9 @@ export const runAgent = async (
         screenAfter,
       });
 
-      if (failure !== null && memory.shouldReplan()) {
-        events.emit({
-          type: 'replanning',
-          runId,
-          timestampEpochMs: now(),
-          reason: `${memory.consecutiveFailures()} steps in a row failed`,
-          stepsTaken: memory.stepCount,
-        });
-
-        const plan = await makePlan(
-          dependencies,
-          `${options.goal}\n\n${memory.summarise()} Plan how to recover.`,
-          toolDefinitions,
-          signal,
-        );
-
-        memory.setPlan(plan);
-
-        events.emit({
-          type: 'planned',
-          runId,
-          timestampEpochMs: now(),
-          steps: plan,
-          isReplan: true,
-        });
-      }
+      // No replan here. It used to happen at this point *as well as* at the top of the loop, so a run of
+      // failures produced two model calls and two plan cards for one problem. The decision now belongs to the
+      // next iteration's `claimReplan()`, which sees this failure and can also see whether the screen moved.
     }
 
     if (outcome === 'exhausted' && summary === '') {

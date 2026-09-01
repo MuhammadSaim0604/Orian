@@ -1,12 +1,5 @@
 import { toPromptJson, truncateToTokens } from './redaction';
-import {
-  type PromptMessage,
-  joinSections,
-  numberedList,
-  section,
-  systemMessage,
-  userMessage,
-} from './template';
+import { type PromptMessage, joinSections, systemMessage, tagged, userMessage } from './template';
 
 /**
  * Context for turning an execution trace into a workflow (Phase 9).
@@ -62,43 +55,51 @@ export type GenerationContextInput = {
  *   removing it produces a workflow that works when replayed slowly and fails on a cold
  *   start, which is the worst kind of intermittent.
  */
-export const GENERATION_SYSTEM_PROMPT = `You turn a recording of an automation run into a reusable workflow.
+export const GENERATION_SYSTEM_PROMPT = `<role>
+You turn a recording of an automation run into a reusable workflow.
+</role>
 
-You will be given the original goal, the steps that were executed, the node types available, and a JSON Schema for a workflow.
+<input>
+You are given the original goal in <goal>, the executed steps in <trace>, the node types you may use in <node_types>, and a JSON Schema in <schema>.
+</input>
 
-Return only a JSON object matching that schema. No explanation, no markdown fences.
+<output>
+Return only a JSON object matching <schema>. No explanation, no markdown fences.
+</output>
 
-How to build it:
+<how_to_build_it>
 - One node per action that changed something: opening an app, tapping, typing, swiping.
 - Collapse the steps that only looked at the screen. The recording needed them to decide what to do; the workflow does not need to repeat them.
-- Keep waits. A waitForElement step is not an observation - it is what makes the workflow survive a slow load.
+- Keep waits. A waitForElement step is not an observation — it is what makes the workflow survive a slow load.
 - Use the selector recorded for each step, not its coordinates. Coordinates break as soon as the app's layout changes.
 - Turn values the user supplied into workflow variables, so the workflow can be reused with different values rather than being hardcoded to this one run.
 - Connect the nodes in the order they ran, with one starting point.
-- Give each node a short label describing what it does, not which tool it calls.`;
+- Give each node a short label describing what it does, not which tool it calls.
+</how_to_build_it>`;
 
 export const buildGenerationContext = (input: GenerationContextInput): readonly PromptMessage[] => {
   const traceTokens = input.traceTokens ?? 8_000;
 
-  const goalSection = section('What the run was trying to do', input.goal);
+  const goalSection = tagged('goal', input.goal);
 
-  const stepsSection = section(
-    'What was executed',
+  const stepsSection = tagged(
+    'trace',
     truncateToTokens(input.steps.map(formatStep).join('\n'), traceTokens),
+    { steps: input.steps.length },
   );
 
-  const nodeTypesSection = section(
-    'Node types you can use',
+  const nodeTypesSection = tagged(
+    'node_types',
     input.availableNodeTypes.map((node) => `- ${node.type}: ${node.description}`).join('\n'),
   );
 
-  const schemaSection = section('Workflow schema', toPromptJson(input.workflowJsonSchema, 2));
+  const schemaSection = tagged('schema', toPromptJson(input.workflowJsonSchema, 2));
 
   const retrySection =
     input.previousAttempt == null
       ? null
-      : section(
-          'Your previous attempt was rejected',
+      : tagged(
+          'rejected_attempt',
           joinSections(
             input.previousAttempt.output,
             `Problem: ${input.previousAttempt.error}`,
@@ -136,26 +137,41 @@ const formatStep = (step: TraceStepSummary): string => {
   return `${step.index}. ${step.tool}(${toPromptJson(step.arguments)})${where}${marker}${selector}`;
 };
 
-/** A plan the model produced, for the "Create by AI" entry point. */
+/**
+ * A plan the model produced, for the "Create by AI" entry point and the agent's planning turn.
+ *
+ * The instruction to keep it short is load-bearing rather than stylistic. A plan is shown to the user as a
+ * task list and consulted by the loop as a guide, so a fifteen-step plan for a four-step job produces a card
+ * nobody reads and a script the agent visibly abandons. Planning now happens only for goals judged to need it,
+ * which makes the ceiling here meaningful: if a plan is being made at all, three to six steps is the shape.
+ */
 export const buildPlanContext = (input: {
   readonly goal: string;
   readonly availableNodeTypes: readonly { readonly type: string; readonly description: string }[];
 }): readonly PromptMessage[] => [
   systemMessage(
-    `You plan mobile automation tasks. Given a goal, list the steps needed on an Android phone.
+    `<role>
+You plan automation tasks on an Android phone. Given a goal, list the steps needed.
+</role>
 
-Return only a JSON object of the form { "steps": ["...", "..."] }. No explanation.
+<output>
+Return only a JSON object of the form { "steps": ["...", "..."] }. No explanation, no markdown fences.
+</output>
 
-Keep each step to one action a person would recognise - "open WhatsApp", "search for the contact", "type the message". Do not name tools or invent screen details you cannot know yet.`,
+<rules>
+- One action a person would recognise per step: "open WhatsApp", "search for the contact", "type the message".
+- As few steps as the goal genuinely needs. Three to six is usual. Never pad a short task to look thorough.
+- Do not name tools, and do not invent screen details you cannot know yet — the phone will be read before each step.
+- Do not include a step for reporting back. Answering the user happens at the end of every run.
+</rules>`,
   ),
   userMessage(
     joinSections(
-      section('Goal', input.goal),
-      section(
-        'Actions available on the device',
+      tagged('goal', input.goal),
+      tagged(
+        'available_actions',
         input.availableNodeTypes.map((node) => `- ${node.type}: ${node.description}`).join('\n'),
       ),
-      numberedList([]),
     ),
   ),
 ];

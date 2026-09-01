@@ -62,12 +62,23 @@ export {
 export {
   AgentMemory,
   FAILURES_BEFORE_REPLAN,
+  MAX_REPLANS,
   REPEATS_BEFORE_STUCK,
   STEPS_ON_SCREEN_BEFORE_STUCK,
   type MemorySnapshot,
   type MemoryStep,
   describeScreen,
 } from './memory';
+
+export {
+  PLAN_ACTION_THRESHOLD,
+  PLAN_SENTENCE_THRESHOLD,
+  PLAN_WORD_THRESHOLD,
+  type PlanningDecision,
+  decidePlanning,
+  isQuestionOnly,
+  needsPlan,
+} from './planning';
 
 export {
   DEFAULT_REQUEST_TIMEOUT_MS,

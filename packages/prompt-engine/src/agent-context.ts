@@ -3,24 +3,35 @@ import { type ToolDefinition } from '@mobile-automation/tool-sdk';
 import { keepRecentWithinBudget, toPromptJson, truncateToTokens } from './redaction';
 import {
   type PromptMessage,
+  emptyTag,
   estimateTokens,
   joinSections,
   numberedList,
-  section,
   systemMessage,
+  tagged,
   userMessage,
 } from './template';
 
 /**
  * Building the model's view of the world.
  *
- * The agent's whole competence rests on this. The model cannot see the phone; it sees
- * only what is assembled here, so what is included, what is omitted, and how it is
- * labelled *is* the agent's perception.
+ * The agent's whole competence rests on this. The model cannot see the phone; it sees only what is assembled
+ * here, so what is included, what is omitted, and how it is labelled *is* the agent's perception.
  *
- * Assembly is a tested function rather than improvised per call site, because a
- * context that silently loses the current screen produces an agent that confidently
- * acts on a stale one - a failure that looks like a bad model rather than a bug.
+ * Assembly is a tested function rather than improvised per call site, because a context that silently loses the
+ * current screen produces an agent that confidently acts on a stale one — a failure that looks like a bad model
+ * rather than a bug.
+ *
+ * ## Why the turn is built from XML-style tags
+ *
+ * Every block the model must treat as **data** is delimited by a tag pair rather than introduced by a markdown
+ * heading. The decisive reason is that screen content is arbitrary text from a third-party app: a UI tree
+ * containing a text node that reads `## Goal` is indistinguishable from this prompt's own heading, and a model
+ * cannot be expected to guess which one is the instruction. `<screen>…</screen>` has an explicit end.
+ *
+ * It also lets the instructions refer to regions by name — "the hierarchy in `<screen>`" — which is more
+ * reliable than a prose reference to a heading, and it keeps metadata in attributes rather than in sentences
+ * the model has to parse for a number.
  */
 
 /** What the agent can currently see. */
@@ -88,67 +99,92 @@ export const DEFAULT_CONTEXT_BUDGET: ContextBudget = {
 /**
  * The agent's system instructions.
  *
- * Every rule here exists because its absence produces a specific failure:
+ * Structured into tagged sections because the model has to distinguish four different kinds of statement —
+ * what it is, how to work, how to see, and when to stop — and a flat list of bullets gives it no way to tell a
+ * hard rule from a hint.
  *
- * - "read the screen before acting" - models otherwise tap coordinates from memory of
- *   a screen two steps old.
- * - "prefer resourceId" - text selectors break on any localisation or label change.
- * - "wait after an action that loads a screen" - the commonest false "element not
- *   found" is simply looking too early.
- * - "say done when finished" - without an explicit terminal signal the loop runs to
- *   its step ceiling on every success.
- * - "do not invent an element" - a model that cannot find something will otherwise
- *   guess a plausible resourceId, and tap something unintended.
+ * Every rule exists because its absence produces a specific failure:
+ *
+ * - "read `<screen>` before acting" — models otherwise tap coordinates from memory of a screen two steps old.
+ * - "prefer resourceId" — text selectors break on any localisation or label change.
+ * - "wait after an action that loads a screen" — the commonest false "element not found" is looking too early.
+ * - "say you are done" — without an explicit terminal signal the loop runs to its step ceiling on every success.
+ * - "do not invent an element" — a model that cannot find something will otherwise guess a plausible
+ *   resourceId and tap something unintended.
+ * - "answer directly when nothing needs doing" — a question about the screen was being turned into a sequence
+ *   of actions, because nothing told the model that answering *is* a complete response.
+ *
+ * The perception chain is stated with its costs, in order. A model told only that OCR exists reaches for it
+ * first, because it is the most recently mentioned thing that sounds powerful — so each rung says what it
+ * costs and what would justify descending to it.
  */
-export const AGENT_SYSTEM_PROMPT = `You are an automation agent operating a real Android phone belonging to a real person. You act only by calling the tools provided.
+export const AGENT_SYSTEM_PROMPT = `<role>
+You are an automation agent operating a real Android phone that belongs to a real person. You act only by calling the tools you are given. You cannot see the phone except through what you are told in <screen>.
+</role>
 
-How to work:
-- Read the screen before acting. Do not assume what is on it.
-- After any action that opens or loads a screen, wait for an element you expect rather than reading immediately.
-- Identify elements with a selector, preferring resourceId, then contentDescription, then text. Use coordinates only when nothing else identifies the element.
-- Take one step at a time and check the result before continuing.
-- If a step fails, read the screen again before deciding what to do. The screen is often not what you expected rather than the action being wrong.
-- Never invent an element that is not in the screen you were given. If you cannot find what you need, look for it - scroll, search, or go back.
-- When the goal is achieved, say so and stop. Do not keep acting.
-- If the goal cannot be achieved, say why. Do not guess at destructive alternatives.
+<how_to_work>
+- Read <screen> before acting. Never assume what is on the phone.
+- Take one action at a time and check what changed before choosing the next.
+- After an action that opens or loads a screen, wait for an element you expect rather than reading immediately.
+- If a step fails, read the screen again before deciding what to do. Usually the screen was not what you expected, rather than the action being wrong.
+- Never invent an element that is not in <screen>. If what you need is not there, look for it: scroll, search, or go back.
+</how_to_work>
 
-You are acting on someone's real device. Prefer doing nothing to doing the wrong thing.`;
+<identifying_elements>
+Identify a target with a selector, preferring the most durable option available:
+1. resourceId — survives layout and language changes.
+2. contentDescription — stable and meaningful.
+3. text — breaks if the app is translated or the label changes.
+4. coordinates — a last resort. Only when nothing above identifies the element.
+</identifying_elements>
+
+<seeing_the_screen>
+There are three ways to see a screen, in order of cost. Start at the top and only descend when the one above genuinely fails.
+1. The element hierarchy in <screen>. Free, already provided, and the only source that gives durable selectors. This is almost always enough.
+2. takeScreenshot, then read the image. Use it when the hierarchy is empty or describes nothing useful — a canvas, a game, a custom-drawn interface.
+3. Asking about the picture. Slowest and costs the user money. Only when the first two have failed on this screen.
+Do not skip to a screenshot because the hierarchy looks unfamiliar. Read it first.
+</seeing_the_screen>
+
+<finishing>
+- When the goal is achieved, stop calling tools and say what you did.
+- If the goal only asks a question about the phone, answer it. Answering is a complete response; do not invent actions to justify the turn.
+- If the goal cannot be achieved, stop and say why. Never guess at a destructive alternative.
+</finishing>
+
+<safety>
+This is someone's real device, with their messages, contacts, and money on it. Prefer doing nothing to doing the wrong thing. If an action would be hard to undo and you are not certain it is what was asked for, stop and explain instead.
+</safety>`;
 
 /**
  * Assembles the agent's turn.
  *
- * Ordered deliberately: the goal first because it is what everything else serves, the
- * current screen last because recency weighs heavily on a model's attention and the
- * screen is what the next decision must be based on.
+ * Ordered deliberately: the goal first because it is what everything else serves, the current screen last
+ * because recency weighs heavily on a model's attention and the screen is what the next decision must be based
+ * on.
  */
 export const buildAgentContext = (input: AgentContextInput): readonly PromptMessage[] => {
   const budget = input.budget ?? DEFAULT_CONTEXT_BUDGET;
 
-  const goalSection = section('Goal', input.goal);
+  const goalSection = tagged('goal', input.goal);
 
   const planSection =
     input.plan !== undefined && input.plan.length > 0
-      ? section('Your plan', numberedList([...input.plan]))
+      ? tagged('plan', numberedList([...input.plan]), { note: 'a guide, not a script' })
       : null;
 
   const memorySection = renderMemory(input.memory, budget.memoryTokens);
 
-  const budgetSection = section(
-    'Budget',
-    `Step ${input.stepsTaken + 1} of at most ${input.maxSteps}.` +
-      (input.stepsTaken > input.maxSteps * 0.75
-        ? ' You are running short of steps - prioritise finishing the goal.'
-        : ''),
-  );
+  const budgetSection = renderBudget(input.stepsTaken, input.maxSteps);
 
   const screenSection = renderScreen(input.observation, budget.uiTreeTokens);
 
   const rejectionSection =
     input.lastRejection != null && input.lastRejection !== ''
-      ? section('Your last tool call was rejected', `${input.lastRejection}`)
+      ? tagged('rejected_call', input.lastRejection, { action: 'correct it and try again' })
       : null;
 
-  const toolSection = section('Available tools', renderTools(input.tools));
+  const toolSection = tagged('tools', renderTools(input.tools));
 
   return [
     systemMessage(AGENT_SYSTEM_PROMPT),
@@ -166,29 +202,50 @@ export const buildAgentContext = (input: AgentContextInput): readonly PromptMess
   ];
 };
 
-/** Renders the current screen, with the tree trimmed to its share of the budget. */
+/**
+ * The current screen.
+ *
+ * App and activity are attributes rather than lines of prose, so the model reads them as facts about the block
+ * rather than as content within it — and so the tree is the only thing inside `<screen>`, which is what makes
+ * the delimiter meaningful.
+ */
 const renderScreen = (observation: Observation, uiTreeTokens: number): string | null => {
-  const where =
-    observation.packageName == null
-      ? 'Unknown app.'
-      : `App: ${observation.packageName}` +
-        (observation.activityName == null ? '' : `\nScreen: ${observation.activityName}`);
-
   const tree = truncateToTokens(toPromptJson(observation.uiTree), uiTreeTokens);
 
-  const screenshot =
-    observation.screenshotPath == null
-      ? null
-      : `A screenshot of this screen is available at ${observation.screenshotPath}.`;
+  const body = describesNothing(tree)
+    ? // Said explicitly rather than left blank. An empty block reads as a missing section and the model
+      // guesses; naming the situation is what lets it decide to descend the perception chain instead of
+      // acting blind on a screen it cannot see.
+      'The element hierarchy is empty. This app does not describe its interface. ' +
+      'Consider takeScreenshot and reading the image.'
+    : tree;
 
-  return section('Current screen', joinSections(where, screenshot, tree));
+  return tagged('screen', joinSections(body, screenshotNote(observation)), {
+    app: observation.packageName ?? 'unknown',
+    activity: observation.activityName,
+  });
 };
 
 /**
- * Renders recent history, dropping the oldest when over budget.
+ * Whether a serialized tree carries no information.
  *
- * The drop is announced. A model shown steps 4-9 with no indication that 1-3 existed
- * may conclude it has only just started and repeat work it already did.
+ * `null` and `{}` both arrive here as short JSON strings rather than as empty text, which is why this is a
+ * check against known-empty renderings rather than a blank test — the first version tested `trim() === ''` and
+ * never fired.
+ */
+const describesNothing = (tree: string): boolean => {
+  const trimmed = tree.trim();
+  return trimmed === '' || trimmed === 'null' || trimmed === '{}' || trimmed === '[]';
+};
+
+const screenshotNote = (observation: Observation): string | null =>
+  observation.screenshotPath == null ? null : `<screenshot path="${observation.screenshotPath}" />`;
+
+/**
+ * Recent history, dropping the oldest when over budget.
+ *
+ * The drop is announced. A model shown steps 4-9 with no indication that 1-3 existed may conclude it has only
+ * just started and repeat work it already did.
  */
 const renderMemory = (memory: readonly MemoryEntry[], memoryTokens: number): string | null => {
   if (memory.length === 0) return null;
@@ -197,14 +254,27 @@ const renderMemory = (memory: readonly MemoryEntry[], memoryTokens: number): str
     estimateTokens(formatMemoryEntry(entry)),
   );
 
-  const lines = kept.map(formatMemoryEntry);
+  return tagged('history', kept.map(formatMemoryEntry).join('\n'), {
+    omitted: droppedCount > 0 ? droppedCount : null,
+  });
+};
 
-  const preamble =
-    droppedCount > 0
-      ? `(${droppedCount} earlier step${droppedCount === 1 ? '' : 's'} omitted for brevity)`
-      : null;
+/**
+ * The step budget, as attributes.
+ *
+ * A tag rather than a sentence because it is three numbers and a flag, and prose asking a model to compare "step
+ * 31 of at most 40" is more work than reading `remaining="9"`.
+ */
+const renderBudget = (stepsTaken: number, maxSteps: number): string => {
+  const remaining = Math.max(maxSteps - stepsTaken, 0);
 
-  return section('What you have done so far', joinSections(preamble, lines.join('\n')));
+  return emptyTag('budget', {
+    step: stepsTaken + 1,
+    max: maxSteps,
+    remaining,
+    // Only when it is true, so its presence is the signal rather than its value.
+    warning: stepsTaken > maxSteps * 0.75 ? 'running short - prioritise finishing' : null,
+  });
 };
 
 const formatMemoryEntry = (entry: MemoryEntry): string => {
@@ -218,10 +288,9 @@ const formatMemoryEntry = (entry: MemoryEntry): string => {
 /**
  * Lists the tools in prose.
  *
- * The provider's function-calling spec carries the schemas; this restates the
- * descriptions in the prompt because the tool list alone tells a model *what* it can
- * do but not *when* - and choosing a plausible wrong tool is a more common failure
- * than a malformed call.
+ * The provider's function-calling spec carries the schemas; this restates the descriptions in the prompt
+ * because the tool list alone tells a model *what* it can do but not *when* — and choosing a plausible wrong
+ * tool is a more common failure than a malformed call.
  */
 const renderTools = (tools: readonly ToolDefinition[]): string =>
   tools.map((tool) => `- ${tool.name}: ${tool.description}`).join('\n');

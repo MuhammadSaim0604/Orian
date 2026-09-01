@@ -53,11 +53,34 @@ export const REPEATS_BEFORE_STUCK = 3;
  */
 export const STEPS_ON_SCREEN_BEFORE_STUCK = 6;
 
+/**
+ * How many times one run may replan.
+ *
+ * A ceiling exists because replanning is not free and not obviously self-limiting. Each one costs a model
+ * call, a pause the user watches, and a new plan card in the transcript — and the third plan for the same
+ * goal is rarely better than the second, it is just newer.
+ *
+ * Two, so a run gets its opening plan plus two genuine changes of approach. Past that, the step budget and
+ * the deadline are the right stops.
+ */
+export const MAX_REPLANS = 2;
+
 export class AgentMemory {
   private readonly steps: MemoryStep[] = [];
   private observation: Observation | null = null;
   private currentPlan: readonly string[] = [];
   private seeded = 0;
+
+  /**
+   * The stuck reason that last triggered a replan.
+   *
+   * Held because `isStuck()` keeps reporting the same condition until it changes, and the loop asked on every
+   * iteration — so one stall produced a replan every turn until something moved. That is the "new plan on
+   * every second turn" the user saw. A replan should follow a *new* problem, not a continuing one.
+   */
+  private lastReplanReason: string | null = null;
+
+  private replans = 0;
 
   /**
    * Seeds memory with steps from earlier in the same conversation.
@@ -109,6 +132,56 @@ export class AgentMemory {
 
   setPlan(plan: readonly string[]): void {
     this.currentPlan = plan;
+  }
+
+  /** How many times this run has replanned, for the ceiling in the loop. */
+  get replanCount(): number {
+    return this.replans;
+  }
+
+  /**
+   * Whether a replan is warranted right now, and why.
+   *
+   * This is the whole fix for repeated replanning, and it is deliberately a *decision* rather than a
+   * question the loop asks twice. Three conditions, all of which must hold:
+   *
+   * - the agent is stuck, or has failed repeatedly;
+   * - the reason is **different from the one that caused the last replan**, because a condition that has not
+   *   changed has already been responded to and responding again just makes another plan;
+   * - the run has not exhausted {@link MAX_REPLANS}.
+   *
+   * Recording the reason is a side effect on purpose. The alternative — a pure predicate plus a separate
+   * "mark it" call — is a two-step protocol where forgetting the second step reintroduces exactly this bug.
+   */
+  claimReplan(): { readonly replan: boolean; readonly reason: string | null } {
+    if (this.replans >= MAX_REPLANS) return { replan: false, reason: null };
+
+    const reason = this.replanReason();
+    if (reason === null) return { replan: false, reason: null };
+
+    if (reason === this.lastReplanReason) return { replan: false, reason: null };
+
+    this.lastReplanReason = reason;
+    this.replans++;
+
+    return { replan: true, reason };
+  }
+
+  /**
+   * Why the agent should change approach, or null when it should not.
+   *
+   * Both signals in one place so the loop has one question to ask. Being stuck is checked first because it
+   * describes a broader failure than a run of errors: repeated failures might still be making progress
+   * through a flaky screen, while going in circles is not.
+   */
+  private replanReason(): string | null {
+    const stuck = this.isStuck();
+    if (stuck.stuck) return stuck.reason;
+
+    const failures = this.consecutiveFailures();
+    if (failures >= FAILURES_BEFORE_REPLAN) return `${failures} steps in a row failed`;
+
+    return null;
   }
 
   get plan(): readonly string[] {
@@ -273,6 +346,8 @@ export class AgentMemory {
     this.observation = null;
     this.currentPlan = [];
     this.seeded = 0;
+    this.lastReplanReason = null;
+    this.replans = 0;
   }
 }
 

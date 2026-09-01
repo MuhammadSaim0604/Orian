@@ -17,10 +17,13 @@ const reset = () => {
     route: { kind: 'onboarding' },
     agentRoute: AGENT_HOME,
     workflowRoute: WORKFLOW_HOME,
+    agentStack: [],
+    workflowStack: [],
     onboardingComplete: false,
     lastMode: null,
     themePreference: null,
     transitioning: false,
+    navDirection: 'forward',
   });
 };
 
@@ -251,5 +254,144 @@ describe('in-mode navigation', () => {
       kind: 'loading',
       workflowId: 'wf_1',
     });
+  });
+});
+
+/**
+ * The back stack.
+ *
+ * Both of these were reported from the device, and both were the absence of a stack rather than a bug in one:
+ * back from the tools screen went to the **mode switcher**, and the transition into it animated the wrong way.
+ * `back()` reset to home, which is only correct when home is where you came from.
+ */
+describe('the back stack', () => {
+  const enterAgent = () => {
+    useShellStore.getState().completeOnboarding();
+    useShellStore.getState().enterMode('agent');
+  };
+
+  it('returns from tools to the settings screen it was opened from', () => {
+    // The reported case. Settings → tools → back should be settings, not the switcher.
+    enterAgent();
+    useShellStore.getState().pushAgent({ kind: 'settings' });
+    useShellStore.getState().pushAgent({ kind: 'tools' });
+
+    expect(useShellStore.getState().back()).toBe(true);
+    expect(useShellStore.getState().agentRoute).toEqual({ kind: 'settings' });
+  });
+
+  it('then returns from settings to the chat', () => {
+    enterAgent();
+    useShellStore.getState().pushAgent({ kind: 'settings' });
+    useShellStore.getState().pushAgent({ kind: 'tools' });
+
+    useShellStore.getState().back();
+    expect(useShellStore.getState().back()).toBe(true);
+    expect(useShellStore.getState().agentRoute).toEqual(AGENT_HOME);
+  });
+
+  it('returns from onboarding to the chat rather than the switcher', () => {
+    // The other reported case. Onboarding is a route now precisely so `back()` can see it — as local component
+    // state it was invisible here and the press fell through to the mode case.
+    enterAgent();
+    useShellStore.getState().pushAgent({ kind: 'onboarding' });
+
+    expect(useShellStore.getState().back()).toBe(true);
+    expect(useShellStore.getState().agentRoute).toEqual(AGENT_HOME);
+    expect(useShellStore.getState().route).toEqual({ kind: 'mode', mode: 'agent' });
+  });
+
+  it('leaves the mode only once the stack is empty', () => {
+    enterAgent();
+    useShellStore.getState().pushAgent({ kind: 'settings' });
+
+    expect(useShellStore.getState().back()).toBe(true);
+    expect(useShellStore.getState().route).toEqual({ kind: 'mode', mode: 'agent' });
+
+    expect(useShellStore.getState().back()).toBe(true);
+    expect(useShellStore.getState().route).toEqual({ kind: 'switcher' });
+  });
+
+  it('clears the stack on leaving the mode', () => {
+    // A stack that survived would let a later back press walk into a mode the user had left.
+    enterAgent();
+    useShellStore.getState().pushAgent({ kind: 'settings' });
+    useShellStore.getState().goToSwitcher();
+
+    expect(useShellStore.getState().agentStack).toEqual([]);
+  });
+
+  it('clears the stack on entering a mode', () => {
+    enterAgent();
+    useShellStore.getState().pushAgent({ kind: 'settings' });
+    useShellStore.getState().enterMode('agent');
+
+    expect(useShellStore.getState().agentStack).toEqual([]);
+    expect(useShellStore.getState().agentRoute).toEqual(AGENT_HOME);
+  });
+
+  it('does not stack a lateral move', () => {
+    // `navigateAgent` replaces rather than pushes, for a move where the screen being left is not somewhere back
+    // should return to.
+    enterAgent();
+    useShellStore.getState().navigateAgent({ kind: 'settings' });
+
+    expect(useShellStore.getState().agentStack).toEqual([]);
+  });
+
+  it('keeps a workflow stack of its own', () => {
+    // ADR 0011: the two modes share no navigation. One stack would let a back press cross between them.
+    useShellStore.getState().completeOnboarding();
+    useShellStore.getState().enterMode('workflow');
+    useShellStore.getState().pushWorkflow({ kind: 'canvas' });
+
+    expect(useShellStore.getState().agentStack).toEqual([]);
+    expect(useShellStore.getState().back()).toBe(true);
+    expect(useShellStore.getState().workflowRoute).toEqual(WORKFLOW_HOME);
+  });
+});
+
+/**
+ * Transition direction.
+ *
+ * The second reported bug: leaving the tools screen animated right-to-left, like a push. Direction used to be
+ * derived from *which* screen was showing — anything that was not home counted as forward — and settings is not
+ * home either, so returning to it looked like going deeper.
+ */
+describe('transition direction', () => {
+  it('is forward when pushing', () => {
+    useShellStore.getState().completeOnboarding();
+    useShellStore.getState().enterMode('agent');
+    useShellStore.getState().pushAgent({ kind: 'settings' });
+
+    expect(useShellStore.getState().navDirection).toBe('forward');
+  });
+
+  it('is backward when popping', () => {
+    useShellStore.getState().completeOnboarding();
+    useShellStore.getState().enterMode('agent');
+    useShellStore.getState().pushAgent({ kind: 'settings' });
+    useShellStore.getState().pushAgent({ kind: 'tools' });
+
+    useShellStore.getState().back();
+
+    expect(useShellStore.getState().navDirection).toBe('backward');
+  });
+
+  it('is backward when leaving a mode', () => {
+    useShellStore.getState().completeOnboarding();
+    useShellStore.getState().enterMode('agent');
+    useShellStore.getState().goToSwitcher();
+
+    expect(useShellStore.getState().navDirection).toBe('backward');
+  });
+
+  it('is backward when leaving root settings', () => {
+    useShellStore.getState().completeOnboarding();
+    useShellStore.getState().openRootSettings();
+    expect(useShellStore.getState().navDirection).toBe('forward');
+
+    useShellStore.getState().back();
+    expect(useShellStore.getState().navDirection).toBe('backward');
   });
 });
