@@ -41,6 +41,7 @@ export {
   pressBack,
   pressHome,
   readClipboard,
+  readScreenshotBase64,
   readSms,
   releaseScreenCapture,
   requestScreenCaptureConsent,

@@ -111,6 +111,23 @@ class SessionStore(
     ): List<StoredMessage> = dao.listRecentMessagesDescending(sessionId, limit).map { it.toStored() }.reversed()
 
     /**
+     * The most recent messages of one role, oldest first.
+     *
+     * For replaying the model's conversation, stored under `ROLE_WIRE`. Filtered in SQL because the table
+     * interleaves the user's transcript with the wire messages: an unfiltered window of sixty rows might hold
+     * twenty replayable messages or none, depending on how much narration the run produced.
+     */
+    suspend fun recentMessagesByRole(
+        sessionId: String,
+        role: String,
+        limit: Int,
+    ): List<StoredMessage> =
+        dao
+            .listRecentMessagesByRoleDescending(sessionId, role, limit)
+            .map { it.toStored() }
+            .reversed()
+
+    /**
      * Appends a message.
      *
      * Returns false when the session is gone rather than throwing. A run can outlive the session it
@@ -167,10 +184,22 @@ class SessionStore(
         const val MODE_WORKFLOW_BUILDER = "workflowBuilder"
 
         /**
-         * How many messages to seed memory from.
+         * The role under which the model's own conversation is stored.
          *
-         * Sixty is roughly twenty tool calls with their narration - more than enough for the model to
-         * know what it already tried, and small enough that the prompt stays affordable.
+         * Distinct from the transcript roles because it serves a different reader. A `tool` row's text is a
+         * readable summary of what a call did; a `wire` row's `detail` is the exact Chat Completions message the
+         * model was sent, including the `tool_call_id` links that make a request valid. Replaying the summary
+         * instead would replay a conversation that never happened.
+         */
+        const val ROLE_WIRE = "wire"
+
+        /**
+         * How many messages to replay from a session.
+         *
+         * Sixty is roughly twenty tool calls with their answers — enough for the model to know what it already
+         * tried, and small enough that the request stays affordable. It costs less than it used to: the tool
+         * list now travels in the request's `tools` array and a UI tree arrives once as a tool result, rather
+         * than both being re-injected on every call.
          */
         const val MEMORY_SEED_MESSAGES = 60
     }

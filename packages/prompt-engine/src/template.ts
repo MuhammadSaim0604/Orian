@@ -19,12 +19,63 @@ export const MessageRoleSchema = z.enum(MESSAGE_ROLES);
 
 export type MessageRole = z.infer<typeof MessageRoleSchema>;
 
-/** One Chat Completions message (ADR 0007). */
+/** Plain text in a multi-part message. */
+export type TextPart = { readonly type: 'text'; readonly text: string };
+
+/**
+ * An image in a multi-part message.
+ *
+ * The url is a `data:` URL carrying base64 bytes, because a screenshot lives in the app's private storage and
+ * no provider can fetch a `file://` path off someone's phone.
+ */
+export type ImagePart = {
+  readonly type: 'image_url';
+  readonly imageUrl: {
+    readonly url: string;
+    readonly detail?: 'auto' | 'low' | 'high';
+  };
+};
+
+export type ContentPart = TextPart | ImagePart;
+
+/**
+ * A tool call the model asked for, as it must be sent back.
+ *
+ * `arguments` stays a **JSON string**, never a parsed object. The protocol defines it as a string, and a
+ * re-serialized object is not guaranteed to be byte-identical — which matters because some providers hash the
+ * assistant turn to match it against the tool results that answer it.
+ */
+export type MessageToolCall = {
+  readonly id: string;
+  readonly name: string;
+  readonly arguments: string;
+};
+
+/**
+ * One Chat Completions message (ADR 0007).
+ *
+ * This is the wire shape, and it deliberately covers all four roles rather than just the two the agent used to
+ * send. The previous version was `{ role, content: string, toolCallId? }`, which **could not express an
+ * assistant turn that called a tool** — so the loop had no way to record what the model did, and the request
+ * carried only system and user messages no matter how many steps had been taken.
+ *
+ * `content` is nullable because an assistant message that only calls a tool has no prose, and sending `""`
+ * instead of `null` reads to some providers as an empty reply rather than an absent one.
+ */
 export type PromptMessage = {
   readonly role: MessageRole;
-  readonly content: string;
+  readonly content: string | readonly ContentPart[] | null;
+  /** Set on an `assistant` message that called tools. */
+  readonly toolCalls?: readonly MessageToolCall[];
   /** Set on a `tool` message, matching the id of the call being answered. */
   readonly toolCallId?: string;
+  /**
+   * The model's reasoning, when it emitted any.
+   *
+   * Kept on the message so the transcript holds it in the right place, but **not sent back by default** — see
+   * `SEND_REASONING_BY_DEFAULT` in the provider. It is here for the UI and the trace, not for the wire.
+   */
+  readonly reasoning?: string;
 };
 
 /** A rendered prompt, ready to send. */
@@ -69,9 +120,26 @@ export const estimateTokens = (text: string): number => Math.ceil(text.length / 
 export const estimateMessagesTokens = (messages: readonly PromptMessage[]): number =>
   messages.reduce(
     // Four tokens per message covers the role and separators the provider adds.
-    (total, message) => total + estimateTokens(message.content) + 4,
+    (total, message) => total + estimateTokens(textOf(message)) + 4,
     0,
   );
+
+/**
+ * The readable text of a message, for estimation and for a log line.
+ *
+ * An image part contributes its own cost to a real provider, but not one measurable from a data URL's length —
+ * a 2 MB base64 string is not 500 000 tokens. Counting only the text keeps the estimate honest about what it
+ * can know rather than wildly wrong.
+ */
+export const textOf = (message: PromptMessage): string => {
+  if (message.content === null) return '';
+  if (typeof message.content === 'string') return message.content;
+
+  return message.content
+    .filter((part): part is TextPart => part.type === 'text')
+    .map((part) => part.text)
+    .join('\n');
+};
 
 /** Declares a template, inferring nothing but keeping the shape honest. */
 export const defineTemplate = <TInput>(template: PromptTemplate<TInput>): PromptTemplate<TInput> =>
@@ -101,11 +169,60 @@ export const assistantMessage = (content: string): PromptMessage => ({
   content,
 });
 
+/**
+ * An assistant turn that called tools.
+ *
+ * Recorded and replayed **verbatim**, including the ids: the tool messages that follow reference them, and a
+ * provider given a tool result whose `tool_call_id` matches no preceding call rejects the whole request.
+ */
+export const assistantToolCallMessage = (input: {
+  readonly content?: string | null;
+  readonly toolCalls: readonly MessageToolCall[];
+  readonly reasoning?: string;
+}): PromptMessage => ({
+  role: 'assistant',
+  // Null rather than '' when the model only called a tool, since an empty string reads as an empty reply.
+  content: input.content ?? null,
+  toolCalls: input.toolCalls,
+  reasoning: input.reasoning,
+});
+
 /** A tool result, answering the call the model made. */
 export const toolMessage = (toolCallId: string, content: string): PromptMessage => ({
   role: 'tool',
   content,
   toolCallId,
+});
+
+/**
+ * A tool result carrying an image.
+ *
+ * For `takeScreenshot`, which is the one tool whose useful output is pixels. The text part goes first
+ * deliberately: it names what the image is, and a model handed a bare image in a tool result has to infer which
+ * call it answers.
+ *
+ * The bytes are base64 in a `data:` URL rather than a path, because the screenshot is in the app's private
+ * storage and no provider can fetch a `file://` URL off someone's phone.
+ */
+export const toolImageMessage = (input: {
+  readonly toolCallId: string;
+  readonly text: string;
+  readonly base64: string;
+  readonly mimeType?: string;
+  readonly detail?: 'auto' | 'low' | 'high';
+}): PromptMessage => ({
+  role: 'tool',
+  toolCallId: input.toolCallId,
+  content: [
+    { type: 'text', text: input.text },
+    {
+      type: 'image_url',
+      imageUrl: {
+        url: `data:${input.mimeType ?? 'image/png'};base64,${input.base64}`,
+        detail: input.detail ?? 'auto',
+      },
+    },
+  ],
 });
 
 /**

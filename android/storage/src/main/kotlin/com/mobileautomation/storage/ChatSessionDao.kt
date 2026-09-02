@@ -83,6 +83,24 @@ interface ChatSessionDao {
         limit: Int,
     ): List<ChatMessageEntity>
 
+    /**
+     * The most recent messages of one role, oldest first within the window.
+     *
+     * Exists for replaying the model's conversation, which is stored under the `wire` role. Filtering in SQL
+     * rather than in Kotlin matters here: the table interleaves the user's transcript with the wire messages,
+     * so an unfiltered window of sixty rows might contain twenty replayable messages or none, depending on how
+     * chatty the run was. A limit that means different things on different sessions is not a limit.
+     */
+    @Query(
+        "SELECT * FROM chat_messages WHERE session_id = :sessionId AND role = :role " +
+            "ORDER BY created_at DESC LIMIT :limit",
+    )
+    suspend fun listRecentMessagesByRoleDescending(
+        sessionId: String,
+        role: String,
+        limit: Int,
+    ): List<ChatMessageEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessage(message: ChatMessageEntity)
 

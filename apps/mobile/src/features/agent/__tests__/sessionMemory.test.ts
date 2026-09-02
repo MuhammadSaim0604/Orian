@@ -1,13 +1,14 @@
-import { contextualGoal, entriesFromMessages, messageForEvent } from '../sessionMemory';
-import { type ChatMessage } from '../sessionStorage';
+import { messageForEvent } from '../sessionMemory';
 
 /**
- * The two conversions between a run and its session.
+ * Turning a run's events into a transcript.
  *
- * These decide what a conversation looks like tomorrow and what the agent remembers about it, and both have a
- * failure mode worse than being wrong: persisting everything buries the conversation in per-step churn, and
- * rebuilding memory from a malformed row corrupts the loop detector, producing a false "you are looping" that
- * stops a run that was working.
+ * This decides what a conversation looks like tomorrow, and it has a failure mode worse than being wrong:
+ * persisting everything buries the conversation in per-step churn, so the user cannot find what actually
+ * happened.
+ *
+ * The tests for rebuilding *memory* from a transcript went with the code. The model now replays its real
+ * messages (`conversationStorage.ts`) rather than having its own history described back to it.
  */
 
 const base = { runId: 'run_1', timestampEpochMs: 1_700_000_000_000 };
@@ -134,127 +135,5 @@ describe('what gets persisted', () => {
     });
 
     expect(message).toBeNull();
-  });
-});
-
-describe('rebuilding memory from a transcript', () => {
-  const message = (overrides: Partial<ChatMessage> = {}): ChatMessage => ({
-    id: 'msg_1',
-    sessionId: 'session_1',
-    role: 'tool',
-    text: 'Tapped “Send”',
-    detail: JSON.stringify({
-      tool: 'click',
-      arguments: { selector: { text: 'Send' } },
-      outcome: 'succeeded',
-      screenAfter: 'com.whatsapp/Conversation',
-    }),
-    runId: 'run_1',
-    createdAtEpochMs: 1_700_000_000_000,
-    ...overrides,
-  });
-
-  it('produces a memory entry per tool message', () => {
-    expect(entriesFromMessages([message(), message({ id: 'msg_2' })])).toHaveLength(2);
-  });
-
-  it('ignores conversation, which is not a record of action', () => {
-    // A memory entry *is* a tool call — that is what the stuck and replan detectors reason over. Prose has
-    // nothing for them.
-    const messages = [
-      message({ id: 'a', role: 'user', text: 'Send a message', detail: null }),
-      message({ id: 'b', role: 'assistant', text: 'Done.', detail: null }),
-      message({ id: 'c', role: 'event', text: 'Plan: …', detail: null }),
-    ];
-
-    expect(entriesFromMessages(messages)).toHaveLength(0);
-  });
-
-  it('renumbers steps contiguously', () => {
-    const entries = entriesFromMessages([message(), message({ id: 'msg_2' })]);
-
-    expect(entries.map((entry) => entry.step)).toEqual([1, 2]);
-  });
-
-  it('carries the tool and arguments, which is what repeat detection compares', () => {
-    const entries = entriesFromMessages([message()]);
-
-    expect(entries[0]?.tool).toBe('click');
-    expect(entries[0]?.arguments).toEqual({ selector: { text: 'Send' } });
-  });
-
-  it('skips a message with malformed detail rather than inventing an entry', () => {
-    // An entry with a guessed tool name would corrupt the repeat detector, and a false "you are looping" is
-    // worse than a missing step.
-    expect(entriesFromMessages([message({ detail: 'not json' })])).toHaveLength(0);
-  });
-
-  it('skips a message with no tool name', () => {
-    expect(
-      entriesFromMessages([message({ detail: JSON.stringify({ outcome: 'succeeded' }) })]),
-    ).toHaveLength(0);
-  });
-
-  it('treats an unrecorded outcome as a failure', () => {
-    // The safer direction: a past failure remembered as a success would have the agent repeat it confidently.
-    const entries = entriesFromMessages([
-      message({ detail: JSON.stringify({ tool: 'click', arguments: {} }) }),
-    ]);
-
-    expect(entries[0]?.outcome).toBe('failed');
-  });
-
-  it('defaults absent arguments to an empty object', () => {
-    const entries = entriesFromMessages([
-      message({ detail: JSON.stringify({ tool: 'pressBack', outcome: 'succeeded' }) }),
-    ]);
-
-    expect(entries[0]?.arguments).toEqual({});
-  });
-});
-
-describe('folding context into the goal', () => {
-  const chat = (role: ChatMessage['role'], text: string, id: string): ChatMessage => ({
-    id,
-    sessionId: 'session_1',
-    role,
-    text,
-    detail: null,
-    runId: null,
-    createdAtEpochMs: 1,
-  });
-
-  it('returns the goal unchanged for a fresh conversation', () => {
-    expect(contextualGoal('Send a message', [])).toBe('Send a message');
-  });
-
-  it('includes the preceding exchange', () => {
-    // The loop takes one goal string, so "now do the same for Sarah" is meaningless without what came before.
-    const goal = contextualGoal('Now do the same for Sarah', [
-      chat('user', 'Message Robert that I am late', 'a'),
-      chat('assistant', 'Sent the message.', 'b'),
-    ]);
-
-    expect(goal).toContain('Message Robert');
-    expect(goal).toContain('Now do the same for Sarah');
-  });
-
-  it('ignores tool and event rows', () => {
-    // Those are in memory already. Repeating them in the goal would double the agent's own history back at it.
-    const goal = contextualGoal('Carry on', [chat('tool', 'Tapped “Send”', 'a')]);
-
-    expect(goal).toBe('Carry on');
-  });
-
-  it('keeps only the recent turns', () => {
-    // A goal that grew into a full transcript would crowd out the instruction it exists to carry.
-    const many = Array.from({ length: 20 }, (_, index) =>
-      chat('user', `message ${index}`, `id_${index}`),
-    );
-
-    const goal = contextualGoal('Do the thing', many);
-
-    expect(goal).not.toContain('message 0');
-    expect(goal).toContain('message 19');
   });
 });

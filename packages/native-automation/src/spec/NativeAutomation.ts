@@ -116,6 +116,18 @@ export interface Spec extends TurboModule {
   findTextOnScreen(text: string, exact: boolean): Promise<string>;
 
   /**
+   * Reads a captured screenshot as base64, or null when it cannot be read.
+   *
+   * The **only** method that moves image bytes across the bridge, and it exists because a model cannot fetch a
+   * `file://` URL off someone's phone — a tool result carrying an image has to carry the bytes. Everything else
+   * passes a path, because a full-resolution screen is several megabytes and moving it blocks the JS thread.
+   *
+   * Confined natively to the capture directory: the path comes from JS, and reading any path given would be an
+   * arbitrary file read inside the app's sandbox.
+   */
+  readScreenshotBase64(path: string): Promise<string | null>;
+
+  /**
    * Asks the user for a screen-capture session.
    *
    * Consent is per session and cannot be persisted, so this launches the system

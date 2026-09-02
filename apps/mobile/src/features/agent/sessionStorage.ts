@@ -21,12 +21,18 @@ import { NativeModules } from 'react-native';
 /**
  * Who or what produced a message.
  *
- * Wider than the OpenAI roles on purpose. `tool` records what a tool call did and `event` records loop
- * narration — a plan, a replan — and both belong in the transcript the user reads. They are also both
- * things the **prompt** must be able to exclude: the model gets its tool history from memory, not by
- * re-reading the chat, and feeding narration back would have it commenting on its own commentary.
+ * Wider than the OpenAI roles on purpose, and the two extra roles pull in opposite directions:
+ *
+ * - `tool` and `event` are for the **user**. A tool row shows what a call did; an event row records loop
+ *   narration like a plan or a change of approach. Both belong in the transcript a person reads, and neither is
+ *   what the model was sent — a tool row's text is a readable summary, not the JSON result.
+ * - `wire` is for the **model**. It carries the exact `PromptMessage` under `detail.wire` so the next run can
+ *   replay the conversation as it happened. The renderer ignores it.
+ *
+ * Keeping both in one table is deliberate: they are two views of the same conversation, and splitting them
+ * across tables would make it possible for one to survive a delete without the other.
  */
-export const MESSAGE_ROLES = ['user', 'assistant', 'tool', 'event'] as const;
+export const MESSAGE_ROLES = ['user', 'assistant', 'tool', 'event', 'wire'] as const;
 
 export type MessageRole = (typeof MESSAGE_ROLES)[number];
 
@@ -70,6 +76,7 @@ type SessionStorageNative = {
   count: (mode: string) => Promise<number>;
   messages: (sessionId: string) => Promise<ChatMessage[]>;
   recentMessages: (sessionId: string, limit: number) => Promise<ChatMessage[]>;
+  recentMessagesByRole: (sessionId: string, role: string, limit: number) => Promise<ChatMessage[]>;
   appendMessage: (
     id: string,
     sessionId: string,
@@ -92,13 +99,20 @@ const native = ((): SessionStorageNative | undefined => {
 export const isSessionStorageAvailable = (): boolean => native !== undefined;
 
 /**
- * How many messages to seed the agent's memory from.
+ * How many messages to replay from a session.
  *
  * Matches `SessionStore.MEMORY_SEED_MESSAGES`. Duplicated rather than fetched because it is a tuning
  * constant read on every run, and a bridge call to learn a number would be absurd — but it is stated here
  * so a future change knows to touch both.
  */
 export const MEMORY_SEED_MESSAGES = 60;
+
+/**
+ * The role under which the model's own conversation is stored.
+ *
+ * Matches `SessionStore.ROLE_WIRE`. See {@link MESSAGE_ROLES} for why it is not one of the transcript roles.
+ */
+export const WIRE_ROLE = 'wire' as const;
 
 /** The name a session gets before the user has said anything. */
 export const UNTITLED_SESSION = 'New chat';
@@ -189,7 +203,7 @@ export const loadMessages = async (sessionId: string): Promise<readonly ChatMess
   }
 };
 
-/** The most recent messages, oldest first — for seeding memory on a long conversation. */
+/** The most recent messages, oldest first — for a transcript view of a long conversation. */
 export const loadRecentMessages = async (
   sessionId: string,
   limit: number = MEMORY_SEED_MESSAGES,
@@ -198,6 +212,27 @@ export const loadRecentMessages = async (
 
   try {
     return await native.recentMessages(sessionId, limit);
+  } catch {
+    return [];
+  }
+};
+
+/**
+ * The most recent messages of one role, oldest first.
+ *
+ * Used to replay the model's conversation, stored under the `wire` role. Filtered natively in SQL because the
+ * table interleaves the user's transcript with the wire messages: a window applied afterwards would hold a
+ * different number of replayable messages on every session.
+ */
+export const loadRecentMessagesByRole = async (
+  sessionId: string,
+  role: MessageRole,
+  limit: number = MEMORY_SEED_MESSAGES,
+): Promise<readonly ChatMessage[]> => {
+  if (native === undefined) return [];
+
+  try {
+    return await native.recentMessagesByRole(sessionId, role, limit);
   } catch {
     return [];
   }

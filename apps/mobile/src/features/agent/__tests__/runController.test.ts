@@ -58,6 +58,8 @@ jest.mock('@mobile-automation/native-automation', () => ({
   invokeTool: jest.fn(async () => ({})),
   startAutomationService: (label: string) => mockStartService(label),
   stopAutomationService: () => mockStopService(),
+  // Supplied so a screenshot tool call can answer with the image itself.
+  readScreenshotBase64: async () => null,
 }));
 
 jest.mock('../agentOverlay', () => ({
@@ -92,11 +94,17 @@ jest.mock('../agentSettings', () => ({
 jest.mock('../sessionStorage', () => ({
   appendMessage: async () => true,
   loadMessages: async () => [],
+  WIRE_ROLE: 'wire',
+}));
+
+jest.mock('../conversationStorage', () => ({
+  // The conversation is replayed and persisted rather than described. Stubbed to empty here because these tests
+  // are about the controller's lifecycle - the replay rules have their own suite.
+  loadConversation: async () => [],
+  saveConversation: async () => undefined,
 }));
 
 jest.mock('../sessionMemory', () => ({
-  seedEntriesFor: async () => [],
-  contextualGoal: (goal: string) => goal,
   messageForEvent: () => null,
 }));
 

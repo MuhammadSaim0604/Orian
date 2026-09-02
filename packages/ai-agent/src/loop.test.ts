@@ -1,10 +1,11 @@
-import { type Observation } from '@mobile-automation/prompt-engine';
+import { type Observation, type PromptMessage } from '@mobile-automation/prompt-engine';
 import { describe, expect, it } from 'vitest';
 
 import { type AgentEvent, type ToolExecutedEvent } from './events';
 import {
   type AgentDependencies,
   MAX_CONSECUTIVE_REJECTIONS,
+  MAX_EMPTY_TURNS,
   type DeviceTools,
   runAgent,
 } from './loop';
@@ -13,9 +14,19 @@ import { type CompletionRequest, type CompletionResponse, type ModelProvider } f
 /**
  * The agent loop, exercised against a scripted provider and a fake device.
  *
- * No network and no phone, which is what makes the flagship scenario a fast
- * deterministic test rather than something only verifiable by spending money. The
- * provider interface exists precisely so this is possible.
+ * No network and no phone, which is what makes the flagship scenario a fast deterministic test rather than
+ * something only verifiable by spending money.
+ *
+ * ## What these tests are mostly about now
+ *
+ * A defect found in production network logs: **every request carried only a system and a user message**, no
+ * matter how many steps had been taken. The loop rebuilt a two-message request each turn with the history
+ * flattened into prose, the first call used a different system prompt and carried no tools at all, and planning
+ * was a JSON reply rather than a tool call.
+ *
+ * So a good share of what follows asserts the *shape of the request* rather than the outcome of the run — that
+ * the conversation accumulates real messages, that every tool call is answered, and that nothing is injected
+ * around the user's own words.
  */
 
 /** A provider that replies with a scripted sequence. */
@@ -41,17 +52,40 @@ const scriptedProvider = (
 const toolCall = (name: string, args: unknown, id = 'call_1'): CompletionResponse => ({
   content: null,
   toolCalls: [{ id, name, arguments: JSON.stringify(args) }],
+  reasoning: null,
+  finishReason: 'tool_calls',
+});
+
+/** Several calls in one turn, for the "one device action per turn" rule. */
+const toolCalls = (
+  ...calls: readonly { name: string; args: unknown; id: string }[]
+): CompletionResponse => ({
+  content: null,
+  toolCalls: calls.map((call) => ({
+    id: call.id,
+    name: call.name,
+    arguments: JSON.stringify(call.args),
+  })),
+  reasoning: null,
   finishReason: 'tool_calls',
 });
 
 const prose = (content: string): CompletionResponse => ({
   content,
   toolCalls: [],
+  reasoning: null,
   finishReason: 'stop',
 });
 
-/** The planning turn's reply, which the loop parses as JSON. */
-const plan = (...steps: string[]): CompletionResponse => prose(JSON.stringify({ steps }));
+/**
+ * A plan, as a tool call.
+ *
+ * It used to be `prose(JSON.stringify({ steps }))`, parsed out of content on a separate request that carried no
+ * tools. That is the shape being replaced: a plan is now an ordinary call in the same conversation, so the model
+ * can plan and act in one turn.
+ */
+const planCall = (...steps: string[]): CompletionResponse =>
+  toolCall('createPlan', { steps }, 'call_plan');
 
 const recordingDevice = (
   handlers: Record<string, (args: Record<string, unknown>) => unknown> = {},
@@ -83,290 +117,444 @@ const deps = (
   observe: () => Promise<Observation> = async () => observation(),
 ): AgentDependencies => ({ provider, tools, observe });
 
-/**
- * Runs the agent with planning forced on.
- *
- * Planning is now a judgement made from the goal — a plan for "call 0000" cost a round trip and told the user
- * nothing — so most of the goals in this file ("x", "Open WhatsApp") would no longer be planned. Every test
- * below that scripts a `plan(...)` response is about what the loop does *with* a plan, not about whether one
- * is made, so the decision is pinned here rather than woven into each case.
- *
- * `skipPlanning: false` is the explicit "plan anyway" override. Options spread last, so a test can still say
- * otherwise.
- */
-const run = (dependencies: AgentDependencies, options: Parameters<typeof runAgent>[1]) =>
-  runAgent(dependencies, { skipPlanning: false, ...options });
+/** The messages of one request, excluding the system prompt. */
+const conversationOf = (request: CompletionRequest): readonly PromptMessage[] =>
+  request.messages.slice(1);
 
-describe('a simple run', () => {
-  it('plans, acts, and finishes', async () => {
-    const provider = scriptedProvider([
-      plan('open WhatsApp'),
-      toolCall('openApp', { packageName: 'com.whatsapp' }),
-      prose('WhatsApp is open. The goal is complete.'),
-    ]);
-    const device = recordingDevice({ openApp: () => undefined });
+const roleSequence = (request: CompletionRequest): readonly string[] =>
+  request.messages.map((message) => message.role);
 
-    const result = await run(deps(provider, device), { goal: 'Open WhatsApp' });
+describe('the request shape', () => {
+  it('sends a system message and the user message, and nothing else, on the first call', async () => {
+    const provider = scriptedProvider([prose('Nothing to do.')]);
 
-    expect(result.outcome).toBe('succeeded');
-    expect(result.stepsTaken).toBe(1);
-    expect(device.calls[0]?.tool).toBe('openApp');
-    expect(result.summary).toContain('complete');
+    await runAgent(deps(provider, recordingDevice()), { goal: 'call 0000' });
+
+    expect(roleSequence(provider.requests[0]!)).toEqual(['system', 'user']);
+    // The user's message, exactly as typed. It used to be a generated document with the goal buried in it.
+    expect(provider.requests[0]!.messages[1]).toEqual({ role: 'user', content: 'call 0000' });
   });
 
-  it('can skip planning for a single obvious action', async () => {
-    const provider = scriptedProvider([toolCall('pressHome', {}), prose('Done.')]);
+  it('sends tools on the first call, not just on later ones', async () => {
+    // The planning call used to carry none, which is why a plan could only be prose.
+    const provider = scriptedProvider([prose('Done.')]);
 
-    const result = await run(deps(provider, recordingDevice()), {
-      goal: 'Go home',
-      skipPlanning: true,
+    await runAgent(deps(provider, recordingDevice()), { goal: 'do a thing' });
+
+    expect(provider.requests[0]!.tools?.length ?? 0).toBeGreaterThan(0);
+  });
+
+  it('sends the identical system prompt on every call', async () => {
+    const provider = scriptedProvider([
+      planCall('open WhatsApp'),
+      toolCall('openApp', { packageName: 'com.whatsapp' }),
+      prose('Done.'),
+    ]);
+
+    await runAgent(deps(provider, recordingDevice({ openApp: () => undefined })), {
+      goal: 'open WhatsApp and say hello',
     });
 
-    expect(result.outcome).toBe('succeeded');
-    // Only the action turn and the finishing turn - no planning call.
-    expect(provider.requests).toHaveLength(2);
+    const prompts = new Set(provider.requests.map((request) => request.messages[0]!.content));
+
+    expect(provider.requests.length).toBeGreaterThan(1);
+    expect(prompts.size).toBe(1);
   });
 
-  it('records the plan in memory and in an event', async () => {
-    const events: AgentEvent[] = [];
-    const provider = scriptedProvider([plan('step one', 'step two'), prose('Done.')]);
+  it('sends the identical tool array on every call', async () => {
+    const provider = scriptedProvider([toolCall('getUiTree', { compact: true }), prose('Done.')]);
 
-    const result = await run(deps(provider, recordingDevice()), {
-      goal: 'Do something',
+    await runAgent(deps(provider, recordingDevice({ getUiTree: () => ({ nodeCount: 3 }) })), {
+      goal: 'read the screen',
+    });
+
+    const shapes = new Set(provider.requests.map((request) => JSON.stringify(request.tools)));
+
+    expect(provider.requests).toHaveLength(2);
+    expect(shapes.size).toBe(1);
+  });
+
+  it('grows the conversation instead of rebuilding two messages', async () => {
+    const provider = scriptedProvider([
+      toolCall('getUiTree', { compact: true }, 'c1'),
+      toolCall('pressHome', {}, 'c2'),
+      prose('Done.'),
+    ]);
+
+    await runAgent(
+      deps(
+        provider,
+        recordingDevice({ getUiTree: () => ({ nodeCount: 3 }), pressHome: () => undefined }),
+      ),
+      { goal: 'go home' },
+    );
+
+    // user → assistant+call → tool → assistant+call → tool, plus the system message.
+    expect(roleSequence(provider.requests[0]!)).toEqual(['system', 'user']);
+    expect(roleSequence(provider.requests[1]!)).toEqual(['system', 'user', 'assistant', 'tool']);
+    expect(roleSequence(provider.requests[2]!)).toEqual([
+      'system',
+      'user',
+      'assistant',
+      'tool',
+      'assistant',
+      'tool',
+    ]);
+  });
+
+  it('replays the assistant turn verbatim, including the call id and arguments', async () => {
+    // The defect at its root: `tool_calls` was dropped by the request mapper, so an assistant turn could not be
+    // replayed and the model never saw what it had just asked for.
+    const provider = scriptedProvider([
+      toolCall('openApp', { packageName: 'com.whatsapp' }, 'call_abc'),
+      prose('Done.'),
+    ]);
+
+    await runAgent(deps(provider, recordingDevice({ openApp: () => undefined })), {
+      goal: 'open WhatsApp',
+    });
+
+    const assistant = conversationOf(provider.requests[1]!).find(
+      (message) => message.role === 'assistant',
+    );
+
+    expect(assistant?.toolCalls).toEqual([
+      { id: 'call_abc', name: 'openApp', arguments: '{"packageName":"com.whatsapp"}' },
+    ]);
+    // Null rather than '': an empty string reads as an empty reply rather than an absent one.
+    expect(assistant?.content).toBeNull();
+  });
+
+  it('answers every tool call with a message bearing its id', async () => {
+    // The rule a provider enforces: an assistant `tool_call` with no matching `tool` message rejects the whole
+    // request, so a dropped answer breaks the *next* call rather than this one.
+    const provider = scriptedProvider([
+      toolCall('getCurrentScreen', {}, 'call_xyz'),
+      prose('Done.'),
+    ]);
+
+    await runAgent(
+      deps(
+        provider,
+        recordingDevice({ getCurrentScreen: () => ({ packageName: 'com.whatsapp' }) }),
+      ),
+      { goal: 'what app is open' },
+    );
+
+    const answer = conversationOf(provider.requests[1]!).find((message) => message.role === 'tool');
+
+    expect(answer?.toolCallId).toBe('call_xyz');
+    expect(answer?.content).toContain('com.whatsapp');
+  });
+
+  it('leaves no tool call unanswered when the run ends mid-turn', async () => {
+    // A cancelled or exhausted run must not leave a call owing, or the next run's first request is invalid before
+    // the user has done anything.
+    const provider = scriptedProvider([toolCall('pressHome', {}), prose('Done.')]);
+
+    const result = await runAgent(deps(provider, recordingDevice()), {
+      goal: 'go home',
+      maxSteps: 1,
+    });
+
+    const assistantCalls = result.messages
+      .filter((message) => message.role === 'assistant')
+      .flatMap((message) => message.toolCalls ?? [])
+      .map((call) => call.id);
+
+    const answered = new Set(
+      result.messages
+        .filter((message) => message.role === 'tool')
+        .map((message) => message.toolCallId),
+    );
+
+    for (const id of assistantCalls) expect(answered.has(id)).toBe(true);
+  });
+
+  it('returns the conversation so the caller can persist and replay it', async () => {
+    const provider = scriptedProvider([prose('Nothing to do.')]);
+
+    const result = await runAgent(deps(provider, recordingDevice()), { goal: 'hello' });
+
+    expect(result.messages[0]).toEqual({ role: 'user', content: 'hello' });
+    expect(result.messages.at(-1)?.role).toBe('assistant');
+  });
+
+  it('replays supplied history before the new message', async () => {
+    // What makes "now do the same for Sarah" work. It used to be done by pasting a transcript into the goal
+    // string, so the model never saw its own earlier turns.
+    const history: PromptMessage[] = [
+      { role: 'user', content: 'message Robert' },
+      { role: 'assistant', content: 'I sent it.' },
+    ];
+
+    const provider = scriptedProvider([prose('Done.')]);
+
+    await runAgent(deps(provider, recordingDevice()), {
+      goal: 'now do the same for Sarah',
+      history,
+    });
+
+    expect(conversationOf(provider.requests[0]!)).toEqual([
+      ...history,
+      { role: 'user', content: 'now do the same for Sarah' },
+    ]);
+  });
+
+  it('does not inject the screen, a tool list, or a budget into the text', async () => {
+    const provider = scriptedProvider([toolCall('getUiTree', { compact: true }), prose('Done.')]);
+
+    await runAgent(deps(provider, recordingDevice({ getUiTree: () => ({ nodeCount: 3 }) })), {
+      goal: 'read the screen',
+    });
+
+    const text = conversationOf(provider.requests[1]!)
+      .map((message) => (typeof message.content === 'string' ? message.content : ''))
+      .join('\n');
+
+    expect(text).not.toContain('<screen');
+    expect(text).not.toContain('<tools>');
+    expect(text).not.toContain('<budget');
+    expect(text).not.toContain('<history');
+  });
+});
+
+describe('planning as a tool', () => {
+  it('records a plan from a createPlan call and emits it', async () => {
+    const events: AgentEvent[] = [];
+    const provider = scriptedProvider([
+      planCall('open WhatsApp', 'send the message'),
+      prose('Done.'),
+    ]);
+
+    const result = await runAgent(deps(provider, recordingDevice()), {
+      goal: 'send Robert a message',
       onEvent: (event) => events.push(event),
     });
 
-    expect(result.memory.plan).toEqual(['step one', 'step two']);
-    expect(events.find((event) => event.type === 'planned')).toMatchObject({ isReplan: false });
+    expect(result.memory.plan).toEqual(['open WhatsApp', 'send the message']);
+    expect(events.find((event) => event.type === 'planned')).toMatchObject({
+      steps: ['open WhatsApp', 'send the message'],
+      isReplan: false,
+    });
   });
 
-  it('starts without a plan when the planning call fails', async () => {
-    // Refusing to start because planning failed would be worse than starting unplanned.
-    const provider: ModelProvider = {
-      model: 'test',
-      isConfigured: async () => true,
-      complete: async (request) => {
-        const isPlanning = request.tools === undefined;
-        if (isPlanning) throw new Error('planning failed');
-        return prose('Done.');
-      },
-    };
+  it('answers a planning call like any other, so the next request is valid', async () => {
+    const provider = scriptedProvider([planCall('step one'), prose('Done.')]);
 
-    const result = await run(deps(provider, recordingDevice()), { goal: 'Do something' });
+    await runAgent(deps(provider, recordingDevice()), { goal: 'do a thing' });
 
+    const answer = conversationOf(provider.requests[1]!).find((message) => message.role === 'tool');
+
+    expect(answer?.toolCallId).toBe('call_plan');
+    expect(answer?.content).toContain('Plan recorded');
+  });
+
+  it('never sends a planning call to the device', async () => {
+    // They are deliberately absent from `tool-sdk`'s vocabulary: `allToolDefinitions()` is what the MCP server
+    // publishes, and an external agent must not be able to write into a UI it cannot see.
+    const device = recordingDevice();
+    const provider = scriptedProvider([planCall('step one'), prose('Done.')]);
+
+    await runAgent(deps(provider, device), { goal: 'do a thing' });
+
+    expect(device.calls).toHaveLength(0);
+  });
+
+  it('plans and acts in the same turn', async () => {
+    // The reason planning is a tool rather than its own request: it used to cost a whole round trip before
+    // anything could happen.
+    const device = recordingDevice({ openApp: () => undefined });
+    const provider = scriptedProvider([
+      toolCalls(
+        { name: 'createPlan', args: { steps: ['open WhatsApp'] }, id: 'call_plan' },
+        { name: 'openApp', args: { packageName: 'com.whatsapp' }, id: 'call_open' },
+      ),
+      prose('Done.'),
+    ]);
+
+    const result = await runAgent(deps(provider, device), { goal: 'open WhatsApp' });
+
+    expect(result.memory.plan).toEqual(['open WhatsApp']);
+    expect(device.calls[0]?.tool).toBe('openApp');
+  });
+
+  it('replaces the plan on updatePlan and marks it a replan', async () => {
+    const events: AgentEvent[] = [];
+    const provider = scriptedProvider([
+      planCall('search for Robert'),
+      toolCall(
+        'updatePlan',
+        { steps: ['use the contact list'], reason: 'no search box' },
+        'call_up',
+      ),
+      prose('Done.'),
+    ]);
+
+    const result = await runAgent(deps(provider, recordingDevice()), {
+      goal: 'message Robert',
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(result.memory.plan).toEqual(['use the contact list']);
+    expect(events.filter((event) => event.type === 'planned').at(-1)).toMatchObject({
+      isReplan: true,
+    });
+  });
+
+  it('corrects a malformed planning call rather than failing the run', async () => {
+    // A plan with no steps was what produced the bare "Plan:" line with nothing under it.
+    const provider = scriptedProvider([
+      toolCall('createPlan', { steps: [] }, 'call_bad'),
+      prose('Done.'),
+    ]);
+
+    const result = await runAgent(deps(provider, recordingDevice()), { goal: 'do a thing' });
+
+    const answer = conversationOf(provider.requests[1]!).find((message) => message.role === 'tool');
+
+    expect(answer?.content).toContain('were not valid');
     expect(result.outcome).toBe('succeeded');
     expect(result.memory.plan).toEqual([]);
   });
 });
 
-describe('observation', () => {
-  it('reads the screen before every decision, never caching it', async () => {
-    // Acting on a stale reading is the failure this ordering exists to prevent.
-    let reads = 0;
-
-    const provider = scriptedProvider([
-      plan('a'),
-      toolCall('click', { selector: { text: 'Search' } }),
-      toolCall('click', { selector: { text: 'Robert' } }),
-      prose('Done.'),
-    ]);
-
-    const result = await run(
-      deps(provider, recordingDevice({ click: () => undefined }), async () => {
-        reads++;
-        return observation();
-      }),
-      { goal: 'Tap twice' },
-    );
-
-    expect(result.stepsTaken).toBe(2);
-    // Once before each decision, plus once after each action for the trace.
-    expect(reads).toBeGreaterThanOrEqual(4);
-  });
-
-  it('reports what it saw', async () => {
-    const events: AgentEvent[] = [];
-    const provider = scriptedProvider([plan('a'), prose('Done.')]);
-
-    await run(deps(provider, recordingDevice()), {
-      goal: 'Look',
-      onEvent: (event) => events.push(event),
-    });
-
-    expect(events.find((event) => event.type === 'observed')).toMatchObject({
-      packageName: 'com.whatsapp',
-      elementCount: 12,
-    });
-  });
-
-  it('includes the current screen in the prompt', async () => {
-    const provider = scriptedProvider([plan('a'), prose('Done.')]);
-
-    await run(deps(provider, recordingDevice()), { goal: 'Look' });
-
-    // The second request is the action turn; the first was planning.
-    const actionRequest = provider.requests[1]!;
-    const content = actionRequest.messages.map((message) => message.content).join('\n');
-
-    expect(content).toContain('com.whatsapp');
-    expect(content).toContain('Search');
-  });
-});
-
 describe('tool call validation', () => {
   it('never executes a call that fails validation', async () => {
-    // The gate between a model's output and someone's phone.
+    const device = recordingDevice();
     const provider = scriptedProvider([
-      plan('a'),
-      toolCall('click', { selector: { className: 'Button' } }),
-      toolCall('click', { selector: { text: 'Send' } }),
+      toolCall('click', { selector: {} }),
+      toolCall('pressHome', {}, 'call_2'),
       prose('Done.'),
     ]);
-    const device = recordingDevice({ click: () => undefined });
 
-    await run(deps(provider, device), { goal: 'Tap send' });
+    await runAgent(deps(provider, device), { goal: 'tap something' });
 
-    // Only the valid call reached the device.
-    expect(device.calls).toHaveLength(1);
-    expect(device.calls[0]?.args).toEqual({ selector: { text: 'Send' } });
+    expect(device.calls.map((call) => call.tool)).toEqual(['pressHome']);
   });
 
-  it('feeds the rejection back as a correction', async () => {
+  it('feeds the rejection back as the tool result, not as a user message', async () => {
+    // The correction has to go where the answer was owed. Injecting it as a user message would leave the model's
+    // own call unanswered, and the next request would be rejected outright.
     const provider = scriptedProvider([
-      plan('a'),
-      toolCall('sendWhatsApp', { to: 'Robert' }),
+      toolCall('click', { selector: {} }, 'call_bad'),
       prose('Done.'),
     ]);
 
-    await run(deps(provider, recordingDevice()), { goal: 'Message Robert' });
+    await runAgent(deps(provider, recordingDevice()), { goal: 'tap something' });
 
-    // The turn after the rejection carries the correction.
-    const retryContent = provider.requests[2]!.messages.map((m) => m.content).join('\n');
+    const answer = conversationOf(provider.requests[1]!).find(
+      (message) => message.toolCallId === 'call_bad',
+    );
 
-    expect(retryContent).toContain('rejected');
-    expect(retryContent).toContain('sendWhatsApp');
+    expect(answer?.role).toBe('tool');
+    expect(answer?.content).toContain('not valid');
+  });
+
+  it('rejects an unknown tool by name and lists the real ones', async () => {
+    const provider = scriptedProvider([toolCall('tapButton', {}, 'call_bad'), prose('Done.')]);
+
+    await runAgent(deps(provider, recordingDevice()), { goal: 'tap something' });
+
+    const answer = conversationOf(provider.requests[1]!).find(
+      (message) => message.toolCallId === 'call_bad',
+    );
+
+    expect(answer?.content).toContain('There is no tool called "tapButton"');
+    expect(answer?.content).toContain('click');
   });
 
   it('does not charge a rejected call against the step budget', async () => {
-    // A confused model would otherwise exhaust the run without ever acting.
+    // Nothing touched the device. Charging for a malformed call would let a confused model exhaust the run
+    // without ever acting.
     const provider = scriptedProvider([
-      plan('a'),
       toolCall('click', { selector: {} }),
-      toolCall('click', { selector: { text: 'Send' } }),
+      toolCall('pressHome', {}, 'call_2'),
       prose('Done.'),
     ]);
 
-    const result = await run(deps(provider, recordingDevice({ click: () => undefined })), {
-      goal: 'Tap send',
-    });
+    const result = await runAgent(deps(provider, recordingDevice()), { goal: 'tap something' });
 
     expect(result.stepsTaken).toBe(1);
   });
 
   it('gives up after too many rejections in a row', async () => {
-    // Further attempts spend the user's money without progress.
-    const provider = scriptedProvider([plan('a'), toolCall('notATool', {})]);
+    const provider = scriptedProvider([toolCall('click', { selector: {} })]);
 
-    const result = await run(deps(provider, recordingDevice()), { goal: 'Do something' });
+    const result = await runAgent(deps(provider, recordingDevice()), { goal: 'tap something' });
 
     expect(result.outcome).toBe('failed');
-    expect(result.summary).toContain('could not produce a valid action');
-    expect(MAX_CONSECUTIVE_REJECTIONS).toBe(3);
+    expect(provider.requests.length).toBeLessThanOrEqual(MAX_CONSECUTIVE_REJECTIONS + 1);
   });
 
   it('emits a rejection event carrying the correction', async () => {
     const events: AgentEvent[] = [];
-    const provider = scriptedProvider([plan('a'), toolCall('nope', {}), prose('Done.')]);
+    const provider = scriptedProvider([toolCall('click', { selector: {} }), prose('Giving up.')]);
 
-    await run(deps(provider, recordingDevice()), {
-      goal: 'x',
+    await runAgent(deps(provider, recordingDevice()), {
+      goal: 'tap something',
       onEvent: (event) => events.push(event),
     });
 
     expect(events.find((event) => event.type === 'toolCallRejected')).toMatchObject({
-      tool: 'nope',
-      reason: 'unknown-tool',
+      tool: 'click',
+      reason: 'invalid-arguments',
     });
   });
 
-  it('acts on one tool call at a time', async () => {
-    // A model will sometimes propose three taps at once, but the second depends on what
-    // the first did to the screen.
+  it('executes one device call per turn and answers the rest', async () => {
+    // A model asked to act on a phone will propose three taps at once, and the second depends on what the first
+    // changed. The others are answered rather than dropped, because dropping leaves the next request invalid.
+    const device = recordingDevice({ pressHome: () => undefined, pressBack: () => undefined });
     const provider = scriptedProvider([
-      plan('a'),
-      {
-        content: null,
-        toolCalls: [
-          { id: 'c1', name: 'click', arguments: '{"selector":{"text":"A"}}' },
-          { id: 'c2', name: 'click', arguments: '{"selector":{"text":"B"}}' },
-        ],
-        finishReason: 'tool_calls',
-      },
+      toolCalls(
+        { name: 'pressHome', args: {}, id: 'c1' },
+        { name: 'pressBack', args: {}, id: 'c2' },
+      ),
       prose('Done.'),
     ]);
-    const device = recordingDevice({ click: () => undefined });
 
-    await run(deps(provider, device), { goal: 'Tap' });
+    await runAgent(deps(provider, device), { goal: 'go home then back' });
 
-    expect(device.calls).toHaveLength(1);
-    expect(device.calls[0]?.args).toEqual({ selector: { text: 'A' } });
+    expect(device.calls.map((call) => call.tool)).toEqual(['pressHome']);
+
+    const second = conversationOf(provider.requests[1]!).find(
+      (message) => message.toolCallId === 'c2',
+    );
+
+    expect(second?.content).toContain('Only one device action happens per turn');
   });
 });
 
 describe('bounds', () => {
   it('stops at the step ceiling', async () => {
-    const provider = scriptedProvider([plan('a'), toolCall('swipe', { direction: 'down' })]);
+    const provider = scriptedProvider([toolCall('pressHome', {})]);
 
-    const result = await run(deps(provider, recordingDevice({ swipe: () => undefined })), {
-      goal: 'Scroll forever',
-      maxSteps: 5,
+    const result = await runAgent(deps(provider, recordingDevice()), {
+      goal: 'press home forever',
+      maxSteps: 3,
     });
 
     expect(result.outcome).toBe('exhausted');
-    expect(result.stepsTaken).toBe(5);
-    expect(result.summary).toContain('all 5 steps');
+    expect(result.stepsTaken).toBe(3);
   });
 
-  it('stops at the wall-clock deadline', async () => {
-    // A step is not a fixed cost: a waitForElement can take thirty seconds, so a step
-    // count alone does not bound how long a phone is driven.
+  it('stops at the deadline', async () => {
     let clock = 0;
-    const provider = scriptedProvider([plan('a'), toolCall('swipe', { direction: 'down' })]);
+    const provider = scriptedProvider([toolCall('pressHome', {})]);
 
-    const result = await run(
-      {
-        ...deps(provider, recordingDevice({ swipe: () => undefined })),
-        now: () => {
-          clock += 5_000;
-          return clock;
-        },
-      },
-      { goal: 'Scroll', maxSteps: 100, deadlineMs: 10_000 },
+    const result = await runAgent(
+      { ...deps(provider, recordingDevice()), now: () => (clock += 1_000) },
+      { goal: 'press home forever', deadlineMs: 2_000 },
     );
 
     expect(result.outcome).toBe('exhausted');
-    expect(result.stepsTaken).toBeLessThan(100);
+    expect(result.summary).toContain('out of time');
   });
 
   it('stops when cancelled', async () => {
     const controller = new AbortController();
-    controller.abort();
-
-    const provider = scriptedProvider([plan('a'), prose('Done.')]);
-
-    const result = await run(deps(provider, recordingDevice()), {
-      goal: 'x',
-      signal: controller.signal,
-      skipPlanning: true,
-    });
-
-    expect(result.outcome).toBe('cancelled');
-    expect(result.stepsTaken).toBe(0);
-  });
-
-  it('reports cancellation as its own outcome, not a failure', async () => {
-    const controller = new AbortController();
-    const provider = scriptedProvider([toolCall('pressBack', {}), prose('Done.')]);
+    const provider = scriptedProvider([toolCall('pressHome', {})]);
 
     const device: DeviceTools = {
       isAvailable: true,
@@ -376,384 +564,345 @@ describe('bounds', () => {
       },
     };
 
-    const result = await run(deps(provider, device), {
-      goal: 'x',
+    const result = await runAgent(deps(provider, device), {
+      goal: 'press home',
       signal: controller.signal,
-      skipPlanning: true,
     });
 
     expect(result.outcome).toBe('cancelled');
   });
+
+  it('does not treat an empty reply as a finished run', async () => {
+    // A model returning neither a tool call nor prose used to read as success, which is how a failure became a
+    // silent "done" with nothing to show for it.
+    const provider = scriptedProvider([prose('')]);
+
+    const result = await runAgent(deps(provider, recordingDevice()), { goal: 'do a thing' });
+
+    expect(result.outcome).toBe('failed');
+    expect(provider.requests.length).toBe(MAX_EMPTY_TURNS);
+  });
+
+  it('asks the model to continue after one empty reply', async () => {
+    const provider = scriptedProvider([prose(''), prose('Actually, done.')]);
+
+    const result = await runAgent(deps(provider, recordingDevice()), { goal: 'do a thing' });
+
+    expect(result.outcome).toBe('succeeded');
+
+    const nudge = conversationOf(provider.requests[1]!).at(-1);
+    expect(nudge?.role).toBe('user');
+    expect(nudge?.content).toContain('You replied with nothing');
+  });
 });
 
-describe('failure and replanning', () => {
-  it('records a failed tool call and carries on', async () => {
-    const provider = scriptedProvider([
-      plan('a'),
-      toolCall('click', { selector: { text: 'Missing' } }),
-      prose('That element is not there. Stopping.'),
-    ]);
-
+describe('failure and stalling', () => {
+  it('answers a failed tool call with the failure, including its code', async () => {
+    // The failure text is the model's context for what to do next: "element not found" and "you lack permission"
+    // call for completely different responses.
     const device: DeviceTools = {
       isAvailable: true,
       invoke: async () => {
-        throw Object.assign(new Error('Element not found: Missing'), {
+        throw Object.assign(new Error('no match for text "Robert"'), {
           code: 'element_not_found',
         });
       },
     };
 
-    const result = await run(deps(provider, device), { goal: 'Tap missing' });
+    const provider = scriptedProvider([
+      toolCall('click', { selector: { text: 'Robert' } }, 'call_fail'),
+      prose('Could not find it.'),
+    ]);
 
-    expect(result.stepsTaken).toBe(1);
-    expect(result.memory.steps[0]?.outcome).toBe('failed');
-    expect(result.memory.steps[0]?.summary).toContain('Element not found');
+    await runAgent(deps(provider, device), { goal: 'tap Robert' });
+
+    const answer = conversationOf(provider.requests[1]!).find(
+      (message) => message.toolCallId === 'call_fail',
+    );
+
+    expect(answer?.content).toContain('element_not_found');
+    expect(answer?.content).toContain('no match for text');
   });
 
-  it('replans after two failures in a row', async () => {
-    const events: AgentEvent[] = [];
-    const provider = scriptedProvider([
-      plan('a'),
-      toolCall('click', { selector: { text: 'A' } }),
-      toolCall('click', { selector: { text: 'B' } }),
-      plan('try something else'),
-      prose('Done.'),
-    ]);
+  it('records a failed tool call and carries on', async () => {
+    let attempt = 0;
 
     const device: DeviceTools = {
       isAvailable: true,
       invoke: async () => {
-        throw new Error('nope');
+        attempt++;
+        if (attempt === 1) throw new Error('element not found');
+        return undefined;
       },
     };
 
-    await run(deps(provider, device), {
-      goal: 'x',
-      onEvent: (event) => events.push(event),
-    });
-
-    expect(events.some((event) => event.type === 'replanning')).toBe(true);
-    expect(events.filter((event) => event.type === 'planned').length).toBeGreaterThan(1);
-  });
-
-  it('replans when it detects a loop', async () => {
-    const events: AgentEvent[] = [];
     const provider = scriptedProvider([
-      plan('a'),
-      toolCall('click', { selector: { text: 'Same' } }),
-      toolCall('click', { selector: { text: 'Same' } }),
-      toolCall('click', { selector: { text: 'Same' } }),
-      plan('a different approach'),
-      prose('Done.'),
+      toolCall('click', { selector: { text: 'Send' } }),
+      toolCall('click', { selector: { resourceId: 'send' } }, 'call_2'),
+      prose('Sent.'),
     ]);
 
-    await run(deps(provider, recordingDevice({ click: () => undefined })), {
-      goal: 'x',
-      maxSteps: 8,
-      onEvent: (event) => events.push(event),
-    });
+    const result = await runAgent(deps(provider, device), { goal: 'send it' });
 
-    const replans = events.filter((event) => event.type === 'replanning');
-    expect(replans.length).toBeGreaterThan(0);
-    expect(replans[0]).toMatchObject({ reason: expect.stringContaining('same action') });
+    expect(result.outcome).toBe('succeeded');
+    expect(result.stepsTaken).toBe(2);
+    expect(result.memory.steps[0]?.outcome).toBe('failed');
   });
 
-  it('surfaces a misconfigured provider rather than reporting a failed run', async () => {
-    // A setup problem the user must fix before any run can work.
-    const provider: ModelProvider = {
-      model: 'test',
-      isConfigured: async () => false,
-      complete: async () => {
-        const { ProviderError } = await import('./provider');
-        throw new ProviderError('unauthorized', 'bad key');
+  it('tells the model when it is stalling, rather than replanning for it', async () => {
+    // The loop used to make its own planning call here, on every turn for as long as the condition persisted —
+    // because `isStuck()` keeps reporting until something moves. It now says so once per distinct problem and
+    // lets the model decide, which is what `updatePlan` is for.
+    const device: DeviceTools = {
+      isAvailable: true,
+      invoke: async () => {
+        throw new Error('element not found');
       },
     };
 
-    await expect(
-      run(deps(provider, recordingDevice()), { goal: 'x', skipPlanning: true }),
-    ).rejects.toThrow(/bad key/);
+    const provider = scriptedProvider([
+      toolCall('click', { selector: { text: 'Send' } }, 'c1'),
+      toolCall('click', { selector: { text: 'Send' } }, 'c2'),
+      prose('Giving up.'),
+    ]);
+
+    await runAgent(deps(provider, device), { goal: 'send it' });
+
+    const nudge = conversationOf(provider.requests[2]!).find(
+      (message) => message.role === 'user' && String(message.content).includes('not working'),
+    );
+
+    expect(nudge?.content).toContain('updatePlan');
+  });
+
+  it('emits a replanning event when it notices the stall', async () => {
+    const events: AgentEvent[] = [];
+
+    const device: DeviceTools = {
+      isAvailable: true,
+      invoke: async () => {
+        throw new Error('element not found');
+      },
+    };
+
+    const provider = scriptedProvider([
+      toolCall('click', { selector: { text: 'Send' } }, 'c1'),
+      toolCall('click', { selector: { text: 'Send' } }, 'c2'),
+      prose('Giving up.'),
+    ]);
+
+    await runAgent(deps(provider, device), {
+      goal: 'send it',
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(events.find((event) => event.type === 'replanning')).toMatchObject({
+      reason: expect.stringContaining('failed'),
+    });
   });
 });
 
 describe('the recorder seam', () => {
-  it('emits a toolExecuted event per execution', async () => {
-    const events: AgentEvent[] = [];
-    const provider = scriptedProvider([
-      plan('a'),
-      toolCall('click', { selector: { text: 'Send' } }),
-      prose('Done.'),
-    ]);
+  it('reads the screen around a tool execution, for the trace', async () => {
+    // Observation is no longer a prompt input — the model gets a screen by calling `getUiTree`. It survives
+    // because a trace step records the screen as it *was*, which is what lets the generator pick a more durable
+    // selector than the agent used.
+    let reads = 0;
 
-    await run(deps(provider, recordingDevice({ click: () => undefined })), {
-      goal: 'Tap send',
-      onEvent: (event) => events.push(event),
-    });
+    const provider = scriptedProvider([toolCall('pressHome', {}), prose('Done.')]);
 
-    const executed = events.filter(
-      (event): event is ToolExecutedEvent => event.type === 'toolExecuted',
+    await runAgent(
+      deps(provider, recordingDevice(), async () => {
+        reads++;
+        return observation();
+      }),
+      { goal: 'go home' },
     );
 
-    expect(executed).toHaveLength(1);
+    expect(reads).toBeGreaterThanOrEqual(2);
   });
 
-  it('carries everything an ExecutionStep needs', async () => {
-    // Phase 9 must not have to reopen the loop to add capture points.
+  it('does not read the screen on a turn with no device call', async () => {
+    // The saving that comes from not injecting a screen: a turn that only plans or only answers costs nothing.
+    let reads = 0;
+
+    const provider = scriptedProvider([prose('Nothing to do.')]);
+
+    await runAgent(
+      deps(provider, recordingDevice(), async () => {
+        reads++;
+        return observation();
+      }),
+      { goal: 'what can you do' },
+    );
+
+    expect(reads).toBe(0);
+  });
+
+  it('emits a toolExecuted event carrying the screen before the action', async () => {
     const events: AgentEvent[] = [];
     const provider = scriptedProvider([
-      plan('a'),
-      toolCall('click', { selector: { text: 'Send' } }),
-      prose('Done.'),
+      toolCall('click', { selector: { text: 'Search' } }),
+      prose('Tapped.'),
     ]);
 
-    await run(deps(provider, recordingDevice({ click: () => undefined })), {
-      goal: 'Tap send',
+    await runAgent(deps(provider, recordingDevice({ click: () => undefined })), {
+      goal: 'tap search',
       onEvent: (event) => events.push(event),
     });
 
     const executed = events.find(
       (event): event is ToolExecutedEvent => event.type === 'toolExecuted',
-    )!;
-
-    expect(executed.tool).toBe('click');
-    expect(executed.arguments).toEqual({ selector: { text: 'Send' } });
-    expect(executed.packageName).toBe('com.whatsapp');
-    expect(executed.activityName).toContain('HomeActivity');
-    expect(executed.uiTreeBefore).toBeDefined();
-    expect(executed.outcome).toBe('succeeded');
-    expect(typeof executed.durationMs).toBe('number');
-    expect(executed.screenAfter).toBe('com.whatsapp/HomeActivity');
-  });
-
-  it('captures the resolved element, which is what makes replay durable', async () => {
-    // A trace of coordinates compiles into a workflow that breaks on the next app
-    // update; one carrying the element that matched does not (ADR 0009).
-    const events: AgentEvent[] = [];
-    const provider = scriptedProvider([
-      plan('a'),
-      toolCall('findElement', { selector: { text: 'Send' } }),
-      prose('Done.'),
-    ]);
-
-    await run(
-      deps(
-        provider,
-        recordingDevice({
-          findElement: () => ({
-            text: 'Send',
-            resourceId: 'com.whatsapp:id/send',
-            strategy: 'resourceId',
-            centerX: 975,
-            centerY: 1875,
-          }),
-        }),
-      ),
-      { goal: 'Find send', onEvent: (event) => events.push(event) },
     );
 
-    const executed = events.find(
-      (event): event is ToolExecutedEvent => event.type === 'toolExecuted',
-    )!;
-
-    expect(executed.matchedBy).toBe('resourceId');
-    expect(executed.resolvedElement).toMatchObject({ resourceId: 'com.whatsapp:id/send' });
+    expect(executed).toMatchObject({ tool: 'click', outcome: 'succeeded' });
+    expect(executed?.packageName).toBe('com.whatsapp');
+    expect(executed?.uiTreeBefore).toMatchObject({ nodeCount: 12 });
   });
 
   it('records a failed step as richly as a successful one', async () => {
-    // The failed step is the one a person most wants to look at.
+    // The failed step is the one a person most wants to look at, so it must carry the same detail.
     const events: AgentEvent[] = [];
-    const provider = scriptedProvider([
-      plan('a'),
-      toolCall('click', { selector: { text: 'Missing' } }),
-      prose('Stopping.'),
-    ]);
 
     const device: DeviceTools = {
       isAvailable: true,
       invoke: async () => {
-        throw Object.assign(new Error('not found'), { code: 'element_not_found' });
+        throw Object.assign(new Error('nothing there'), { code: 'element_not_found' });
       },
     };
 
-    await run(deps(provider, device), {
-      goal: 'x',
+    const provider = scriptedProvider([
+      toolCall('click', { selector: { text: 'Send' } }),
+      prose('Could not.'),
+    ]);
+
+    await runAgent(deps(provider, device), {
+      goal: 'send it',
       onEvent: (event) => events.push(event),
     });
 
     const executed = events.find(
       (event): event is ToolExecutedEvent => event.type === 'toolExecuted',
-    )!;
+    );
 
-    expect(executed.outcome).toBe('failed');
-    expect(executed.error).toBe('not found');
-    expect(executed.errorCode).toBe('element_not_found');
-    expect(executed.uiTreeBefore).toBeDefined();
+    expect(executed).toMatchObject({ outcome: 'failed', errorCode: 'element_not_found' });
+    expect(executed?.uiTreeBefore).not.toBeNull();
   });
 
-  it('survives a listener that throws', async () => {
-    // Abandoning a run because a log view has a bug would leave the phone half-done.
-    const provider = scriptedProvider([plan('a'), toolCall('pressBack', {}), prose('Done.')]);
+  it('carries on when the screen cannot be read', async () => {
+    // Mid-transition, or the service momentarily unavailable. Not worth failing a step over, and the trace
+    // simply records that the screen was unknown.
+    const provider = scriptedProvider([toolCall('pressHome', {}), prose('Done.')]);
 
-    const result = await run(deps(provider, recordingDevice()), {
-      goal: 'x',
-      onEvent: () => {
-        throw new Error('listener bug');
-      },
-    });
+    const result = await runAgent(
+      deps(provider, recordingDevice(), async () => {
+        throw new Error('service not connected');
+      }),
+      { goal: 'go home' },
+    );
 
     expect(result.outcome).toBe('succeeded');
+    expect(result.stepsTaken).toBe(1);
   });
+});
 
-  it('brackets the run with started and finished events', async () => {
-    const events: AgentEvent[] = [];
-    const provider = scriptedProvider([plan('a'), prose('Done.')]);
+describe('screenshots', () => {
+  const screenshotResult = { filePath: '/data/captures/1.png', widthPx: 1080, heightPx: 2400 };
 
-    await run(deps(provider, recordingDevice()), {
-      goal: 'x',
-      onEvent: (event) => events.push(event),
-    });
-
-    expect(events[0]?.type).toBe('runStarted');
-    expect(events.at(-1)?.type).toBe('runFinished');
-  });
-
-  it('tags every event with the same run id', async () => {
-    const events: AgentEvent[] = [];
-    const provider = scriptedProvider([plan('a'), prose('Done.')]);
-
-    const result = await run(deps(provider, recordingDevice()), {
-      goal: 'x',
-      onEvent: (event) => events.push(event),
-    });
-
-    for (const event of events) expect(event.runId).toBe(result.runId);
-  });
-
-  it('reports the model\u2019s prose as thinking, so a pause is explained', async () => {
-    const events: AgentEvent[] = [];
+  it('answers with the image bytes when a reader is supplied', async () => {
+    // A model cannot fetch a `file://` path off someone's phone, so the answer has to carry the bytes.
     const provider = scriptedProvider([
-      plan('a'),
+      toolCall('takeScreenshot', {}, 'call_shot'),
+      prose('I can see it.'),
+    ]);
+
+    await runAgent(
       {
-        content: 'I need to open WhatsApp first.',
-        toolCalls: [{ id: 'c', name: 'openApp', arguments: '{"packageName":"com.whatsapp"}' }],
-        finishReason: 'tool_calls',
+        ...deps(provider, recordingDevice({ takeScreenshot: () => screenshotResult })),
+        readScreenshotBase64: async () => 'iVBORw0KGgo=',
       },
+      { goal: 'look at the screen' },
+    );
+
+    const answer = conversationOf(provider.requests[1]!).find(
+      (message) => message.toolCallId === 'call_shot',
+    );
+
+    expect(Array.isArray(answer?.content)).toBe(true);
+
+    const parts = answer!.content as { type: string }[];
+    expect(parts.map((part) => part.type)).toEqual(['text', 'image_url']);
+  });
+
+  it('falls back to the metadata when there is no reader', async () => {
+    // A caller with no vision-capable model should not pay to send megabytes it cannot use.
+    const provider = scriptedProvider([
+      toolCall('takeScreenshot', {}, 'call_shot'),
       prose('Done.'),
     ]);
 
-    await run(deps(provider, recordingDevice({ openApp: () => undefined })), {
-      goal: 'x',
-      onEvent: (event) => events.push(event),
+    await runAgent(deps(provider, recordingDevice({ takeScreenshot: () => screenshotResult })), {
+      goal: 'take a screenshot',
     });
 
-    expect(events.find((event) => event.type === 'thinking')).toMatchObject({
-      content: 'I need to open WhatsApp first.',
-    });
+    const answer = conversationOf(provider.requests[1]!).find(
+      (message) => message.toolCallId === 'call_shot',
+    );
+
+    expect(typeof answer?.content).toBe('string');
+    expect(answer?.content).toContain('/data/captures/1.png');
   });
 
-  it('does not announce a plan it could not make', async () => {
-    // The reported symptom was a bare "Plan:" line in the conversation — a label with nothing after it. A
-    // conversational message ("hi") gives the model nothing to plan, so `makePlan` returns an empty list, and
-    // emitting that as a `planned` event is a header with no content. Consumers persist events, so it also ended
-    // up in the stored transcript.
-    const events: AgentEvent[] = [];
-    const provider = scriptedProvider([prose('not json at all'), prose('Nothing to do.')]);
-
-    await run(deps(provider, recordingDevice()), {
-      goal: 'hi',
-      onEvent: (event) => events.push(event),
-    });
-
-    expect(events.filter((event) => event.type === 'planned')).toHaveLength(0);
-  });
-
-  it('still announces a plan that has steps', async () => {
-    // The other half: suppressing an empty plan must not suppress a real one.
-    const events: AgentEvent[] = [];
-    const provider = scriptedProvider([plan('open the app', 'find the contact'), prose('Done.')]);
-
-    await run(deps(provider, recordingDevice()), {
-      goal: 'message Robert',
-      onEvent: (event) => events.push(event),
-    });
-
-    expect(events.filter((event) => event.type === 'planned')).toHaveLength(1);
-  });
-
-  it('does not report the final answer as thinking as well', async () => {
-    // The duplication a device pass found: the response's prose was emitted as `thinking` before the loop checked
-    // for tool calls, and when there are none that same prose becomes the run's summary and is delivered again by
-    // `runFinished`. Any consumer persisting both showed the final answer twice.
-    //
-    // Reasoning that accompanies an action is worth surfacing. Reasoning that *is* the answer is the answer.
-    const events: AgentEvent[] = [];
-    const provider = scriptedProvider([plan('a'), prose('Everything is already done.')]);
-
-    const result = await run(deps(provider, recordingDevice()), {
-      goal: 'x',
-      onEvent: (event) => events.push(event),
-    });
-
-    expect(result.summary).toBe('Everything is already done.');
-    expect(events.filter((event) => event.type === 'thinking')).toHaveLength(0);
-  });
-
-  it('still reports thinking for a step that acts', async () => {
-    // Guarding the other half of the same change: moving the emit must not silence reasoning that accompanies a
-    // real action, which is the case it exists for.
-    const events: AgentEvent[] = [];
+  it('falls back to the metadata when the file cannot be read', async () => {
+    // The capture worked, so this is not a failed step. Saying the image exists is more useful than nothing.
     const provider = scriptedProvider([
-      plan('a'),
-      {
-        content: 'Tapping Send now.',
-        toolCalls: [{ id: 'c', name: 'pressHome', arguments: '{}' }],
-        finishReason: 'tool_calls',
-      },
+      toolCall('takeScreenshot', {}, 'call_shot'),
       prose('Done.'),
     ]);
 
-    await run(deps(provider, recordingDevice()), {
-      goal: 'x',
-      onEvent: (event) => events.push(event),
-    });
+    await runAgent(
+      {
+        ...deps(provider, recordingDevice({ takeScreenshot: () => screenshotResult })),
+        readScreenshotBase64: async () => null,
+      },
+      { goal: 'take a screenshot' },
+    );
 
-    expect(events.filter((event) => event.type === 'thinking')).toHaveLength(1);
+    const answer = conversationOf(provider.requests[1]!).find(
+      (message) => message.toolCallId === 'call_shot',
+    );
+
+    expect(typeof answer?.content).toBe('string');
   });
 });
 
 describe('tool restriction', () => {
-  it('offers only the allowed tools', async () => {
-    const provider = scriptedProvider([plan('a'), prose('Done.')]);
+  it('sends only the allowed tools, plus planning', async () => {
+    // What makes a tool toggle mean something: a disabled tool is never advertised, rather than being offered and
+    // then refused — which reads as the agent malfunctioning.
+    const provider = scriptedProvider([prose('Done.')]);
 
-    await run(deps(provider, recordingDevice()), {
-      goal: 'Look only',
-      allowedTools: ['getUiTree', 'findElement'],
+    await runAgent(deps(provider, recordingDevice()), {
+      goal: 'read the screen',
+      allowedTools: ['getUiTree'],
     });
 
-    const actionRequest = provider.requests[1]!;
+    const names = provider.requests[0]!.tools!.map((tool) => tool.function.name);
 
-    expect(actionRequest.tools?.map((tool) => tool.function.name)).toEqual([
-      'getUiTree',
-      'findElement',
-    ]);
+    expect(names).toEqual(['getUiTree', 'createPlan', 'updatePlan']);
   });
 
-  it('rejects a tool outside the allowed set', async () => {
-    // The model is not offered it, but a model can still name one it was not given.
+  it('rejects a call to a tool that was not offered', async () => {
+    const device = recordingDevice();
     const provider = scriptedProvider([
-      plan('a'),
       toolCall('click', { selector: { text: 'Send' } }),
       prose('Done.'),
     ]);
-    const device = recordingDevice({ click: () => undefined });
 
-    await run(deps(provider, device), {
-      goal: 'x',
-      allowedTools: ['getUiTree'],
-      maxSteps: 3,
-    });
+    await runAgent(deps(provider, device), { goal: 'tap send', allowedTools: ['getUiTree'] });
 
-    // click is a real tool name, so validation passes - restriction is advisory to the
-    // model, and the gate that matters is what the app chooses to expose.
-    expect(device.calls.length).toBeLessThanOrEqual(1);
+    // Validation is by name against the whole vocabulary, so the call is executed but never offered — the guard
+    // that matters is the prompt not advertising it. Asserted here so a change in that behaviour is deliberate.
+    expect(provider.requests[0]!.tools!.map((tool) => tool.function.name)).not.toContain('click');
   });
 });

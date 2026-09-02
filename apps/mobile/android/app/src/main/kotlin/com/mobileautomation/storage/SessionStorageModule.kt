@@ -167,8 +167,7 @@ class SessionStorageModule(
     /**
      * The most recent messages, oldest first.
      *
-     * For seeding the agent's memory on a long session, where the full transcript would not fit in a
-     * prompt.
+     * For a transcript view of a long session, where reading every row would be wasteful.
      */
     @ReactMethod
     fun recentMessages(
@@ -179,6 +178,30 @@ class SessionStorageModule(
         scope.launch {
             try {
                 promise.resolve(store.recentMessages(sessionId, limit).toWritableArray())
+            } catch (error: Exception) {
+                promise.reject("session_read_failed", error.message, error)
+            }
+        }
+    }
+
+    /**
+     * The most recent messages of one role, oldest first.
+     *
+     * Exists for replaying the model's conversation, which is stored under the `wire` role. Filtered in SQL
+     * rather than in JS because the table interleaves the user's transcript with the wire messages — an
+     * unfiltered window of sixty rows could hold twenty replayable messages or none, so a limit applied after
+     * the fact means something different on every session.
+     */
+    @ReactMethod
+    fun recentMessagesByRole(
+        sessionId: String,
+        role: String,
+        limit: Int,
+        promise: Promise,
+    ) {
+        scope.launch {
+            try {
+                promise.resolve(store.recentMessagesByRole(sessionId, role, limit).toWritableArray())
             } catch (error: Exception) {
                 promise.reject("session_read_failed", error.message, error)
             }

@@ -52,6 +52,7 @@ export {
   DEFAULT_DEADLINE_MS,
   MAX_AGENT_STEPS,
   MAX_CONSECUTIVE_REJECTIONS,
+  MAX_EMPTY_TURNS,
   type AgentDependencies,
   type AgentRunOptions,
   type AgentRunResult,
@@ -80,10 +81,27 @@ export {
   needsPlan,
 } from './planning';
 
+export { DEFAULT_CONVERSATION_TOKENS, Conversation, type ToolAnswer } from './conversation';
+
+export {
+  MAX_PLAN_STEPS,
+  PLANNING_TOOL_NAMES,
+  CreatePlanArgumentsSchema,
+  UpdatePlanArgumentsSchema,
+  type CreatePlanArguments,
+  type PlanningResult,
+  type PlanningToolName,
+  type UpdatePlanArguments,
+  applyPlanningCall,
+  isPlanningTool,
+  planningToolsForRequest,
+} from './planningTools';
+
 export {
   DEFAULT_REQUEST_TIMEOUT_MS,
   DEFAULT_TEMPERATURE,
   PROVIDER_ERROR_KINDS,
+  SEND_REASONING_BY_DEFAULT,
   ProviderError,
   type CompletionRequest,
   type CompletionResponse,

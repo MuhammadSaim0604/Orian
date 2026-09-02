@@ -31,6 +31,13 @@ export type ProviderConfig = {
   readonly maxTokens?: number;
   /** Per-request ceiling. A model call that hangs would freeze the agent loop. */
   readonly timeoutMs?: number;
+  /**
+   * Whether to send a previous turn's reasoning back.
+   *
+   * Off by default (`SEND_REASONING_BY_DEFAULT`). Configurable because a provider that uses reasoning for
+   * continuity across turns needs it, and one that rejects unknown assistant fields must not have it.
+   */
+  readonly sendReasoning?: boolean;
 };
 
 export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
@@ -78,6 +85,13 @@ export type CompletionResponse = {
   /** Prose content, if the model replied with any. */
   readonly content: string | null;
   readonly toolCalls: readonly ProviderToolCall[];
+  /**
+   * The model's reasoning, when it emitted any.
+   *
+   * Read from `reasoning` or `reasoning_content` — providers disagree on the name, and a reasoning model whose
+   * field is unrecognised looks like a model that returned nothing but a tool call.
+   */
+  readonly reasoning: string | null;
   /** Why the model stopped, useful for spotting a truncated response. */
   readonly finishReason: string | null;
   readonly usage?: {
@@ -227,20 +241,37 @@ export const createChatCompletionsProvider = (
   return { complete, isConfigured, model: config.model };
 };
 
-/** Builds the request body, translating internal message shape to the wire format. */
+/**
+ * Whether the model's reasoning is sent back on the next turn.
+ *
+ * False, and this is a considered default rather than laziness. Reasoning is often the largest part of a
+ * response, it is not required for the model to continue coherently — the assistant turn and its tool results
+ * carry the decision — and several providers reject an unrecognised field on an assistant message outright. It
+ * is kept on the message for the UI and the trace, which is where it is actually useful.
+ */
+export const SEND_REASONING_BY_DEFAULT = false;
+
+/**
+ * Builds the request body.
+ *
+ * ## What this must get right
+ *
+ * The whole conversation is replayed on every call, and a provider validates its shape strictly: an assistant
+ * message that called tools must carry those calls with their original ids, and every tool message must
+ * reference an id that appeared on a preceding assistant message. Get either wrong and the request is rejected
+ * as a whole — or worse, accepted with the model unable to see what it just did.
+ *
+ * An earlier version of this function mapped only `role`, `content` and `tool_call_id`. **`tool_calls` was
+ * dropped silently**, so an assistant turn could never be replayed and the request carried nothing but system
+ * and user messages however many steps had been taken. That is the bug this shape exists to make impossible.
+ */
 const buildRequestBody = (
   config: ProviderConfig,
   request: CompletionRequest,
 ): Record<string, unknown> => {
   const body: Record<string, unknown> = {
     model: config.model,
-    messages: request.messages.map((message) =>
-      message.toolCallId === undefined
-        ? { role: message.role, content: message.content }
-        : // A tool result must carry the id of the call it answers, or the provider
-          // cannot match them.
-          { role: message.role, content: message.content, tool_call_id: message.toolCallId },
-    ),
+    messages: request.messages.map((message) => toWireMessage(message, config)),
     temperature: config.temperature ?? DEFAULT_TEMPERATURE,
   };
 
@@ -252,6 +283,62 @@ const buildRequestBody = (
   }
 
   return body;
+};
+
+/** One message in the provider's shape. */
+const toWireMessage = (message: PromptMessage, config: ProviderConfig): Record<string, unknown> => {
+  const wire: Record<string, unknown> = {
+    role: message.role,
+    content: toWireContent(message.content),
+  };
+
+  // A tool result must carry the id of the call it answers, or the provider cannot match them.
+  if (message.toolCallId !== undefined) wire.tool_call_id = message.toolCallId;
+
+  if (message.toolCalls !== undefined && message.toolCalls.length > 0) {
+    wire.tool_calls = message.toolCalls.map((call) => ({
+      id: call.id,
+      type: 'function',
+      // `arguments` is passed through as the string it arrived as. Re-serializing a parsed object is not
+      // guaranteed byte-identical, and some providers match the assistant turn against its tool results.
+      function: { name: call.name, arguments: call.arguments },
+    }));
+  }
+
+  if (
+    message.reasoning !== undefined &&
+    (config.sendReasoning ?? SEND_REASONING_BY_DEFAULT) &&
+    message.role === 'assistant'
+  ) {
+    wire.reasoning = message.reasoning;
+  }
+
+  return wire;
+};
+
+/**
+ * Content in the provider's shape.
+ *
+ * A plain string stays a string rather than becoming a one-element array. Both are legal, but the string form
+ * is what every provider has supported since before parts existed, and there is no reason to make the common
+ * case the less compatible one.
+ */
+const toWireContent = (
+  content: PromptMessage['content'],
+): string | null | readonly Record<string, unknown>[] => {
+  if (content === null || typeof content === 'string') return content;
+
+  return content.map((part) =>
+    part.type === 'text'
+      ? { type: 'text', text: part.text }
+      : {
+          type: 'image_url',
+          image_url:
+            part.imageUrl.detail === undefined
+              ? { url: part.imageUrl.url }
+              : { url: part.imageUrl.url, detail: part.imageUrl.detail },
+        },
+  );
 };
 
 const sendOnce = async (
@@ -370,6 +457,8 @@ const parseCompletion = (json: unknown): CompletionResponse => {
     choices?: {
       message?: {
         content?: unknown;
+        reasoning?: unknown;
+        reasoning_content?: unknown;
         tool_calls?: { id?: unknown; function?: { name?: unknown; arguments?: unknown } }[];
       };
       finish_reason?: unknown;
@@ -401,6 +490,9 @@ const parseCompletion = (json: unknown): CompletionResponse => {
   return {
     content: typeof message.content === 'string' ? message.content : null,
     toolCalls,
+    // Both spellings are read because providers disagree, and the cost of guessing wrong is that a reasoning
+    // model's whole thought process is silently discarded.
+    reasoning: readReasoning(message),
     finishReason: typeof choice.finish_reason === 'string' ? choice.finish_reason : null,
     usage:
       typeof payload.usage?.prompt_tokens === 'number' &&
@@ -411,6 +503,17 @@ const parseCompletion = (json: unknown): CompletionResponse => {
           }
         : undefined,
   };
+};
+
+const readReasoning = (message: {
+  reasoning?: unknown;
+  reasoning_content?: unknown;
+}): string | null => {
+  for (const candidate of [message.reasoning, message.reasoning_content]) {
+    if (typeof candidate === 'string' && candidate.trim() !== '') return candidate;
+  }
+
+  return null;
 };
 
 const asProviderError = (error: unknown): ProviderError => {

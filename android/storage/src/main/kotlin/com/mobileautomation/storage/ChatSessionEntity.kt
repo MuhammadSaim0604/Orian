@@ -45,10 +45,15 @@ data class ChatSessionEntity(
 /**
  * One message in a session.
  *
- * `role` covers more than the OpenAI roles: a `tool` message records what a tool call did, and an
- * `event` message records loop narration such as a plan or a replan. Both are things the user needs to
- * see in the transcript, and both are things the **prompt** must be able to exclude - the model gets
- * its tool history from memory, not from re-reading the chat.
+ * `role` covers more than the OpenAI roles, and the extra ones serve two different readers:
+ *
+ * - `tool` and `event` are for the **user**: what a call did, and loop narration such as a plan or a change
+ *   of approach. A `tool` row's text is a readable summary, not what the model was sent.
+ * - `wire` is for the **model**: it carries the exact Chat Completions message in `detail`, so the next run
+ *   can replay the conversation as it happened rather than from a description of it.
+ *
+ * Both live in one table on purpose. They are two views of the same conversation, and splitting them would
+ * make it possible for one to survive a delete without the other.
  *
  * Deleting a session deletes its messages by foreign key, so there is no path that leaves orphans.
  */
@@ -67,7 +72,7 @@ data class ChatSessionEntity(
 data class ChatMessageEntity(
     @PrimaryKey val id: String,
     @ColumnInfo(name = "session_id") val sessionId: String,
-    /** `user`, `assistant`, `tool`, or `event`. */
+    /** `user`, `assistant`, `tool`, `event`, or `wire`. */
     @ColumnInfo(name = "role") val role: String,
     @ColumnInfo(name = "text") val text: String,
     /**

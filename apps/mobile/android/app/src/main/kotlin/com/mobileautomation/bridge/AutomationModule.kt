@@ -3,6 +3,8 @@ package com.mobileautomation.bridge
 import android.app.Activity
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
+import android.util.Base64
+import android.util.Log
 import com.facebook.react.bridge.ActivityEventListener
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -16,6 +18,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import java.io.File
 
 /**
  * The React Native module: the single crossing point between JS and the Kotlin
@@ -385,6 +388,52 @@ class AutomationModule(
         promise: Promise,
     ) = dispatch(promise) { it.findTextOnScreen(text, exact) }
 
+    /**
+     * Reads a captured screenshot as base64, for a vision-capable model.
+     *
+     * The one place image bytes are allowed to cross the bridge, and only on demand. Screenshots normally travel
+     * as a file path precisely because a full-resolution screen is several megabytes and moving it through the
+     * bridge blocks the JS thread — but a model cannot fetch a `file://` URL off someone's phone, so a tool
+     * result carrying an image has to carry the bytes.
+     *
+     * **Confined to the capture directory.** The path arrives from JS, and a module that reads any path it is
+     * given is an arbitrary file read inside the app's own sandbox. Resolving canonically before comparing is
+     * what stops `captures/../../databases/sessions.db` from being accepted.
+     *
+     * Resolves null rather than rejecting when the file is missing or out of bounds: a screenshot that cannot be
+     * read is not a failed step, the capture worked, and the caller falls back to sending the metadata alone.
+     */
+    @ReactMethod
+    fun readScreenshotBase64(
+        path: String,
+        promise: Promise,
+    ) {
+        scope.launch {
+            try {
+                val file = File(path).canonicalFile
+                val directory = File(reactContext.filesDir, CAPTURE_DIRECTORY).canonicalFile
+
+                if (!file.path.startsWith(directory.path + File.separator)) {
+                    Log.w(NAME, "Refused to read a file outside the capture directory")
+                    promise.resolve(null)
+                    return@launch
+                }
+
+                if (!file.isFile) {
+                    promise.resolve(null)
+                    return@launch
+                }
+
+                promise.resolve(Base64.encodeToString(file.readBytes(), Base64.NO_WRAP))
+            } catch (error: Throwable) {
+                // Includes OutOfMemoryError on a very large capture, which is a real possibility for a
+                // full-resolution screen on a low-memory device and must not take the process down.
+                Log.w(NAME, "Could not read screenshot bytes", error)
+                promise.resolve(null)
+            }
+        }
+    }
+
     // --- messaging and calls ----------------------------------------------
 
     @ReactMethod
@@ -511,6 +560,15 @@ class AutomationModule(
         const val EVENT_STATUS_CHANGED = "automationStatusChanged"
 
         private const val CAPTURE_REQUEST_CODE = 0xCA97
+
+        /**
+         * Where screenshots live, and the only directory `readScreenshotBase64` will read from.
+         *
+         * Must match `AutomationRuntimeProvider.CAPTURE_DIRECTORY`. Restated rather than shared because that
+         * one is private and making it public would invite reading it from elsewhere, which is the opposite of
+         * what this constant is for.
+         */
+        private const val CAPTURE_DIRECTORY = "captures"
 
         /** Whether the accessibility service is connected, for callers outside RN. */
         fun isAccessibilityConnected(): Boolean = AccessibilityConnection.isConnected

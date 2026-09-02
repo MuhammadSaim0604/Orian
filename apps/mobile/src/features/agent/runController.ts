@@ -5,7 +5,7 @@ import {
   runAgent,
 } from '@mobile-automation/ai-agent';
 import { ExecutionRecorder, type ExecutionTrace } from '@mobile-automation/execution-recorder';
-import { invokeTool } from '@mobile-automation/native-automation';
+import { invokeTool, readScreenshotBase64 } from '@mobile-automation/native-automation';
 import { type Observation } from '@mobile-automation/prompt-engine';
 
 import { readActiveApiKey } from '../providers/providerRegistry';
@@ -19,10 +19,11 @@ import {
 } from './agentOverlay';
 import { enabledToolNames, readAgentSettings } from './agentSettings';
 import { startProbe, stopProbe } from './backgroundProbe';
+import { loadConversation, saveConversation } from './conversationStorage';
 import { holdTimersAwake, releaseTimers } from './runKeepAlive';
 import { startRunService, stopRunService } from './runService';
-import { contextualGoal, messageForEvent, seedEntriesFor } from './sessionMemory';
-import { appendMessage, loadMessages } from './sessionStorage';
+import { messageForEvent } from './sessionMemory';
+import { appendMessage } from './sessionStorage';
 
 /**
  * Owns the agent run.
@@ -335,38 +336,52 @@ const execute = async (goal: string, active: AbortController, runId: string): Pr
     const settings = readAgentSettings();
     const sessionId = snapshot.sessionId;
 
-    // Seeded from the conversation's own history, so a second run in a session knows what the first did. Fed
-    // into `packages/ai-agent`'s existing memory rather than a second implementation: the stuck and replan
-    // detectors already reason over exactly this, and two versions of "what has been tried" would eventually
-    // disagree with the untested one on the critical path.
-    const seedMemory = sessionId === null ? [] : await seedEntriesFor(sessionId);
-
-    // A follow-up like "now do the same for Sarah" is meaningless without what came before. Rather than
-    // changing the loop's one-goal contract, the recent exchange is folded into the goal itself.
-    const messages = sessionId === null ? [] : await loadMessages(sessionId);
-    const effectiveGoal = contextualGoal(goal, messages);
+    /**
+     * The previous exchange, as real messages.
+     *
+     * This replaces `contextualGoal` + `seedMemory`, both of which worked by *describing* history rather than
+     * showing it — one pasted a transcript into the goal string, the other rebuilt synthetic memory entries.
+     * The model now sees its own earlier turns in its own voice, which is what makes "now do the same for
+     * Sarah" resolve without anyone summarising anything.
+     */
+    const history = sessionId === null ? [] : await loadConversation(sessionId);
 
     const result = await runAgent(
       {
         provider,
         tools: { isAvailable: true, invoke: invokeTool },
+        // For the recorder only. The model sees a screen by calling getUiTree, and the result reaches it as a
+        // tool message rather than being injected into a prompt.
         observe: observeScreen,
+        // Supplied so a screenshot answers with the image itself. `readScreenshotBase64` resolves null when it
+        // cannot read the file, and the loop falls back to the metadata.
+        readScreenshotBase64,
       },
       {
-        goal: effectiveGoal,
+        // The user's message, exactly as typed. Nothing wrapped around it.
+        goal,
         signal: active.signal,
         maxSteps: settings.maxSteps,
         deadlineMs: settings.deadlineMs,
-        // **This is what makes a tool toggle mean something.** `allowedTools` filters the tool list in the
-        // prompt as well as the validator, so a disabled tool is never advertised - rather than being offered
-        // and then refused, which reads as the agent malfunctioning.
+        // **This is what makes a tool toggle mean something.** `allowedTools` filters the tool array sent with
+        // every request, so a disabled tool is never advertised — rather than being offered and then refused,
+        // which reads as the agent malfunctioning.
         allowedTools: enabledToolNames(settings),
-        seedMemory,
+        history,
         onEvent: (event) => {
           handleEvent(event, readiness.provider.model);
         },
       },
     );
+
+    /**
+     * The conversation is persisted as it ended, so the next run replays it.
+     *
+     * Written here rather than incrementally from events, because the loop is the thing that knows the exact
+     * message sequence — and a transcript rebuilt from events would be a second, subtly different account of
+     * what the model saw. That divergence is the whole class of bug being fixed.
+     */
+    if (sessionId !== null) await saveConversation(sessionId, runId, result.messages);
 
     const recorded = recorder.result;
 

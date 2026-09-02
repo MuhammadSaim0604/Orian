@@ -182,6 +182,121 @@ describe('requests', () => {
     expect(body.messages[0].tool_call_id).toBe('call_9');
   });
 
+  it('sends an assistant turn with its tool calls', async () => {
+    /**
+     * The defect at its root.
+     *
+     * This mapper used to emit only `role`, `content` and `tool_call_id`. **`tool_calls` was dropped silently**,
+     * so an assistant turn could never be replayed — which is why production network logs showed nothing but
+     * system and user messages however many steps had been taken, and why the model had no way to see its own
+     * actions.
+     */
+    const fetchImpl = vi.fn(async () => okResponse(completion()));
+
+    await provider(fetchImpl as unknown as typeof globalThis.fetch).complete({
+      messages: [
+        {
+          role: 'assistant',
+          content: null,
+          toolCalls: [
+            { id: 'call_1', name: 'openApp', arguments: '{"packageName":"com.whatsapp"}' },
+          ],
+        },
+      ],
+    });
+
+    const body = JSON.parse((fetchImpl.mock.calls[0]?.[1] as RequestInit).body as string);
+
+    expect(body.messages[0].tool_calls).toEqual([
+      {
+        id: 'call_1',
+        type: 'function',
+        function: { name: 'openApp', arguments: '{"packageName":"com.whatsapp"}' },
+      },
+    ]);
+    // Null rather than '', because an empty string reads as an empty reply rather than an absent one.
+    expect(body.messages[0].content).toBeNull();
+  });
+
+  it('passes tool arguments through as the string they arrived as', async () => {
+    // Not re-serialized. A round trip through JSON.parse and JSON.stringify is not guaranteed byte-identical, and
+    // some providers match the assistant turn against the tool results answering it.
+    const fetchImpl = vi.fn(async () => okResponse(completion()));
+    const raw = '{"text": "hello",  "exact":true}';
+
+    await provider(fetchImpl as unknown as typeof globalThis.fetch).complete({
+      messages: [
+        {
+          role: 'assistant',
+          content: null,
+          toolCalls: [{ id: 'c1', name: 'findTextOnScreen', arguments: raw }],
+        },
+      ],
+    });
+
+    const body = JSON.parse((fetchImpl.mock.calls[0]?.[1] as RequestInit).body as string);
+
+    expect(body.messages[0].tool_calls[0].function.arguments).toBe(raw);
+  });
+
+  it('sends multi-part content with an image as a data url', async () => {
+    // A model cannot fetch a `file://` path off someone's phone, so a tool result carrying a screenshot has to
+    // carry the bytes.
+    const fetchImpl = vi.fn(async () => okResponse(completion()));
+
+    await provider(fetchImpl as unknown as typeof globalThis.fetch).complete({
+      messages: [
+        {
+          role: 'tool',
+          toolCallId: 'c1',
+          content: [
+            { type: 'text', text: 'Screenshot of the current screen.' },
+            {
+              type: 'image_url',
+              imageUrl: { url: 'data:image/png;base64,AAA', detail: 'auto' },
+            },
+          ],
+        },
+      ],
+    });
+
+    const body = JSON.parse((fetchImpl.mock.calls[0]?.[1] as RequestInit).body as string);
+
+    // Snake_case on the wire, camelCase internally.
+    expect(body.messages[0].content[1]).toEqual({
+      type: 'image_url',
+      image_url: { url: 'data:image/png;base64,AAA', detail: 'auto' },
+    });
+  });
+
+  it('leaves a plain string as a string rather than wrapping it in parts', async () => {
+    // Both are legal, but the string form is what every provider has supported longest, and there is no reason to
+    // make the common case the less compatible one.
+    const fetchImpl = vi.fn(async () => okResponse(completion()));
+
+    await provider(fetchImpl as unknown as typeof globalThis.fetch).complete({
+      messages: [{ role: 'user', content: 'hello' }],
+    });
+
+    const body = JSON.parse((fetchImpl.mock.calls[0]?.[1] as RequestInit).body as string);
+
+    expect(body.messages[0].content).toBe('hello');
+  });
+
+  it('does not send reasoning back by default', async () => {
+    // It is often the largest part of a response, the assistant turn plus its tool results already carry the
+    // decision, and several providers reject an unrecognised field on an assistant message.
+    const fetchImpl = vi.fn(async () => okResponse(completion()));
+
+    await provider(fetchImpl as unknown as typeof globalThis.fetch).complete({
+      messages: [{ role: 'assistant', content: 'Done.', reasoning: 'I thought about it.' }],
+    });
+
+    const body = JSON.parse((fetchImpl.mock.calls[0]?.[1] as RequestInit).body as string);
+
+    expect(body.messages[0].reasoning).toBeUndefined();
+  });
+
   it('sends tools when supplied', async () => {
     const fetchImpl = vi.fn(async () => okResponse(completion()));
 
@@ -251,6 +366,34 @@ describe('responses', () => {
     expect(response.toolCalls).toEqual([
       { id: 'call_1', name: 'click', arguments: '{"selector":{"text":"Send"}}' },
     ]);
+  });
+
+  it('reads reasoning under either spelling', async () => {
+    // Providers disagree on the field name, and an unrecognised one means a reasoning model's whole thought
+    // process is silently discarded — which reads as a model that returned nothing but a tool call.
+    for (const field of ['reasoning', 'reasoning_content']) {
+      const client = provider((async () =>
+        okResponse(
+          completion({
+            choices: [
+              {
+                message: { content: null, [field]: 'I should look at the screen first.' },
+                finish_reason: 'stop',
+              },
+            ],
+          }),
+        )) as typeof globalThis.fetch);
+
+      const response = await client.complete({ messages: [] });
+
+      expect(response.reasoning).toBe('I should look at the screen first.');
+    }
+  });
+
+  it('reports no reasoning when there is none', async () => {
+    const client = provider((async () => okResponse(completion())) as typeof globalThis.fetch);
+
+    expect((await client.complete({ messages: [] })).reasoning).toBeNull();
   });
 
   it('handles content and a tool call together', async () => {

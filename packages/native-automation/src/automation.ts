@@ -232,6 +232,25 @@ export const findTextOnScreen = async (text: string, exact = false): Promise<Ocr
   callParsing('an OCR match', () => requireModule().findTextOnScreen(text, exact));
 
 /**
+ * Reads a captured screenshot as base64, for a vision-capable model.
+ *
+ * Returns null rather than throwing when the file is gone or out of bounds. A screenshot that cannot be read is
+ * not a failed step — the capture worked — so the caller falls back to sending the metadata alone rather than
+ * failing the tool call.
+ *
+ * **Only call this for something that will actually look at the image.** The bytes are large, they cross the
+ * bridge, and a provider charges for them.
+ */
+export const readScreenshotBase64 = async (path: string): Promise<string | null> => {
+  try {
+    return await requireModule().readScreenshotBase64(path);
+  } catch {
+    // Same reasoning as the null result: an unreadable screenshot is not worth failing a run over.
+    return null;
+  }
+};
+
+/**
  * Asks the user to allow screen capture for this session.
  *
  * Consent cannot be persisted across sessions, so this must be called again after

@@ -6,6 +6,9 @@ import {
   PACKAGE_NAME,
   REDACTED_KEYS,
   REDACTION_PLACEHOLDER,
+  type ContentPart,
+  type ImagePart,
+  assistantToolCallMessage,
   defineTemplate,
   estimateMessagesTokens,
   estimateTokens,
@@ -17,7 +20,9 @@ import {
   renderPrompt,
   section,
   systemMessage,
+  textOf,
   toPromptJson,
+  toolImageMessage,
   toolMessage,
   truncateToTokens,
   userMessage,
@@ -74,6 +79,57 @@ describe('templates', () => {
 
     expect(message.role).toBe('tool');
     expect(message.toolCallId).toBe('call_1');
+  });
+
+  it('builds an assistant turn that can be replayed verbatim', () => {
+    // The shape the old `PromptMessage` could not express, which is why the request only ever carried system and
+    // user messages: `tool_calls` had nowhere to live, so an assistant turn could not be recorded at all.
+    const message = assistantToolCallMessage({
+      content: null,
+      toolCalls: [{ id: 'call_1', name: 'openApp', arguments: '{"packageName":"com.whatsapp"}' }],
+      reasoning: 'WhatsApp needs to be open first.',
+    });
+
+    expect(message.role).toBe('assistant');
+    // Null rather than '': an empty string reads to a provider as an empty reply rather than an absent one.
+    expect(message.content).toBeNull();
+    expect(message.toolCalls).toHaveLength(1);
+    expect(message.toolCalls?.[0]?.id).toBe('call_1');
+    // A string, never a parsed object. The protocol defines it as a string, and re-serializing is not
+    // guaranteed byte-identical — which matters because some providers match the turn against its answers.
+    expect(typeof message.toolCalls?.[0]?.arguments).toBe('string');
+    expect(message.reasoning).toContain('WhatsApp');
+  });
+
+  it('builds a tool result carrying an image', () => {
+    // For `takeScreenshot`, the one tool whose useful output is pixels. A file path would tell the model an
+    // image exists somewhere it cannot reach, which is worse than saying capture failed.
+    const message = toolImageMessage({
+      toolCallId: 'call_2',
+      text: 'Screenshot of the current screen.',
+      base64: 'iVBORw0KGgo=',
+    });
+
+    expect(message.toolCallId).toBe('call_2');
+    expect(Array.isArray(message.content)).toBe(true);
+
+    const parts = message.content as ContentPart[];
+
+    // Text first, deliberately: it names what the image is, and a model handed a bare image in a tool result has
+    // to infer which call it answers.
+    expect(parts[0]).toEqual({ type: 'text', text: 'Screenshot of the current screen.' });
+    expect((parts[1] as ImagePart).imageUrl.url).toBe('data:image/png;base64,iVBORw0KGgo=');
+  });
+
+  it('reads the text of a message whatever shape its content is', () => {
+    expect(textOf(userMessage('hello'))).toBe('hello');
+    expect(textOf({ role: 'assistant', content: null })).toBe('');
+
+    // An image contributes no *measurable* text cost — a 2 MB base64 string is not 500 000 tokens — so the
+    // estimate counts what it can know rather than being wildly wrong.
+    expect(textOf(toolImageMessage({ toolCallId: 'c', text: 'a screen', base64: 'AAAA' }))).toBe(
+      'a screen',
+    );
   });
 });
 

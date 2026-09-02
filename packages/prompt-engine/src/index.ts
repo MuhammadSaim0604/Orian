@@ -26,11 +26,16 @@ export type ContextKind = (typeof CONTEXT_KINDS)[number];
 export {
   MESSAGE_ROLES,
   MessageRoleSchema,
+  type ContentPart,
+  type ImagePart,
   type MessageRole,
+  type MessageToolCall,
   type PromptMessage,
   type PromptTemplate,
   type RenderedPrompt,
+  type TextPart,
   assistantMessage,
+  assistantToolCallMessage,
   defineTemplate,
   emptyTag,
   estimateMessagesTokens,
@@ -41,6 +46,8 @@ export {
   section,
   systemMessage,
   tagged,
+  textOf,
+  toolImageMessage,
   toolMessage,
   userMessage,
 } from './template';
@@ -57,9 +64,7 @@ export {
 
 export {
   AGENT_SYSTEM_PROMPT,
-  DEFAULT_CONTEXT_BUDGET,
   type AgentContextInput,
-  type ContextBudget,
   type MemoryEntry,
   type Observation,
   buildAgentContext,

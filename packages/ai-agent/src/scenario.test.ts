@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { type AgentEvent, type ToolExecutedEvent } from './events';
 import { type DeviceTools, runAgent } from './loop';
-import { type CompletionResponse, type ModelProvider } from './provider';
+import { type CompletionRequest, type CompletionResponse, type ModelProvider } from './provider';
 
 /**
  * The flagship scenario from the Phase 7 plan.
@@ -230,17 +230,24 @@ const findInTree = (
 };
 
 /**
- * A model that plays the scenario, choosing its action from the screen it is shown.
+ * A model that plays the scenario, choosing its action from what it has been told.
  *
- * Written as a reaction to the prompt rather than a fixed script, so the test fails if
- * the loop stops including the screen in context - which is the single most important
- * thing the context builder does.
+ * Written as a reaction to the conversation rather than a fixed script, so the test fails if the loop stops
+ * carrying the exchange — which is the single most important thing it does.
  *
- * The markers it looks for are deliberately precise. The goal text and the tool list are
- * both in every prompt, so matching on "I'll be late tomorrow" or "typeText" would match
- * on turn one and the model would think it had already finished. Screen state is read
- * from the serialized tree (`"text":"..."`), and its own history from the memory format
- * (`typeText({`), neither of which appears anywhere else in the prompt.
+ * ## What changed, and why this is a better test than it was
+ *
+ * The old version read the screen out of the **prompt**, because the loop injected a UI tree into every request.
+ * It also detected the planning turn by `request.tools === undefined`, since planning was a separate toolless
+ * call.
+ *
+ * Neither is true now. Nothing about the phone arrives unasked, so this model has to **call `getUiTree`** to see
+ * anything — exactly as a real one must — and it reads the screen from the **tool result** that comes back. That
+ * makes the test cover the thing that was broken: if tool results stop reaching the model, it goes blind and the
+ * scenario cannot complete.
+ *
+ * The markers it looks for are deliberately precise. Screen state is read from the serialized tree
+ * (`"text":"..."`), which appears nowhere else in the conversation.
  */
 const scenarioModel = (): ModelProvider => {
   let planned = false;
@@ -249,13 +256,14 @@ const scenarioModel = (): ModelProvider => {
     model: 'scenario-model',
     isConfigured: async () => true,
     complete: async (request) => {
-      const content = request.messages.map((message) => message.content).join('\n');
+      // Tools are attached to every call now, including the first. A request without them is a bug.
+      expect(request.tools?.length ?? 0).toBeGreaterThan(0);
 
-      // The planning turn has no tools attached.
-      if (request.tools === undefined) {
+      if (!planned) {
         planned = true;
-        return {
-          content: JSON.stringify({
+        return call(
+          'createPlan',
+          {
             steps: [
               'open WhatsApp',
               'search for Robert',
@@ -263,47 +271,58 @@ const scenarioModel = (): ModelProvider => {
               'type the message',
               'send it',
             ],
-          }),
-          toolCalls: [],
-          finishReason: 'stop',
-        };
+          },
+          'call_plan',
+        );
       }
 
-      expect(planned).toBe(true);
+      const latest = lastToolResult(request);
+
+      // Nothing has been read yet, or the last thing that happened was an action. Either way the screen is
+      // unknown, and acting on an unread screen is what the system prompt forbids.
+      if (latest === null || !latest.includes('"root"')) {
+        return call('getUiTree', { compact: true }, 'call_read');
+      }
 
       // "SENT" appears in the tree only after the message went through.
-      if (content.includes('"text":"SENT"')) {
+      if (latest.includes('"text":"SENT"')) {
         return prose('The message has been sent to Robert.');
       }
 
       // The entry field holding a draft means the message is typed and ready to send.
-      if (content.includes('"text":"DRAFT"')) {
+      if (latest.includes('"text":"DRAFT"')) {
         return call('click', { selector: { resourceId: 'com.whatsapp:id/send' } });
       }
 
       // An empty entry field means the conversation is open but nothing is typed.
-      if (content.includes('"resourceId":"com.whatsapp:id/entry"')) {
+      if (latest.includes('"resourceId":"com.whatsapp:id/entry"')) {
         return call('typeText', {
           selector: { resourceId: 'com.whatsapp:id/entry' },
           text: "I'll be late tomorrow",
         });
       }
 
-      if (content.includes('"text":"Robert"')) {
+      if (latest.includes('"text":"Robert"')) {
         return call('click', { selector: { text: 'Robert' } });
       }
 
-      if (content.includes('"resourceId":"com.whatsapp:id/search_input"')) {
+      if (latest.includes('"resourceId":"com.whatsapp:id/search_input"')) {
         return call('typeText', {
           selector: { resourceId: 'com.whatsapp:id/search_input' },
           text: 'Robert',
         });
       }
 
-      // The home screen, but only once the app has been opened deliberately.
+      /**
+       * The home screen — but only tap search once the app has been opened deliberately.
+       *
+       * `hasCalled` reads the model's **own earlier turns** out of the conversation, which is the thing that was
+       * impossible before: `tool_calls` were dropped from the request, so the model had no way to know what it
+       * had already done. If that regresses, this branch never fires and the scenario fails.
+       */
       if (
-        content.includes('"resourceId":"com.whatsapp:id/menuitem_search"') &&
-        content.includes('openApp({')
+        latest.includes('"resourceId":"com.whatsapp:id/menuitem_search"') &&
+        hasCalled(request, 'openApp')
       ) {
         return call('click', { selector: { resourceId: 'com.whatsapp:id/menuitem_search' } });
       }
@@ -313,15 +332,49 @@ const scenarioModel = (): ModelProvider => {
   };
 };
 
-const call = (name: string, args: unknown): CompletionResponse => ({
+/**
+ * Whether the model has already called a tool, according to the conversation.
+ *
+ * Reads the assistant turns rather than a local flag, deliberately. A flag would pass whatever the loop sent; this
+ * only works if assistant messages carry their `tool_calls` back — which is exactly the defect being guarded
+ * against.
+ */
+const hasCalled = (request: CompletionRequest, tool: string): boolean =>
+  request.messages.some(
+    (message) =>
+      message.role === 'assistant' &&
+      (message.toolCalls ?? []).some((toolCall) => toolCall.name === tool),
+  );
+
+/**
+ * The content of the most recent tool result.
+ *
+ * The model's only window onto the phone, which is the point: if the loop ever stops appending tool messages,
+ * this returns the same thing forever and the scenario stalls rather than passing quietly.
+ */
+const lastToolResult = (request: CompletionRequest): string | null => {
+  for (let index = request.messages.length - 1; index >= 0; index--) {
+    const message = request.messages[index]!;
+
+    if (message.role === 'tool') {
+      return typeof message.content === 'string' ? message.content : '';
+    }
+  }
+
+  return null;
+};
+
+const call = (name: string, args: unknown, id = `call_${name}`): CompletionResponse => ({
   content: null,
-  toolCalls: [{ id: `call_${name}`, name, arguments: JSON.stringify(args) }],
+  toolCalls: [{ id, name, arguments: JSON.stringify(args) }],
+  reasoning: null,
   finishReason: 'tool_calls',
 });
 
 const prose = (content: string): CompletionResponse => ({
   content,
   toolCalls: [],
+  reasoning: null,
   finishReason: 'stop',
 });
 
@@ -333,7 +386,7 @@ describe("Send Robert a WhatsApp message that I'll be late tomorrow", () => {
 
     const result = await runAgent(
       { provider: scenarioModel(), tools: phone.tools, observe: phone.observe },
-      { goal, maxSteps: 15 },
+      { goal, maxSteps: 25 },
     );
 
     expect(result.outcome).toBe('succeeded');
@@ -345,7 +398,7 @@ describe("Send Robert a WhatsApp message that I'll be late tomorrow", () => {
 
     await runAgent(
       { provider: scenarioModel(), tools: phone.tools, observe: phone.observe },
-      { goal, maxSteps: 15 },
+      { goal, maxSteps: 25 },
     );
 
     expect(phone.typed).toContain("I'll be late tomorrow");
@@ -356,14 +409,31 @@ describe("Send Robert a WhatsApp message that I'll be late tomorrow", () => {
 
     await runAgent(
       { provider: scenarioModel(), tools: phone.tools, observe: phone.observe },
-      { goal, maxSteps: 15 },
+      { goal, maxSteps: 25 },
     );
 
     const sequence = phone.tools.calls.map((entry) => entry.tool);
 
-    expect(sequence[0]).toBe('openApp');
-    expect(sequence).toContain('typeText');
-    expect(sequence.at(-1)).toBe('click');
+    // Reads interleave the actions now, because the screen has to be asked for. Filtering them out is what makes
+    // this an assertion about the *plan of action* rather than about how often it looked.
+    const actions = sequence.filter((tool) => tool !== 'getUiTree');
+
+    expect(actions[0]).toBe('openApp');
+    expect(actions).toContain('typeText');
+    expect(actions.at(-1)).toBe('click');
+  });
+
+  it('reads the screen before acting on it', async () => {
+    // The other half of removing the injected screen: the model must actually call for one. A run that never
+    // reads is a run acting blind, which the old shape hid by handing it a tree unasked.
+    const phone = simulatedPhone();
+
+    await runAgent(
+      { provider: scenarioModel(), tools: phone.tools, observe: phone.observe },
+      { goal, maxSteps: 25 },
+    );
+
+    expect(phone.tools.calls.map((entry) => entry.tool)).toContain('getUiTree');
   });
 
   it('finishes well inside its step budget', async () => {
@@ -372,10 +442,10 @@ describe("Send Robert a WhatsApp message that I'll be late tomorrow", () => {
 
     const result = await runAgent(
       { provider: scenarioModel(), tools: phone.tools, observe: phone.observe },
-      { goal, maxSteps: 15 },
+      { goal, maxSteps: 25 },
     );
 
-    expect(result.stepsTaken).toBeLessThan(10);
+    expect(result.stepsTaken).toBeLessThan(15);
   });
 
   it('plans before it acts', async () => {
@@ -445,54 +515,59 @@ describe("Send Robert a WhatsApp message that I'll be late tomorrow", () => {
     const phone = simulatedPhone();
 
     let sentEarly = false;
+    let planned = false;
 
     const impatientModel: ModelProvider = {
       model: 'impatient',
       isConfigured: async () => true,
       complete: async (request) => {
-        const content = request.messages.map((message) => message.content).join('\n');
-
-        if (request.tools === undefined) {
-          return prose(JSON.stringify({ steps: ['open the chat', 'send'] }));
+        if (!planned) {
+          planned = true;
+          return call('createPlan', { steps: ['open the chat', 'send'] }, 'call_plan');
         }
 
-        if (content.includes('"text":"SENT"')) {
+        const latest = lastToolResult(request);
+
+        // Same discipline as the main scenario model: the screen has to be asked for. After an action the last
+        // result is not a tree, so it reads again — which is what the system prompt tells it to do.
+        if (latest === null || !latest.includes('"root"')) {
+          return call('getUiTree', { compact: true }, 'call_read');
+        }
+
+        if (latest.includes('"text":"SENT"')) {
           return prose('Sent.');
         }
 
-        // Tries to send before typing, once. The entry field is empty, so this fails and
-        // the agent must notice and recover.
-        if (content.includes('"resourceId":"com.whatsapp:id/entry"') && !sentEarly) {
+        // Tries to send before typing, once. The entry field is empty, so this fails and the agent must notice
+        // and recover.
+        if (latest.includes('"resourceId":"com.whatsapp:id/entry"') && !sentEarly) {
           sentEarly = true;
           return call('click', { selector: { resourceId: 'com.whatsapp:id/send' } });
         }
 
-        if (content.includes('"text":"DRAFT"')) {
+        if (latest.includes('"text":"DRAFT"')) {
           return call('click', { selector: { resourceId: 'com.whatsapp:id/send' } });
         }
 
-        if (content.includes('"resourceId":"com.whatsapp:id/entry"')) {
+        if (latest.includes('"resourceId":"com.whatsapp:id/entry"')) {
           return call('typeText', {
             selector: { resourceId: 'com.whatsapp:id/entry' },
             text: "I'll be late tomorrow",
           });
         }
 
-        if (content.includes('"text":"Robert"')) {
+        if (latest.includes('"text":"Robert"')) {
           return call('click', { selector: { text: 'Robert' } });
         }
 
-        if (content.includes('"resourceId":"com.whatsapp:id/search_input"')) {
+        if (latest.includes('"resourceId":"com.whatsapp:id/search_input"')) {
           return call('typeText', {
             selector: { resourceId: 'com.whatsapp:id/search_input' },
             text: 'Robert',
           });
         }
 
-        if (
-          content.includes('"resourceId":"com.whatsapp:id/menuitem_search"') &&
-          content.includes('openApp({')
-        ) {
+        if (latest.includes('"resourceId":"com.whatsapp:id/menuitem_search"')) {
           return call('click', { selector: { resourceId: 'com.whatsapp:id/menuitem_search' } });
         }
 
@@ -502,7 +577,7 @@ describe("Send Robert a WhatsApp message that I'll be late tomorrow", () => {
 
     const result = await runAgent(
       { provider: impatientModel, tools: phone.tools, observe: phone.observe },
-      { goal, maxSteps: 20 },
+      { goal, maxSteps: 30 },
     );
 
     expect(sentEarly).toBe(true);
