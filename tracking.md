@@ -4,7 +4,7 @@ Living record of what has been implemented, what is complete, and what remains. 
 
 Authoritative plan: `Development_Plan/`. It was restructured from **phases** to **steps** after device testing (commit `b0c1c60`); phases 0–9 are complete and everything since is a numbered step. See `Development_Plan/03_Issue_Register.md` for the defect IDs each step closes.
 
-Last updated: after the screen-capture consent fix and the messaging/call/settings tool set, with both CI workflows green on `main` (Android CI run `33410315237`, TypeScript CI run `33410315152`).
+Last updated: after Step 5 (OCR & the perception chain), with both CI workflows green on `main` (Android CI run `33525239608`, TypeScript CI run `33525239507`).
 
 ---
 
@@ -35,8 +35,8 @@ Rows below Phase 5 are in **execution order**, not numeric order. Phase 10's sco
 | 2    | Permission engine                       | M6 A real app    | E1–E4          | **Complete**                                                                 |
 | 3    | Background execution & agent overlay    | M6 A real app    | B1, B2         | **Complete** (fix round applied after device testing; likely also closes C5) |
 | 4    | Agent Mode                              | M7 Agent Mode    | B3, B4, B6     | **Complete** (also closes the agent half of A5)                              |
-| 5    | OCR & perception chain                  | M7 Agent Mode    | F1, F2, G7     | Next                                                                         |
-| 6    | Workflow Mode shell                     | M8 Workflow Mode | A6             | Not started                                                                  |
+| 5    | OCR & perception chain                  | M7 Agent Mode    | F1, F2, G7     | **Complete** (awaiting device verification)                                  |
+| 6    | Workflow Mode shell                     | M8 Workflow Mode | A6             | Next                                                                         |
 | 7    | Canvas rebuild                          | M8 Workflow Mode | C1–C3, G2      | Not started                                                                  |
 | 8    | Node editor & palette                   | M8 Workflow Mode | C4             | Not started                                                                  |
 | 9    | Node toolset overlay                    | M8 Workflow Mode | C5, C6         | Not started                                                                  |
@@ -1944,6 +1944,151 @@ Totals now 521 app Jest tests across 31 suites, 116 in `ai-agent`, 638 Kotlin.
 
 ---
 
+## Round 6: planning behaviour, the pinned card, navigation, and XML-tagged prompts (commit `546257c`)
+
+Four defects from device testing. Three had the same shape — a decision derived from the wrong thing.
+
+**A plan for every goal, including "call this number 0000".** `runAgent` planned unless the caller said otherwise, so a single tool call arrived as a project with a task list. The cost is not cosmetic: it is a model round trip before the first action, on exactly the goals that should feel instant.
+
+New `packages/ai-agent/src/planning.ts` decides from the goal, and **not by asking the model** — that doubles the latency on the fast cases and asks a model to be brief about brevity. It counts **actions**, not words: "call 0000" is one; "take a screenshot and tell me about it" is also one, because telling is the reply rather than a step; "send Robert a WhatsApp message" is several, because naming an app, a recipient and a payload is genuinely multi-step on a phone. Explicit signals beat the count — "and then", a conditional, two sentences, more than 24 words.
+
+Reporting verbs are held separately from action verbs, and that separation is the fix for the screenshot case: the first version treated a bare "and" as a sequence signal and planned it.
+
+Biased toward **not** planning, because the failure is asymmetric. An unplanned complex goal still works — the loop observes, acts, and replans if it stalls, since a plan was never what made the agent capable. A planned simple goal wastes a call and shows the user a plan for something they said in four words.
+
+**A new plan every second turn.** Two independent replan sites, both pure predicates over unchanged history: `isStuck()` at the top of the loop, `shouldReplan()` after a failed step. `isStuck()` keeps reporting the same condition until something moves — so one stall produced a replan on **every turn**, each with a model call and a new plan card.
+
+`memory.claimReplan()` replaced both. It requires the reason to be _different_ from the one that caused the last replan, and caps a run at `MAX_REPLANS = 2`. Recording the reason is a side effect on purpose: a pure predicate plus a separate "mark it" call is a two-step protocol where forgetting step two reintroduces this exact bug.
+
+**The pinned task card snapped open and pushed the chat down.** One cause for both. The expanded timeline was an ordinary child, so mounting it changed the card's height and therefore the layout of everything below it. `LayoutAnimation` was the wrong tool: it animates the _surrounding_ layout, so even working perfectly it was animating the conversation rather than the card — which is what was reported as wrong.
+
+The panel is now absolutely positioned at `top: 100%` and out of flow, so nothing below it moves at all, and it slides out from behind the card with a `translateY` on the **native driver**. That matters during a run: the JS thread is the one driving the phone. Height is measured once via `onLayout` so the reveal can be a transform rather than an animated height — an animated height cannot use the native driver and would re-measure the timeline every frame.
+
+**Back went to the mode switcher, and the transition ran backwards.** The shell had no back stack. `back()` reset to `AGENT_HOME`, which is only correct when home is where you came from — so settings → tools → back landed on the switcher.
+
+`agentStack`/`workflowStack` with push and pop, and `back()` pops before falling back to home. Onboarding became a real `AgentRoute` rather than local component state in `AgentModeShell`; that is the specific reason its back press escaped, because **state the store cannot see is state `back()` cannot honour**. Stacks are per mode and cleared on entering and leaving, per ADR 0011 — one shared stack would let a back press cross between modes.
+
+Direction was computed from the destination: "anything that is not chat is forward". Settings is not chat either, so returning from tools to settings slid in from the right like a push. The store now records `navDirection` on every transition and the shell reads it, so the motion matches what the user did rather than being inferred from where they ended up.
+
+**Prompts restructured with XML-style tags**, all four of them. The reason is ambiguity rather than model preference: screen content is arbitrary text from a third-party app, so a UI tree containing a node that reads `## Goal` is indistinguishable from the prompt's own heading. A tag pair has an explicit end. Metadata moved into attributes — `<screen app="com.whatsapp">`, `<budget step="5" max="40" remaining="36">` — so the model reads numbers instead of parsing prose.
+
+Two behavioural additions came out of it. The perception chain is stated with its costs **in order**, because a model told only that a screenshot exists reaches for it first. And `<finishing>` now says that answering a question _is_ a complete response, which is what stopped a question about the screen being turned into a sequence of actions.
+
+One bug found while writing the tests: the empty-hierarchy notice was silently blank, because it tested `trim() === ''` and a null tree renders as the string `"null"`.
+
+---
+
+## Step 5: OCR and the perception chain (commit `d0823ee`)
+
+Closes **F1** (no fallback when the accessibility tree is empty), **F2** (vision declared but never connected) and **G7** (no TS-side UI-tree parity test).
+
+The agent could only see one way. On apps that expose nothing through the accessibility tree — games, canvas UIs, custom-drawn interfaces — it was blind, and no workflow could be built. There are now three ways to see a screen, tried in order of cost: the element hierarchy, then OCR, then vision.
+
+### ADR 0017: on-device, ML Kit, bundled
+
+Three separate decisions rather than one.
+
+**Recognition runs on the phone.** A cloud OCR service would be smaller and more accurate, and would break the product's central promise: screen content leaves the phone only for the provider the user configured, and only for a call they triggered. OCR is not a call the user triggers — it happens inside the perception chain, potentially every step, over whatever is on screen. That is not a tradeoff to weigh. It also keeps the promise auditable: "OCR never touches the network" is verifiable from the module's dependencies.
+
+**ML Kit rather than Tesseract**, because it returns bounding boxes _with_ the text, which is the entire requirement — recognised text without coordinates cannot be tapped.
+
+**The model is bundled**, at the user's instruction, and the reasoning is recorded because the alternative is tempting on APK size. A downloaded model is absent exactly when it is first needed — the moment the tree came back empty — needs Play services, and needs the network, which contradicts the reason on-device was chosen. A capability that exists on some installs and not others is worse than one that costs megabytes: bundling means OCR either works on a device or the device cannot run the app, with no third state.
+
+### android/ocr
+
+Depends on `:screen` for the bitmap and deliberately **not** on `:accessibility`. Not tidiness — the screens needing OCR are exactly those whose tree is empty, so coupling them would make the fallback circular.
+
+Results are flattened to ML Kit's **lines**, because a line is the unit a person points at. A block can be a whole paragraph, so its centre lands in the middle of body text; an element is a single word, so "Continue to payment" becomes three targets that the phrase matches none of.
+
+`OcrBounds` is declared locally rather than reusing `accessibility`'s `Bounds`, since depending on that module is what ADR 0017 forbids. Four integers is a cheap duplication.
+
+Confidence is **nullable** rather than defaulted to 1.0, because ML Kit omits it for some recognisers and inventing a perfect score tells the caller something it was never given.
+
+`OcrScaling` is its own tested object for the same reason `StructuralPath` is. A screenshot may be captured at a different resolution from the one the tree describes, and a wrongly-scaled box lands _slightly_ wrong — which reports success and presses the row above. That is the hardest class of bug to diagnose from a user's report.
+
+`ScreenTextReader` holds a `ScreenCapture` rather than taking a bitmap, so freshness is not a caller's responsibility, and recycles the bitmap in a `finally` — a full-screen bitmap is megabytes and OCR may run every step.
+
+`consumer-rules.pro` keeps ML Kit's vision classes. Without it the release APK builds and then fails at the first OCR call — a failure that only appears in a release build, which is the worst place for it to appear.
+
+### Matching, and what it refuses
+
+Four rungs — exact, case-insensitive, contains, fuzzy — on Levenshtein distance, because OCR errors are **character** substitutions (`1` for `l`, `0` for `O`) that a word-level or phonetic comparison cannot see at all.
+
+Two guards matter more than the algorithm:
+
+- `FUZZY_THRESHOLD` is 0.8, not something permissive. At 0.6 "Save" matches "Share" and the agent taps the wrong button in someone's app. **A wrong tap is worse than a failed lookup**, because a failure is visible and recoverable while a wrong tap is neither.
+- `MIN_FUZZY_LENGTH` refuses fuzzy matching below four characters. "No" and "Go" differ by one character out of two, which is indistinguishable from a misread.
+
+Two of my own tests failed here and **the tests were right**: at 0.8, one misread in a four-letter word scores 0.75 and is refused, so the two guards reinforce each other and fuzzy matching effectively starts at five characters. "Sertd" does not match "Send", which is the safe direction.
+
+Matches are ordered by rung, then similarity, then **box area** — when two lines match equally the smaller box is the more specific target, so a query matching a heading and a button taps the button. Edit distance uses two rows rather than the full matrix, since it runs over dozens of lines on the thread driving the phone.
+
+### The tools
+
+`runOcr` and `findTextOnScreen`, threaded through `DeviceTool`, `AutomationRuntime`, `AutomationBridge`, `BridgeResults`, `AutomationModule`, `tool-sdk` and `native-automation`.
+
+They sit **immediately after `takeScreenshot`** in the tool list rather than at the end, and both parity tests now assert that adjacency. The list order is what the model reads, and grouping the three ways of seeing a screen together is what stops OCR being reached for first because it was mentioned last. The `DeviceTool` parity test caught me getting exactly this wrong.
+
+`findTextOnScreen` returns `ElementNotFound` rather than `ToolFailed` when the text is absent: "the tool worked and the text is not here" tells the agent to scroll or look elsewhere, while "the tool failed" tells it to stop.
+
+`screenTextReader` is **nullable** on the runtime rather than a no-op implementation, so "OCR unavailable" and "OCR found nothing" stay distinguishable — an always-empty reader would collapse them and the agent would descend to vision for the wrong reason.
+
+The JSON builder gained a `Double` overload for confidences and similarities, rendered with `toString()` rather than a locale format: a German device would emit `0,8` and produce JSON the TS side cannot parse, which is a bug that only appears for some users. Non-finite values are coerced to 0.0 so a recogniser returning `NaN` cannot corrupt the payload. `centerX`/`centerY` cross the bridge rather than being recomputed in TypeScript, because two implementations of a centre point is how a tap ends up one row off.
+
+### ocrText in the selector chain
+
+Inserted between `relativePosition` and `coordinates`, in the Kotlin enum and in `SELECTOR_STRATEGIES`. Weaker than anything structural, because it depends on pixels — but stronger than a coordinate, because a text match is **checkable**: the string either matched or it did not. A coordinate cannot fail; it lands somewhere and reports success.
+
+`isFragileStrategy` deliberately does **not** include it. Weakness and fragility are different properties: an OCR match is anchored to a string a person can read, so it survives a control moving, whereas a coordinate breaks on any layout change. Collapsing them would have the review UI warn about every OCR step on a screen where OCR was the only way to see anything.
+
+`OcrMatcher` is declared as an interface in `:accessibility` and implemented as `ScreenTextOcrMatcher` in `:automation` — the only placement ADR 0017 allows, since `:automation` already depends on both.
+
+`resolveWithVision` became `resolveWithFallbacks`, with the old name kept as a deprecated delegate. **OCR is tried before vision** because it is on-device, free, and verifiable, while vision is a model guessing coordinates that cannot be checked and costs money per look. OCR is attempted only when the selector carries text, since a resourceId does not appear on screen.
+
+`OcrTextMatch` carries `wasFuzzy` separately from `confidence`, because they answer different questions — how clearly the pixels were read versus how far the string had to be bent. Only the fuzzy rung sets it; containment bent no characters. A distinct `OCR_PATH` marks the synthetic node, so a trace says which fallback produced the step.
+
+### The vision matcher, finally connected (F2)
+
+The model call is the easy part; the value is in what it refuses.
+
+Every returned box is checked against the screenshot's real dimensions, because a model asked for pixel coordinates confidently returns numbers off the edge or negative — and **a tap at a negative coordinate is silently swallowed**, so the run reports success and nothing happened.
+
+It also rejects a box covering more than half the screen: a model that cannot find the target sometimes returns the whole screen rather than saying so, which is technically a box containing the element and useless, since tapping its centre presses whatever is in the middle of the display. The model is asked for a _box_ rather than a point precisely so these checks are possible.
+
+`describeTarget` refuses to pass a resourceId — an internal id does not appear on screen, and asking a model to find "com.whatsapp:id/send" in a picture invites it to invent a location. A malformed answer is treated as not-found rather than an error, since the chain has already exhausted everything else.
+
+`VISION_SYSTEM_PROMPT` explicitly tells the model that `found: false` is a correct and useful answer. Without that a model always returns coordinates, because that is the shape of the question.
+
+### The OCR node
+
+One node covering both tools rather than two palette entries. With a search term the workflow is about to act on one thing and wants the best match; without it, the workflow is branching on screen content and wants everything. Putting that in config keeps it out of the palette, where users would have to tell two similar nodes apart.
+
+`failIfMissing` defaults to **true**, the safer half of an asymmetric choice: a workflow that continues past a missing "Payment successful" goes on to do the next thing having never confirmed the first. The continue path rethrows anything that is not `element_not_found`, read from the error **code** rather than the message — a message is copy, a code is a contract — so a denied screen capture still surfaces instead of being swallowed as absent text.
+
+Both tools map to the existing `screen_capture` capability. OCR deliberately has no capability of its own: recognition is on-device against a bundled model, and inventing a permission would imply screen text goes somewhere it does not.
+
+### G7: the missing parity test
+
+Only the Kotlin half of the UI-tree contract was tested. `UiTreeSerializerTest` proves the serializer matches the Kotlin enum; nothing proved the TypeScript copy still did. A key added to the Kotlin enum and forgotten in `screen-inspector` would leave the TS side reading a field that is never present — silently, since a missing key in JSON is `undefined` rather than an error.
+
+`packages/screen-inspector/src/kotlin-parity.test.ts` parses the enums out of `UiNodeAttribute.kt` and compares both key lists and the schema version. Parsing source is normally a bad idea; here it is the only thing that closes the gap, because there is no shared artefact between a Gradle module and a pnpm package to compare against. Order is asserted, not just membership, since the serializer emits in declaration order.
+
+Its last test is the important one: it asserts the parse **found something**. A formatting change in the Kotlin file would otherwise make the regex match nothing, and every assertion would compare two empty lists and pass — which is precisely the false assurance G7 is about.
+
+### The prompt half
+
+`<seeing_the_screen>` now names `runOcr` and `findTextOnScreen` with their costs stated, because a model told only that "OCR is available" cannot call it. Three things carry the weight: OCR is described as reading **pixels** that can be misread; the model is told to check the text it actually read before acting, which is what stops a fuzzy match being treated as a certainty; and the empty-hierarchy notice names the OCR tools specifically rather than suggesting a screenshot — a model told only that fallbacks exist picks whichever was mentioned last, which is how vision gets reached for first.
+
+### What the round trips taught
+
+`ScreenTextReader` had to be extracted behind a `ScreenTextSource` interface, and the reason generalises: **the JVM unit-test environment stubs `BitmapFactory`**, so a test against the concrete reader always takes the "screenshot could not be read" path and every success case would have been untestable.
+
+Importing from `@jest/globals` fails in `apps/mobile` — there is no such dependency, and RN's jest preset provides the globals, so the import simply comes out.
+
+Totals now 558 app Jest tests, **753 Kotlin** (up from 638), 134 in `ai-agent`, 101 in `prompt-engine`, 56 in `tool-sdk`, 69 in `native-automation`, 131 in `workflow-schema`, 52 in `android-nodes`, 14 in `screen-inspector`.
+
+---
+
 ## Remaining
 
 **Steps 1, 2, 3 and 4 are done; Steps 5–13 remain.** The plan is `Development_Plan/steps/`, and `03_Issue_Register.md` is the checklist — a step is not finished while one of its issue IDs survives.
@@ -2018,6 +2163,8 @@ Every engine layer needs physical hardware, and none can be automated here — e
 | Agent Mode (Step 4)  | **Checked and passed** on the post-Step-4 pass: conversations survive a force-stop (which closes issue G5's persistence question), a follow-up shows the agent remembering the first run, `/models` discovery and manual entry both work, and a disabled tool is no longer attempted. What remains untested is the reworked UI itself — the live-message fix, the blocked-tool row, model id/name editing, the picker sheet, the left sidebar, and the transitions |
 | Tools page           | the permission cards' toggles across OEM skins; that a checkbox switched off really keeps the tool out of the prompt; and the eight tool fixes found by reading the code — a screenshot with accessibility **off**, "open settings" and "open the clock" by name, a tap on a list row identified by its text, and an alarm set without the clock app opening                                                                                                       |
 | Comms tools          | **that the screen-recording toggle on the tools page now shows the system dialog** — the reported bug; that a screenshot no longer reports a secure window on its first attempt, and that the agent falls back to `getUiTree` when it genuinely is one; sending a text and reading one back; `placeCall` dialling with the permission and opening the dialer without it; brightness and screen timeout actually changing; silent and vibrate needing the DND grant |
+| Round 6 fixes        | that a trivial goal ("call 0000", "take a screenshot and tell me about it") runs with **no plan card at all**, and that a real multi-step goal still gets one; that the plan is not regenerated turn after turn; that the pinned card slides open **without moving the conversation**; that back from tools returns to settings and the transition reverses                                                                                                        |
+| OCR (Step 5)         | **that `runOcr` returns usable text on a screen whose accessibility tree is empty** — the whole point of F1; that a `findTextOnScreen` tap lands on the control rather than near it, which is the silent coordinate-scaling failure; that the agent reaches for the tree first and descends only when it is empty; that the bundled model works with no network at all; and that the vision rung resolves a target the other seven cannot                          |
 
 **Step 13 runs this as one session, in an order where each stage feeds the next so a failure localises itself:** onboarding → the agent outside the app → OCR on a tree-less screen → the recorded trace → generation → running the workflow from the canvas → the node toolset overlay → a force-stop persistence check.
 
