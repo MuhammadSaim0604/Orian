@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Alert, Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { WakeWordCard } from '../assistant/WakeWordCard';
 import { PermissionsOverview } from '../permissions/PermissionsOverview';
 import { ProviderRegistryScreen } from '../providers/ProviderRegistryScreen';
 import { deleteTrace, listTraces, traceStorageUsedBytes } from '../recorder/traceStorage';
@@ -98,6 +99,11 @@ export const RootSettingsScreen = () => {
             here — which could report everything as fine while a permission the app needed was
             missing. */}
         <PermissionsOverview />
+
+        {/* Root settings rather than Agent Mode's, deliberately: Orion Assist belongs to neither
+            mode. It opens over any app from a system gesture and has no session, so putting its
+            toggle inside one mode's settings would imply it is part of that mode. */}
+        <WakeWordCard />
 
         <DataManagement />
 

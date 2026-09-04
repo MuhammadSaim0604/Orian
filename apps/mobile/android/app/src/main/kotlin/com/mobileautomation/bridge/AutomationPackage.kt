@@ -8,6 +8,7 @@ import com.mobileautomation.agentoverlay.AgentOverlayModule
 import com.mobileautomation.assist.AssistPanelModule
 import com.mobileautomation.assist.AssistSpeechModule
 import com.mobileautomation.assist.AssistSpeechOutModule
+import com.mobileautomation.assist.WakeWordModule
 import com.mobileautomation.keepalive.RunKeepAliveModule
 import com.mobileautomation.overlay.OverlayModule
 import com.mobileautomation.permissions.PermissionsModule
@@ -65,6 +66,11 @@ class AutomationPackage : ReactPackage {
             AssistPanelModule(reactContext),
             AssistSpeechModule(reactContext),
             AssistSpeechOutModule(reactContext),
+            // The "Hey Orion" wake word. Opt-in and off by default, because it is a
+            // foreground service holding a recogniser rather than the DSP hotword API -
+            // AlwaysOnHotwordDetector needs a vendor-enrolled keyphrase, and no vendor
+            // enrols ours.
+            WakeWordModule(reactContext),
         )
 
     override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> = emptyList()

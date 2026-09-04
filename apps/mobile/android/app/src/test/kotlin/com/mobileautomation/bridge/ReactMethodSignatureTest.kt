@@ -12,6 +12,7 @@ import com.mobileautomation.agentoverlay.AgentOverlayModule
 import com.mobileautomation.assist.AssistPanelModule
 import com.mobileautomation.assist.AssistSpeechModule
 import com.mobileautomation.assist.AssistSpeechOutModule
+import com.mobileautomation.assist.WakeWordModule
 import com.mobileautomation.keepalive.RunKeepAliveModule
 import com.mobileautomation.overlay.OverlayModule
 import com.mobileautomation.permissions.PermissionsModule
@@ -107,6 +108,7 @@ class ReactMethodSignatureTest {
             AssistPanelModule::class.java,
             AssistSpeechModule::class.java,
             AssistSpeechOutModule::class.java,
+            WakeWordModule::class.java,
         )
 
     private fun reactMethodsOf(moduleClass: Class<*>): List<Method> =

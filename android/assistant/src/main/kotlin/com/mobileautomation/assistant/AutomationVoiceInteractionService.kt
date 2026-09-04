@@ -1,37 +1,93 @@
 package com.mobileautomation.assistant
 
+import android.os.Bundle
 import android.service.voice.VoiceInteractionService
 import android.util.Log
 
 /**
  * The voice interaction service.
  *
- * Its existence is the point. Android builds the "Default digital assistant app" list from installed
- * voice-interaction services, so an app that asks for the assistant role without declaring one can
- * never be chosen - it simply does not appear in the picker, with no error to explain why. That was
- * the defect: the capability was requestable, the settings deep link worked, and the app was absent
- * from the list the user was sent to.
+ * Its existence is what makes the app eligible to be the assistant. Android builds the "Default digital assistant
+ * app" list from installed voice-interaction services, so an app that asks for the role without declaring one can
+ * never be chosen — it simply does not appear in the picker, with no error to explain why.
  *
- * It deliberately does **almost nothing**. The assistant role is held for one reason: as the active
- * assistant, the app can be shown structured screen context the system does not otherwise expose,
- * which makes screen reading more precise on apps that draw their own interface. Automation itself
- * continues to run through the accessibility service and the tool runtime.
+ * ## What it does now
  *
- * It does not listen. There is no hotword detection and no microphone use, which is why
- * `setDisabledShowContext` is left alone and no audio permission is declared.
+ * One thing beyond existing: it holds the **live instance**, because `showSession` is an instance method and the
+ * only supported way to open an assist session from our own code. Nothing else can summon the panel — an activity
+ * cannot, a broadcast cannot, and starting the app instead would put the panel inside our own window rather than
+ * over the app the user is looking at.
+ *
+ * ## What it deliberately does not do
+ *
+ * It does not listen, and it does not use `AlwaysOnHotwordDetector`. That API is available only to the current
+ * assistant, which is a genuine reason to hold the role — but the keyphrase has to be enrolled in the device's DSP
+ * and enrolment is vendor-controlled, so for a custom phrase like "Hey Orion" it is unenrolled on essentially every
+ * phone. Building on it would mean shipping a feature that works nowhere.
+ *
+ * The wake word is therefore a separate, opt-in service with its own notification. This class holds no microphone
+ * and declares no audio permission of its own.
  */
 class AutomationVoiceInteractionService : VoiceInteractionService() {
     override fun onReady() {
         super.onReady()
+        active = this
         Log.i(TAG, "Assistant role active")
     }
 
     override fun onShutdown() {
         Log.i(TAG, "Assistant role released")
+        if (active === this) active = null
         super.onShutdown()
     }
 
-    private companion object {
-        const val TAG = "AutomationAssistant"
+    companion object {
+        private const val TAG = "AutomationAssistant"
+
+        /**
+         * The bound instance, or null when this app is not the active assistant.
+         *
+         * A static reference to a service, which is normally a leak. It is safe here because the system owns the
+         * lifetime and clears it in `onShutdown`, and it is necessary because `showSession` cannot be reached any
+         * other way — the wake-word service and the app both need to summon the panel and neither can hold a
+         * binding to a service the system binds for itself.
+         */
+        @Volatile
+        private var active: AutomationVoiceInteractionService? = null
+
+        /** Whether this app is currently the device's assistant *and* its service is bound. */
+        fun isActive(): Boolean = active != null
+
+        /**
+         * Opens the assist session, as if the user had used the gesture.
+         *
+         * Returns false when this app is not the active assistant, which is a real state rather than an error: the
+         * user can change their assistant at any time, and the wake word should stop working rather than crash.
+         *
+         * `SHOW_WITH_ASSIST or SHOW_WITH_SCREENSHOT` asks for screen context. Android may still withhold it — the
+         * user can turn off "Use screen context" — which the panel reports rather than treating as an empty screen.
+         */
+        fun requestAssist(): Boolean {
+            val service = active ?: return false
+
+            return try {
+                service.showSession(Bundle(), SHOW_WITH_ASSIST or SHOW_WITH_SCREENSHOT)
+                true
+            } catch (error: Throwable) {
+                Log.w(TAG, "Could not show the assist session", error)
+                false
+            }
+        }
+
+        /**
+         * Mirrors the platform constants, which are not public on every API level we support.
+         *
+         * `SHOW_WITH_ASSIST` and `SHOW_WITH_SCREENSHOT` are documented values on `VoiceInteractionSession`, but the
+         * constants themselves are only exposed on the session class rather than the service — so they are restated
+         * here rather than reached for.
+         */
+        private const val SHOW_WITH_ASSIST = 1
+
+        private const val SHOW_WITH_SCREENSHOT = 2
     }
 }

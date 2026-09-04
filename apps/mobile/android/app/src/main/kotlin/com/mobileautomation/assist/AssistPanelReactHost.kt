@@ -11,62 +11,65 @@ import com.facebook.react.interfaces.fabric.ReactSurface
  * Builds the React Native view the Orion Assist panel hosts.
  *
  * A **fourth** React root in this process — app, node toolset, agent status strip, and this. The same
- * `ReactHost.createSurface` pattern as the other two, deliberately: nothing new architecturally is the reason to
- * do it this way, and a bespoke path here would be a second thing to keep working under bridgeless.
+ * `ReactHost.createSurface` pattern as the other two: nothing new architecturally is the reason to do it this way,
+ * and a bespoke path here would be a second thing to keep working under bridgeless.
  *
- * `createSurface` rather than `ReactRootView.startReactApplication` because this app runs the new architecture,
- * where there is no `ReactInstanceManager` to start a root view against — the old path fails at runtime rather
- * than at compile time.
+ * ## One surface per session, not per summoning
  *
- * **The surface is per-invocation.** A stopped surface cannot be restarted into a new window, and the assist
- * gesture can be used repeatedly, so one is created each time the panel opens and stopped when it closes. Reusing
- * one produces a blank panel on the second summoning, which reads as the feature having broken.
+ * This is the fix for the panel opening only once. The first version created a surface in `onShow` and stopped it
+ * in `onHide`, which failed the second time: **a stopped `ReactSurface` cannot be restarted**, and creating a
+ * replacement races the window that was built during session creation. The panel appeared once and then never
+ * again, with nothing logged.
+ *
+ * Now `create` is called from `onCreateContentView` — once — and `release` only when the session is destroyed.
+ * Between those, show and hide are events the JS tree handles while staying mounted.
+ *
+ * The consequence is that the panel does **not** remount per summoning, which is why the host has to tell it a new
+ * exchange has started. Without that the second summoning would open on the first one's transcript.
  */
 class AssistPanelReactHost(
     private val reactContext: ReactApplicationContext,
 ) {
     private var surface: ReactSurface? = null
+    private var container: FrameLayout? = null
+
+    /** Whether a surface exists, so the module can avoid building a second one. */
+    fun isCreated(): Boolean = surface != null
 
     /**
      * Creates the panel's content view.
      *
      * Takes no bound id, unlike the other two hosts. That is the point of Orion Assist: there is no session and no
-     * run to bind to, so there is nothing to pass. The panel reads everything it needs from
-     * `assistantController`, a module the root imports directly.
+     * run to bind to, so there is nothing to pass. The panel reads everything it needs from `assistantController`,
+     * a module the root imports directly.
      *
-     * `hasScreenContext` does cross as an initial prop, because it is knowable only here and only now — whether
-     * the system actually handed us the screen. The panel needs it to distinguish "the screen was empty" from
-     * "we were not shown the screen", and the second is worth telling the user about since they can fix it.
+     * Returns null when there is no React host — the old architecture, or the app never having been opened. Null
+     * rather than an empty container, because the session uses it to decide whether to show anything at all.
      */
-    fun createView(hasScreenContext: Boolean): View {
-        // Any previous surface is released first: keeping two would leak one per invocation, and the old one is
-        // already detached from its window by this point.
-        release()
+    fun create(): View? {
+        // Idempotent. `onCreateContentView` should only fire once per session, but a re-created React context can
+        // produce a second call, and building two surfaces would leak one and show the wrong one.
+        container?.let { existing -> return existing }
 
         val application = reactContext.applicationContext as ReactApplication
-        val container = FrameLayout(reactContext)
-
-        // Null on the old architecture. An empty container means the session still closes cleanly instead of
-        // failing inside the window it was about to fill.
-        val host = application.reactHost ?: return container
+        val host = application.reactHost ?: return null
 
         val created =
-            host.createSurface(
-                reactContext,
-                COMPONENT_NAME,
-                Bundle().apply { putBoolean(PROP_HAS_SCREEN_CONTEXT, hasScreenContext) },
-            )
-                ?: return container
+            host.createSurface(reactContext, COMPONENT_NAME, Bundle())
+                ?: return null
 
+        val view = FrameLayout(reactContext)
+        container = view
         surface = created
+
         created.start()
 
-        created.view?.let { view ->
+        created.view?.let { surfaceView ->
             // Reparented into the container already returned, since the surface's view is created by the host and
             // may still have a parent from a previous attach.
-            (view.parent as? android.view.ViewGroup)?.removeView(view)
-            container.addView(
-                view,
+            (surfaceView.parent as? android.view.ViewGroup)?.removeView(surfaceView)
+            view.addView(
+                surfaceView,
                 FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.MATCH_PARENT,
                     FrameLayout.LayoutParams.MATCH_PARENT,
@@ -74,15 +77,19 @@ class AssistPanelReactHost(
             )
         }
 
-        return container
+        return view
     }
+
+    /** The content view, for reading window insets off its own window rather than the activity's. */
+    fun contentOrNull(): View? = container
 
     /**
      * Stops the surface.
      *
-     * Called when the session closes. Without it the JS tree stays mounted with no window to draw into, holding a
-     * subscription to the assistant controller — and for this panel that means a text-to-speech voice that could
-     * carry on talking after the window the user dismissed has gone.
+     * Called only when the **session** is destroyed, never on hide. Doing it on hide is what broke the second
+     * summoning. Without it eventually happening, the JS tree would stay mounted with no window to draw into,
+     * holding a subscription to the assistant controller — and for this panel that means a text-to-speech voice
+     * that could carry on talking.
      */
     fun release() {
         surface?.let { active ->
@@ -90,13 +97,11 @@ class AssistPanelReactHost(
             runCatching { active.detach() }
         }
         surface = null
+        container = null
     }
 
     companion object {
         /** Must match `AppRegistry.registerComponent` in `index.js`. */
         const val COMPONENT_NAME = "OrionAssistPanel"
-
-        /** Initial prop name, mirrored by the TypeScript panel root. */
-        const val PROP_HAS_SCREEN_CONTEXT = "hasScreenContext"
     }
 }

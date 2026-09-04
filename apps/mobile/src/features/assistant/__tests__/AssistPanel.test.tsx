@@ -36,9 +36,23 @@ let mockMic = {
   stop: jest.fn(),
 };
 
+/**
+ * The window chrome, which the hook now merges into its return value.
+ *
+ * Separate from the snapshot because it describes the *window* rather than the exchange: the insets come from the
+ * native show event, since the panel is in the session's window and `react-native-safe-area-context` would report
+ * the activity's.
+ */
+let mockChrome = {
+  hasScreenContext: true,
+  topInsetDp: 0,
+  bottomInsetDp: 24,
+};
+
 jest.mock('../useAssistant', () => ({
   useAssistant: () => ({
     ...mockSnapshot,
+    ...mockChrome,
     ask: mockAsk,
     stop: mockStop,
     dismiss: mockDismiss,
@@ -78,13 +92,18 @@ beforeEach(() => {
     start: mockMicStart,
     stop: jest.fn(),
   };
+
+  mockChrome = { hasScreenContext: true, topInsetDp: 0, bottomInsetDp: 24 };
 });
 
 describe('what is shown before anything is asked', () => {
-  it('invites a question', () => {
+  it('says what it can do rather than waiting to be guessed at', () => {
+    // "Ask me something" leaves the user to work out what a phone assistant can actually do, and the answer is not
+    // obvious.
     const { getByText } = renderWithTheme(<AssistPanel />);
 
-    expect(getByText('Ask about this screen, or ask me to do something.')).toBeTruthy();
+    expect(getByText('What can I do?')).toBeTruthy();
+    expect(getByText('“What is on this screen?”')).toBeTruthy();
   });
 
   it('names itself, so the user knows what opened', () => {
@@ -97,6 +116,8 @@ describe('what is shown before anything is asked', () => {
   it('explains a withheld screen rather than just failing at it', () => {
     // The distinction that matters: "the screen was empty" is not fixable and "Android is not sharing this screen"
     // is — it is a setting the user can change.
+    mockChrome = { ...mockChrome, hasScreenContext: false };
+
     const { getByText } = renderWithTheme(<AssistPanel hasScreenContext={false} />);
 
     expect(getByText(/Android is not sharing this screen/)).toBeTruthy();
@@ -106,6 +127,16 @@ describe('what is shown before anything is asked', () => {
     const { queryByText } = renderWithTheme(<AssistPanel hasScreenContext />);
 
     expect(queryByText(/not sharing this screen/)).toBeNull();
+  });
+
+  it('drops the suggestions while listening', () => {
+    // They would be read as things to say next, which is wrong when the user is already mid-sentence.
+    mockMic = { ...mockMic, listening: true };
+
+    const { getByText, queryByText } = renderWithTheme(<AssistPanel />);
+
+    expect(getByText('Go ahead, I am listening.')).toBeTruthy();
+    expect(queryByText('“What is on this screen?”')).toBeNull();
   });
 });
 
@@ -148,12 +179,51 @@ describe('the transcript', () => {
     expect(getByText('what does th')).toBeTruthy();
   });
 
-  it('says it is working', () => {
+  it('shows that it is working', () => {
+    // Three dots rather than a word: text whose width changes nudges the layout while someone is reading it.
     mockSnapshot.state = 'thinking';
+
+    const { getByText, queryByText } = renderWithTheme(<AssistPanel />);
+
+    // The status line under the name carries it, instead of a spinner competing with the send button.
+    expect(getByText('Thinking…')).toBeTruthy();
+    expect(queryByText('Working on it…')).toBeNull();
+  });
+
+  it('says when it is speaking', () => {
+    mockSnapshot.state = 'speaking';
 
     const { getByText } = renderWithTheme(<AssistPanel />);
 
-    expect(getByText('Working on it…')).toBeTruthy();
+    expect(getByText('Speaking…')).toBeTruthy();
+  });
+});
+
+describe('sitting above the navigation bar', () => {
+  it('pads the sheet by the inset the native side measured', () => {
+    /**
+     * The device defect this fixes: the panel was drawn under the navigation bar, so the send button sat behind the
+     * back button.
+     *
+     * The value cannot come from `react-native-safe-area-context` — that reads the *activity's* window, and this
+     * panel is in the session's window, so it reported the app's stale insets or zero.
+     */
+    mockChrome = { ...mockChrome, bottomInsetDp: 48 };
+
+    const { getByText } = renderWithTheme(<AssistPanel />);
+
+    // Walk up from a known child to the sheet, since the sheet itself carries no label.
+    let node = getByText('Orion').parent;
+    let padding: unknown;
+
+    while (node != null && padding === undefined) {
+      const style = node.props?.style;
+      const flat = Array.isArray(style) ? Object.assign({}, ...style) : style;
+      if (flat?.paddingBottom !== undefined) padding = flat.paddingBottom;
+      node = node.parent;
+    }
+
+    expect(padding).toBe(48);
   });
 });
 

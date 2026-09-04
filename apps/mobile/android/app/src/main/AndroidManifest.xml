@@ -26,6 +26,15 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 
+    <!--
+      The wake word's own foreground service type.
+
+      Required from API 34 for a service that opens the microphone. Declared as
+      `microphone` rather than `specialUse` because that is exactly what it is, and
+      Android reserves the right to reject a mismatched type.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
     <!-- The persistent "automation is running" notification, and workflow results. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
@@ -38,10 +47,9 @@
     <!--
       Voice input for Orion Assist.
 
-      Requested **just in time**, on first use of the microphone button, and never during
-      onboarding: someone who only ever summons the panel and types should not be asked
-      for their microphone at all. There is no wake word, so nothing here listens in the
-      background.
+      Requested **just in time**, on first use of the microphone button or when the
+      user turns on the wake word — never during onboarding. Someone who only ever
+      summons the panel and types should not be asked for their microphone at all.
     -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
@@ -139,6 +147,23 @@
         android:allowBackup="false"
         android:theme="@style/AppTheme"
         android:supportsRtl="true">
+
+        <!--
+          The "Hey Orion" wake word.
+
+          `foregroundServiceType="microphone"` is required from API 34 and is honest
+          about what the service does. It is not exported: nothing outside this app may
+          start it, because a service that opens the microphone on request from another
+          app is a listening device.
+
+          Off by default. It runs a speech recogniser continuously rather than the DSP
+          hotword API, because AlwaysOnHotwordDetector needs a vendor-enrolled keyphrase
+          and no vendor enrols ours.
+        -->
+        <service
+            android:name=".assist.WakeWordService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
 
         <activity
             android:name=".MainActivity"

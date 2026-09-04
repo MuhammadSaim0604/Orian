@@ -49,6 +49,15 @@ const panel = lookup<PanelModule>('AssistPanel');
 const speechIn = lookup<SpeechInModule>('AssistSpeech');
 const speechOut = lookup<SpeechOutModule>('AssistSpeechOut');
 
+/**
+ * One emitter for all three modules.
+ *
+ * Declared here rather than beside the listeners that use it, because the panel's own events are read before the
+ * speech section. A second emitter instance would work but would double the native listener bookkeeping for no
+ * gain.
+ */
+const emitter = new NativeEventEmitter();
+
 /** Whether the panel's native side is available at all. */
 export const isAssistAvailable = (): boolean => panel !== undefined;
 
@@ -103,6 +112,51 @@ export const dismissPanel = async (): Promise<void> => {
     // Already gone. Nothing to do, and nothing worth telling the user.
   }
 };
+
+/**
+ * What arrives when the panel becomes visible.
+ *
+ * The insets travel with the event rather than being fetched, so the very first paint is already correct. A panel
+ * that corrects its own padding a frame later is visibly wrong on the way in.
+ */
+export type AssistShownEvent = {
+  readonly hasScreenContext: boolean;
+  readonly topInsetDp: number;
+  readonly bottomInsetDp: number;
+};
+
+/**
+ * A new summoning.
+ *
+ * **This is the event that starts an exchange**, not mounting. The panel's React tree is built once per session
+ * and stays mounted between summonings — a stopped React surface cannot be restarted, which is why the first
+ * version opened only once. So the panel is told when it becomes visible instead of inferring it.
+ */
+export const onPanelShown = (listener: (event: AssistShownEvent) => void): EmitterSubscription =>
+  emitter.addListener('assistPanelShown', (raw: Partial<AssistShownEvent> | undefined) => {
+    listener({
+      hasScreenContext: raw?.hasScreenContext ?? true,
+      topInsetDp: raw?.topInsetDp ?? 0,
+      // Matches the native floor. A wrong zero puts the send button under the navigation bar; a wrong 24 is
+      // slightly loose spacing, so the fallback errs that way.
+      bottomInsetDp: raw?.bottomInsetDp ?? 24,
+    });
+  });
+
+/** The window is going away. The exchange ends here; the React tree does not. */
+export const onPanelHidden = (listener: () => void): EmitterSubscription =>
+  emitter.addListener('assistPanelHidden', listener);
+
+/**
+ * Screen context arrived, or turned out to be withheld, after the panel was already up.
+ *
+ * Assist data reaches the session *after* the show, so the first answer can change a moment later. Without this the
+ * panel would keep showing "Android is not sharing this screen" for the fraction of a second before it does.
+ */
+export const onScreenContextChanged = (
+  listener: (hasScreenContext: boolean) => void,
+): EmitterSubscription =>
+  emitter.addListener('assistPanelScreenContext', (value: boolean) => listener(value === true));
 
 // --- speech in ---------------------------------------------------------------
 
@@ -162,8 +216,6 @@ export const ASSISTANT_SPEECH_ERRORS = [
 ] as const;
 
 export type AssistantSpeechError = (typeof ASSISTANT_SPEECH_ERRORS)[number];
-
-const emitter = new NativeEventEmitter();
 
 /** Words as they are spoken, so the panel can show them appearing. */
 export const onSpeechPartial = (listener: (text: string) => void): EmitterSubscription =>
