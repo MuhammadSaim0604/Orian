@@ -9,6 +9,9 @@ import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.bridge.WritableArray
 import com.facebook.react.bridge.WritableMap
 import com.mobileautomation.agentoverlay.AgentOverlayModule
+import com.mobileautomation.assist.AssistPanelModule
+import com.mobileautomation.assist.AssistSpeechModule
+import com.mobileautomation.assist.AssistSpeechOutModule
 import com.mobileautomation.keepalive.RunKeepAliveModule
 import com.mobileautomation.overlay.OverlayModule
 import com.mobileautomation.permissions.PermissionsModule
@@ -101,6 +104,9 @@ class ReactMethodSignatureTest {
             RunKeepAliveModule::class.java,
             SessionStorageModule::class.java,
             ProviderRegistryModule::class.java,
+            AssistPanelModule::class.java,
+            AssistSpeechModule::class.java,
+            AssistSpeechOutModule::class.java,
         )
 
     private fun reactMethodsOf(moduleClass: Class<*>): List<Method> =

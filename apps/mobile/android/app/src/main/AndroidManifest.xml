@@ -36,6 +36,16 @@
     <uses-permission android:name="android.permission.READ_CONTACTS" />
 
     <!--
+      Voice input for Orion Assist.
+
+      Requested **just in time**, on first use of the microphone button, and never during
+      onboarding: someone who only ever summons the panel and types should not be asked
+      for their microphone at all. There is no wake word, so nothing here listens in the
+      background.
+    -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!--
       Reliable foreground-app detection (Step 2). This is an appop-guarded
       permission: declaring it here is necessary but not sufficient, and
       `checkSelfPermission` returns granted purely because of this line - which is

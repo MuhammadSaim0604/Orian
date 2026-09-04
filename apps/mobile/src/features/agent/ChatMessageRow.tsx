@@ -1,4 +1,4 @@
-import { RefreshIcon, useTheme } from '@mobile-automation/ui';
+import { Markdown, RefreshIcon, useTheme } from '@mobile-automation/ui';
 import { Text, View } from 'react-native';
 
 import { type ChatMessage, parseMessageDetail } from './sessionStorage';
@@ -76,10 +76,20 @@ const UserMessage = ({ text }: { readonly text: string }) => (
   </View>
 );
 
+/**
+ * What the model said back.
+ *
+ * Rendered as markdown, because models reply in markdown whether or not anyone asked. It used to be a bare
+ * `<Text>`, so `**Send**` appeared with its asterisks and a list arrived as one run-together paragraph — correct
+ * answers looked broken.
+ *
+ * The accessibility label is the raw text rather than the rendered tree: a screen reader walking a dozen separate
+ * `Text` nodes announces the reply in fragments, while one label reads it as the sentence it is.
+ */
 const AssistantMessage = ({ text }: { readonly text: string }) => (
   <View className="items-start py-1.5">
     <View className="max-w-[92%] rounded-2xl rounded-bl-md bg-surface px-3 py-2">
-      <Text className="text-sm text-text-primary">{text}</Text>
+      <Markdown accessibilityLabel={text}>{text}</Markdown>
     </View>
   </View>
 );

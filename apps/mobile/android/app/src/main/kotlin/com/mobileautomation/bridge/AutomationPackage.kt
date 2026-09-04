@@ -5,6 +5,9 @@ import com.facebook.react.bridge.NativeModule
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.uimanager.ViewManager
 import com.mobileautomation.agentoverlay.AgentOverlayModule
+import com.mobileautomation.assist.AssistPanelModule
+import com.mobileautomation.assist.AssistSpeechModule
+import com.mobileautomation.assist.AssistSpeechOutModule
 import com.mobileautomation.keepalive.RunKeepAliveModule
 import com.mobileautomation.overlay.OverlayModule
 import com.mobileautomation.permissions.PermissionsModule
@@ -54,6 +57,14 @@ class AutomationPackage : ReactPackage {
             // scoped by mode so the workflow builder agent can use it too (ADR 0014).
             SessionStorageModule(reactContext),
             ProviderRegistryModule(reactContext),
+            // Orion Assist: the panel the assist gesture opens, plus speech in and out.
+            //
+            // AssistPanelModule registers itself with AssistPanelRegistry on construction rather
+            // than when a screen mounts, because the gesture can be used with no activity in the
+            // foreground - so the host has to exist before any React tree does.
+            AssistPanelModule(reactContext),
+            AssistSpeechModule(reactContext),
+            AssistSpeechOutModule(reactContext),
         )
 
     override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> = emptyList()

@@ -267,4 +267,46 @@ class OverlayExclusivityTest {
         assertFalse(OverlayExclusivity.current == OverlayExclusivity.Kind.AGENT_STATUS)
         assertEquals(OverlayExclusivity.Kind.NODE_TOOLSET, OverlayExclusivity.current)
     }
+
+    @Test
+    fun `the assist panel arbitrates like the others`() {
+        // Summoned by a system gesture, so it can arrive over either mode or with the app not in the
+        // foreground at all. That is exactly why it goes through the same arbitration rather than being
+        // treated as a special case.
+        var stripEvicted = false
+        OverlayExclusivity.registerEvictor(OverlayExclusivity.Kind.AGENT_STATUS) { stripEvicted = true }
+
+        OverlayExclusivity.claim(OverlayExclusivity.Kind.AGENT_STATUS)
+        OverlayExclusivity.claim(OverlayExclusivity.Kind.ASSIST_PANEL)
+
+        assertTrue(stripEvicted)
+        assertEquals(OverlayExclusivity.Kind.ASSIST_PANEL, OverlayExclusivity.current)
+    }
+
+    @Test
+    fun `the agent strip evicts the assist panel`() {
+        // The panel is transient and the strip is not, so being evicted is the correct outcome. Without this the
+        // user would face two floating windows each with its own stop button, and no way to tell which stops the
+        // run.
+        var panelEvicted = false
+        OverlayExclusivity.registerEvictor(OverlayExclusivity.Kind.ASSIST_PANEL) { panelEvicted = true }
+
+        OverlayExclusivity.claim(OverlayExclusivity.Kind.ASSIST_PANEL)
+        OverlayExclusivity.claim(OverlayExclusivity.Kind.AGENT_STATUS)
+
+        assertTrue(panelEvicted)
+        assertEquals(OverlayExclusivity.Kind.AGENT_STATUS, OverlayExclusivity.current)
+    }
+
+    @Test
+    fun `all three kinds arbitrate through one holder`() {
+        for (kind in OverlayExclusivity.Kind.entries) {
+            OverlayExclusivity.registerEvictor(kind) {}
+        }
+
+        for (kind in OverlayExclusivity.Kind.entries) {
+            OverlayExclusivity.claim(kind)
+            assertEquals(kind, OverlayExclusivity.current)
+        }
+    }
 }

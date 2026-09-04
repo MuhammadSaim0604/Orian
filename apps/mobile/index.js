@@ -12,6 +12,7 @@ import { name as appName } from './app.json';
 import App from './src/App';
 import { listenForExternalStop } from './src/features/agent/runController';
 import AgentOverlayRoot from './src/overlay/AgentOverlayRoot';
+import AssistPanelRoot from './src/overlay/AssistPanelRoot';
 import OverlayRoot from './src/overlay/OverlayRoot';
 
 AppRegistry.registerComponent(appName, () => App);
@@ -26,6 +27,15 @@ AppRegistry.registerComponent('ConfigureWithAiOverlay', () => OverlayRoot);
 // The agent status overlay is a third root, on the same terms. Its name must match
 // `AgentOverlayReactHost.COMPONENT_NAME`.
 AppRegistry.registerComponent('AgentStatusOverlay', () => AgentOverlayRoot);
+
+// Orion Assist is a fourth root. Its window belongs to the voice-interaction session
+// rather than to WindowManager, which is why the panel needs no overlay permission.
+// The name must match `AssistPanelReactHost.COMPONENT_NAME`.
+//
+// Registered unconditionally, and that matters: the assist gesture can be used before
+// the app has ever been opened, so this registration has to exist from the moment the
+// bundle loads rather than when a screen mounts.
+AppRegistry.registerComponent('OrionAssistPanel', () => AssistPanelRoot);
 
 // A headless task that does nothing, on purpose.
 //

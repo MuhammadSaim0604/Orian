@@ -13,3 +13,4 @@ export const PACKAGE_NAME = '@mobile-automation/ui' as const;
 
 export * from './theme';
 export * from './components';
+export * from './markdown';

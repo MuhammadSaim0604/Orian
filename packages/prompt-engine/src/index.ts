@@ -70,6 +70,8 @@ export {
   buildAgentContext,
 } from './agent-context';
 
+export { ASSISTANT_SYSTEM_PROMPT, buildAssistantContext } from './assistant-context';
+
 export {
   NODE_CONFIG_SYSTEM_PROMPT,
   type NodeConfigContextInput,

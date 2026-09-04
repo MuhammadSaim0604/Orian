@@ -1,4 +1,4 @@
-import { Badge, Button, useTheme } from '@mobile-automation/ui';
+import { Badge, Button, Markdown, useTheme } from '@mobile-automation/ui';
 import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 
@@ -185,8 +185,14 @@ const AskPanel = () => {
 
       {proposal != null && (
         <View className="gap-2 rounded-lg border border-primary bg-surface-muted p-2.5">
-          <Text className="text-xs font-semibold text-text-primary">{proposal.summary}</Text>
-          <Text className="text-xs text-text-secondary">
+          {/* Markdown, because the model writes its summary the way it writes everything else. The same
+              renderer as the chat: an overlay is a separate React root, so it must come from `ui` rather than
+              from a component in `features/agent`. */}
+          <Markdown textClassName="text-xs text-text-primary" accessibilityLabel={proposal.summary}>
+            {proposal.summary}
+          </Markdown>
+
+          <Text className="font-mono text-xs text-text-secondary">
             {JSON.stringify(proposal.config, null, 2)}
           </Text>
 
